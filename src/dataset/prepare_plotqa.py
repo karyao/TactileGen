@@ -13,7 +13,7 @@ import math
 import os
 import struct
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -179,10 +179,28 @@ def yolo_row(
     )
 
 
-def convert(annotations: Path, images: Path, output: Path) -> Counter[str]:
+def convert(
+    annotations: Path,
+    images: Path,
+    output: Path,
+    chart_types: Collection[str] | None = None,
+) -> Counter[str]:
     """Write a train-only YOLO dataset from PlotQA files."""
+    selected_types = set(chart_types) if chart_types is not None else None
+    if selected_types is not None:
+        unsupported = selected_types - MARK_CLASS.keys()
+        if unsupported:
+            raise ValueError(f"Unsupported chart types: {', '.join(sorted(unsupported))}")
+
     train_images = output / "images" / "train"
     train_labels = output / "labels" / "train"
+    if selected_types is not None and any(
+        directory.is_dir() and any(directory.iterdir())
+        for directory in (train_images, train_labels)
+    ):
+        raise FileExistsError(
+            "Filtered output already contains images or labels; choose a new or empty --output directory"
+        )
     train_images.mkdir(parents=True, exist_ok=True)
     train_labels.mkdir(parents=True, exist_ok=True)
     (output / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
@@ -190,6 +208,12 @@ def convert(annotations: Path, images: Path, output: Path) -> Counter[str]:
     counts: Counter[str] = Counter()
     seen_indices: set[int] = set()
     for annotation in iter_annotations(annotations):
+        chart_type = annotation["type"]
+        if chart_type not in MARK_CLASS:
+            raise ValueError(f"Unsupported chart type: {chart_type}")
+        if selected_types is not None and chart_type not in selected_types:
+            continue
+
         index = annotation["image_index"]
         if not isinstance(index, int) or isinstance(index, bool) or index < 0:
             raise ValueError(f"Invalid image_index: {index!r}")
@@ -238,8 +262,15 @@ def main() -> None:
     parser.add_argument("--annotations", type=Path, default=ROOT / "annotations.json")
     parser.add_argument("--images", type=Path, default=ROOT / "png")
     parser.add_argument("--output", type=Path, default=ROOT / "dataset_yolo")
+    parser.add_argument(
+        "--chart-types",
+        nargs="+",
+        choices=tuple(MARK_CLASS),
+        metavar="TYPE",
+        help="Chart types to include: " + ", ".join(MARK_CLASS),
+    )
     args = parser.parse_args()
-    counts = convert(args.annotations, args.images, args.output)
+    counts = convert(args.annotations, args.images, args.output, args.chart_types)
     for name in (
         "images",
         "boxes",

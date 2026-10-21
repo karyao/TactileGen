@@ -1,5 +1,5 @@
 annotations.json
 png/
 png.tar.gz
-src/dataset/__pycache__/
+__pycache__/
 dataset_yolo/
