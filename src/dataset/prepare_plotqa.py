@@ -1,13 +1,13 @@
-"""Convert PlotQA chart annotations to YOLO detection labels.
+"""Convert one PlotQA split to YOLO detection labels.
 
-The generated dataset contains a train split only. Images are hard-linked from
-the source PNG directory, so conversion requires both directories to be on the
-same filesystem.
+Images are hard-linked from the source PNG directory, so conversion requires
+both directories to be on the same filesystem.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -184,29 +184,33 @@ def convert(
     images: Path,
     output: Path,
     chart_types: Collection[str] | None = None,
+    split: str = "train",
 ) -> Counter[str]:
-    """Write a train-only YOLO dataset from PlotQA files."""
+    """Write one YOLO dataset split from PlotQA files."""
+    if split not in {"train", "val", "test"}:
+        raise ValueError(f"Unsupported split: {split}")
     selected_types = set(chart_types) if chart_types is not None else None
     if selected_types is not None:
         unsupported = selected_types - MARK_CLASS.keys()
         if unsupported:
             raise ValueError(f"Unsupported chart types: {', '.join(sorted(unsupported))}")
 
-    train_images = output / "images" / "train"
-    train_labels = output / "labels" / "train"
+    split_images = output / "images" / split
+    split_labels = output / "labels" / split
     if selected_types is not None and any(
         directory.is_dir() and any(directory.iterdir())
-        for directory in (train_images, train_labels)
+        for directory in (split_images, split_labels)
     ):
         raise FileExistsError(
             "Filtered output already contains images or labels; choose a new or empty --output directory"
         )
-    train_images.mkdir(parents=True, exist_ok=True)
-    train_labels.mkdir(parents=True, exist_ok=True)
+    split_images.mkdir(parents=True, exist_ok=True)
+    split_labels.mkdir(parents=True, exist_ok=True)
     (output / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
 
     counts: Counter[str] = Counter()
     seen_indices: set[int] = set()
+    chart_types_by_image: list[tuple[int, str]] = []
     for annotation in iter_annotations(annotations):
         chart_type = annotation["type"]
         if chart_type not in MARK_CLASS:
@@ -223,7 +227,7 @@ def convert(
 
         source_image = images / f"{index}.png"
         image_size = png_size(source_image)
-        destination_image = train_images / source_image.name
+        destination_image = split_images / source_image.name
         if destination_image.exists():
             if not os.path.samefile(source_image, destination_image):
                 raise FileExistsError(f"Existing image is not linked to source: {destination_image}")
@@ -248,12 +252,18 @@ def convert(
             seen_rows.add(row)
             rows.append(row)
 
-        (train_labels / f"{index}.txt").write_text(
+        (split_labels / f"{index}.txt").write_text(
             "\n".join(rows) + ("\n" if rows else ""), encoding="utf-8"
         )
+        chart_types_by_image.append((index, chart_type))
         counts["images"] += 1
         counts["boxes"] += len(rows)
 
+    manifest = output / f"chart_types_{split}.csv"
+    with manifest.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("image_id", "chart_type"))
+        writer.writerows(chart_types_by_image)
     return counts
 
 
@@ -262,6 +272,7 @@ def main() -> None:
     parser.add_argument("--annotations", type=Path, default=ROOT / "annotations.json")
     parser.add_argument("--images", type=Path, default=ROOT / "png")
     parser.add_argument("--output", type=Path, default=ROOT / "dataset_yolo")
+    parser.add_argument("--split", choices=("train", "val", "test"), default="train")
     parser.add_argument(
         "--chart-types",
         nargs="+",
@@ -270,7 +281,7 @@ def main() -> None:
         help="Chart types to include: " + ", ".join(MARK_CLASS),
     )
     args = parser.parse_args()
-    counts = convert(args.annotations, args.images, args.output, args.chart_types)
+    counts = convert(args.annotations, args.images, args.output, args.chart_types, args.split)
     for name in (
         "images",
         "boxes",

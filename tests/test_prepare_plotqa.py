@@ -91,6 +91,23 @@ class PlotqaChartTypesTest(unittest.TestCase):
         convert(self.annotations, self.images, output)
         self.assert_output_indices(output, range(len(CHART_TYPES)))
 
+    def test_validation_split_and_chart_type_manifest(self):
+        output = self.root / "validation"
+        counts = convert(
+            self.annotations, self.images, output, ["vbar_categorical"], "val"
+        )
+        self.assertEqual(counts["images"], 1)
+        self.assertEqual(
+            {path.name for path in (output / "images/val").iterdir()}, {"0.png"}
+        )
+        self.assertEqual(
+            {path.name for path in (output / "labels/val").iterdir()}, {"0.txt"}
+        )
+        self.assertEqual(
+            (output / "chart_types_val.csv").read_text(encoding="utf-8").splitlines(),
+            ["image_id,chart_type", "0,vbar_categorical"],
+        )
+
     def test_filtered_output_must_not_contain_prior_images_or_labels(self):
         for directory, filename in (("images/train", "old.png"), ("labels/train", "old.txt")):
             with self.subTest(directory=directory):

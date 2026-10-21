@@ -3,3 +3,8 @@ png/
 png.tar.gz
 __pycache__/
 dataset_yolo/
+dataset_yolo_vbars/
+dataset_yolo_all/
+data/
+.DS_Store
+output/
