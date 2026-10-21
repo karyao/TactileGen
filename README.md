@@ -82,15 +82,10 @@ Prepare the all-type test split with `--annotations data/annotations_test.json`,
 
 ### Measured baseline
 
-On the complete official vertical-bar test split (11,242 charts), the OpenCV
-bar detector scored precision **0.954**, recall **0.763**, F1 **0.848**, and
-exact bar-count accuracy **0.474** at IoU 0.5. On a fixed random sample of 250
-test charts per type (1,000 total), chart-type accuracy was **0.983** and the
-end-to-end data-mark F1 scores were:
+Input measured baseline here:
 
 | Horizontal bars | Vertical bars | Dots | Line segments |
 | ---: | ---: | ---: | ---: |
-| 0.851 | 0.843 | 0.917 | 0.395 |
 
 These are PlotQA synthetic-chart results. Zero-area annotations are excluded
 from box-IoU scoring, and line-segment boxes often have only a few pixels of
