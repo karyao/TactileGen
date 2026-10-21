@@ -1,0 +1,12 @@
+[train] missing folder: /var/tmp/cky10/data/charts/images/train or /var/tmp/cky10/data/charts/labels/train
+[val] missing folder: /var/tmp/cky10/data/charts/images/val or /var/tmp/cky10/data/charts/labels/val
+=== data.yaml ===
+data.yaml not found
+
+=== box size per class (fraction of image) ===
+
+=== opening every image ===
+most common image sizes (w, h): 
+
+=== problems found ===
+none

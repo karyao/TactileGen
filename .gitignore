@@ -3,3 +3,6 @@ png/
 png.tar.gz
 __pycache__/
 dataset_yolo/
+dataset_yolo*/
+runs/
+*.pt
