@@ -57,6 +57,22 @@ PlotQA reuses numeric image IDs across splits. Keep each PNG directory paired
 with its own annotation JSON; copying validation PNGs over `data/png` makes the
 training annotations incorrect.
 
+## Remove exact image leakage before YOLO training
+
+Some PlotQA vertical-bar images are byte-identical across official splits. After
+preparing all three splits, create a cleaned copy:
+
+```bash
+python3 src/dataset/remove_split_leakage.py --source dataset_yolo_vbars --output dataset_yolo_vbars_clean
+```
+
+For matching images, the command keeps the test copy first, then validation,
+then training. It writes `leakage_report.json` with removed IDs and hashes, and
+`data.yaml` with the split paths and 15 class names. Use the clean dataset for
+YOLO training and evaluation; models trained on the original data need
+retraining. This checks byte-identical PNGs only and leaves the source dataset
+unchanged.
+
 For the experimental four-type baseline, convert the full validation split and
 run the chart predictor. It returns one of the four PlotQA types and the
 corresponding data-mark boxes. The report includes chart-type accuracy and
