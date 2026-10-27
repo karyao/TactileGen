@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "source_key": "val/example.png",
+  "width": 320,
+  "height": 240,
+  "detections": [
+    {"id": "title", "role": "chart_title", "box": {"x1": 155, "y1": 10, "x2": 167, "y2": 17}, "confidence": 0.99},
+    {"id": "x_title", "role": "x_axis_title", "box": {"x1": 158, "y1": 215, "x2": 163, "y2": 222}, "confidence": 0.98},
+    {"id": "y_title", "role": "y_axis_title", "box": {"x1": 10, "y1": 105, "x2": 15, "y2": 112}, "confidence": 0.98},
+    {"id": "x_tick_a", "role": "x_tick_label", "box": {"x1": 89, "y1": 198, "x2": 94, "y2": 205}, "confidence": 0.97},
+    {"id": "x_tick_b", "role": "x_tick_label", "box": {"x1": 190, "y1": 198, "x2": 195, "y2": 205}, "confidence": 0.97},
+    {"id": "y_tick_0", "role": "y_tick_label", "box": {"x1": 30, "y1": 186, "x2": 35, "y2": 193}, "confidence": 0.97},
+    {"id": "y_tick_3", "role": "y_tick_label", "box": {"x1": 30, "y1": 126, "x2": 35, "y2": 133}, "confidence": 0.97},
+    {"id": "y_tick_6", "role": "y_tick_label", "box": {"x1": 30, "y1": 66, "x2": 35, "y2": 73}, "confidence": 0.97},
+    {"id": "legend_n", "role": "legend_label", "box": {"x1": 260, "y1": 55, "x2": 265, "y2": 62}, "confidence": 0.96},
+    {"id": "legend_s", "role": "legend_label", "box": {"x1": 260, "y1": 75, "x2": 265, "y2": 82}, "confidence": 0.96},
+    {"id": "bar_a_n", "role": "vertical_bar", "box": {"x1": 80, "y1": 110, "x2": 95, "y2": 190}, "confidence": 0.95},
+    {"id": "bar_a_s", "role": "vertical_bar", "box": {"x1": 100, "y1": 130, "x2": 115, "y2": 190}, "confidence": 0.95},
+    {"id": "bar_b_n", "role": "vertical_bar", "box": {"x1": 180, "y1": 70, "x2": 195, "y2": 190}, "confidence": 0.95},
+    {"id": "bar_b_s", "role": "vertical_bar", "box": {"x1": 200, "y1": 90, "x2": 215, "y2": 190}, "confidence": 0.95},
+    {"id": "plot", "role": "plot_area", "box": {"x1": 50, "y1": 50, "x2": 235, "y2": 190}, "confidence": 0.99}
+  ]
+}

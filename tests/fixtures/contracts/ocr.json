@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "val/example.png",
+  "regions": [
+    {"detection_id": "title", "text": "AB", "confidence": 0.99},
+    {"detection_id": "x_title", "text": "X", "confidence": 0.98},
+    {"detection_id": "y_title", "text": "Y", "confidence": 0.98},
+    {"detection_id": "x_tick_a", "text": "A", "confidence": 0.97},
+    {"detection_id": "x_tick_b", "text": "B", "confidence": 0.97},
+    {"detection_id": "y_tick_0", "text": "0", "confidence": 0.97},
+    {"detection_id": "y_tick_3", "text": "3", "confidence": 0.97},
+    {"detection_id": "y_tick_6", "text": "6", "confidence": 0.97},
+    {"detection_id": "legend_n", "text": "N", "confidence": 0.96},
+    {"detection_id": "legend_s", "text": "S", "confidence": 0.96}
+  ]
+}

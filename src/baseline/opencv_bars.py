@@ -12,16 +12,10 @@ import argparse
 import csv
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
-
-@dataclass(frozen=True)
-class Box:
-    x1: float
-    y1: float
-    x2: float
-    y2: float
+from src.contracts import Box
 
 
 def intersection_over_union(left: Box, right: Box) -> float:
