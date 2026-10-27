@@ -12,37 +12,22 @@ import json
 import math
 import os
 import struct
+import sys
 from collections import Counter
 from collections.abc import Collection, Iterator
 from pathlib import Path
 from typing import Any
 
+if __package__ in (None, ""):
+    # Direct script invocation must also find the shared src package.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from src.contracts import CHART_MARK_ROLE, CLASS_IDS, CLASS_NAMES
+
 
 ROOT = Path(__file__).resolve().parents[2]
-CLASS_NAMES = (
-    "horizontal_bar",
-    "vertical_bar",
-    "dot",
-    "line_segment",
-    "chart_title",
-    "x_axis_title",
-    "y_axis_title",
-    "x_tick_label",
-    "y_tick_label",
-    "x_axis_rule",
-    "y_axis_rule",
-    "plot_area",
-    "legend",
-    "legend_swatch",
-    "legend_label",
-)
-CLASS_IDS = {name: index for index, name in enumerate(CLASS_NAMES)}
-MARK_CLASS = {
-    "hbar_categorical": "horizontal_bar",
-    "vbar_categorical": "vertical_bar",
-    "dot_line": "dot",
-    "line": "line_segment",
-}
+# Preserve existing imports while keeping one source of truth for class IDs.
+MARK_CLASS = CHART_MARK_ROLE
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MAX_ANNOTATION_CHARS = 16 * 1024 * 1024
 

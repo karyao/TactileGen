@@ -14,6 +14,7 @@ from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
+from src.contracts import CHART_MARK_ROLE
 from src.baseline.opencv_bars import (
     Box,
     _plot_bounds,
@@ -25,12 +26,7 @@ from src.baseline.opencv_bars import (
 )
 
 
-TYPE_CLASS = {
-    "hbar_categorical": "horizontal_bar",
-    "vbar_categorical": "vertical_bar",
-    "dot_line": "dot",
-    "line": "line_segment",
-}
+TYPE_CLASS = CHART_MARK_ROLE
 
 
 def _plot_masks(image):

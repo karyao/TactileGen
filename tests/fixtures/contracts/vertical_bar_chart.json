@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "chart_type": "vbar_categorical",
+  "source_key": "val/example.png",
+  "title": "AB",
+  "x_axis_title": "X",
+  "y_axis_title": "Y",
+  "categories": ["A", "B"],
+  "series": [
+    {"name": "N", "values": [4, 6]},
+    {"name": "S", "values": [3, 5]}
+  ]
+}

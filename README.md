@@ -115,3 +115,8 @@ height. The all-type scores above are for a test sample, not the full test set.
 
 PlotQA: https://github.com/NiteshMethani/PlotQA/blob/master/PlotQA_Dataset.md
 - Use its official training, validation, and test splits.
+
+## Development
+
+See [chart stage contracts](docs/contracts.md) for the shared detection, OCR,
+and vertical-bar data formats used by future pipeline stages.
