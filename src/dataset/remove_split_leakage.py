@@ -12,6 +12,7 @@ import hashlib
 import json
 import shutil
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 # Earlier splits win when the same PNG appears in more than one split.
@@ -30,7 +31,6 @@ def write_data_yaml(output: Path, class_names: list[str]) -> None:
     """Write Ultralytics split paths and class IDs for this local dataset."""
     (output / "data.yaml").write_text(
         "# YOLO detection dataset; generated from classes.txt\n"
-        f"path: {output.resolve()}\n"
         "train: images/train\n"
         "val: images/val\n"
         "test: images/test\n"
@@ -64,7 +64,9 @@ def clean_dataset(source: Path, output: Path) -> dict:
     if not source.is_dir():
         raise FileNotFoundError(f"Dataset does not exist: {source}")
     if output.exists():
-        raise FileExistsError(f"Choose a new output directory: {output}")
+        raise FileExistsError(
+            f"Output already exists: {output}. Choose a new --output path."
+        )
     if not (source / "classes.txt").is_file():
         raise FileNotFoundError(f"Missing classes.txt in {source}")
     class_names = (source / "classes.txt").read_text(encoding="utf-8").splitlines()
@@ -105,28 +107,6 @@ def clean_dataset(source: Path, output: Path) -> dict:
                 # Repeated images within one split do not leak across splits.
                 seen.setdefault(digest, split)
 
-    # Only the selected images and their labels go into the new dataset.
-    output.mkdir(parents=True)
-    shutil.copy2(source / "classes.txt", output / "classes.txt")
-    write_data_yaml(output, class_names)
-    for split in SPLITS:
-        image_dir = output / "images" / split
-        label_dir = output / "labels" / split
-        image_dir.mkdir(parents=True)
-        label_dir.mkdir(parents=True)
-        for image, label in kept[split]:
-            (image_dir / image.name).hardlink_to(image)
-            shutil.copy2(label, label_dir / label.name)
-        if split in manifests:
-            fields, rows = manifests[split]
-            kept_ids = {image.stem for image, _ in kept[split]}
-            with (output / f"chart_types_{split}.csv").open(
-                "w", newline="", encoding="utf-8"
-            ) as stream:
-                writer = csv.DictWriter(stream, fieldnames=fields)
-                writer.writeheader()
-                writer.writerows(row for row in rows if row["image_id"] in kept_ids)
-
     report = {
         "policy": "Keep test, then val, then train; remove exact SHA-256 matches across splits",
         "source": str(source),
@@ -136,22 +116,69 @@ def clean_dataset(source: Path, output: Path) -> dict:
         },
         "removed": removed,
     }
-    (output / "leakage_report.json").write_text(
-        json.dumps(report, indent=2) + "\n", encoding="utf-8"
-    )
+    # Publish only a complete dataset; failed writes leave no partial output.
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=f".{output.name}-", dir=output.parent) as temporary:
+        staging = Path(temporary)
+        shutil.copy2(source / "classes.txt", staging / "classes.txt")
+        write_data_yaml(staging, class_names)
+        for split in SPLITS:
+            image_dir = staging / "images" / split
+            label_dir = staging / "labels" / split
+            image_dir.mkdir(parents=True)
+            label_dir.mkdir(parents=True)
+            for image, label in kept[split]:
+                try:
+                    (image_dir / image.name).hardlink_to(image)
+                except OSError as exc:
+                    raise OSError(
+                        f"Cannot hard-link {image} into {output}: {exc}. "
+                        "Keep source and output on the same filesystem and check permissions."
+                    ) from exc
+                shutil.copy2(label, label_dir / label.name)
+            if split in manifests:
+                fields, rows = manifests[split]
+                kept_ids = {image.stem for image, _ in kept[split]}
+                with (staging / f"chart_types_{split}.csv").open(
+                    "w", newline="", encoding="utf-8"
+                ) as stream:
+                    writer = csv.DictWriter(stream, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerows(row for row in rows if row["image_id"] in kept_ids)
+
+        (staging / "leakage_report.json").write_text(
+            json.dumps(report, indent=2) + "\n", encoding="utf-8"
+        )
+        if output.exists():
+            raise FileExistsError(
+                f"Output already exists: {output}. Choose a new --output path."
+            )
+        staging.rename(output)
     return report
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=Path("dataset_yolo_vbars"))
-    parser.add_argument("--output", type=Path, default=Path("dataset_yolo_vbars_clean"))
+    parser.add_argument(
+        "--source", type=Path, default=Path("dataset_yolo_vbars"),
+        help="prepared YOLO dataset with train, val, and test splits (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--output", type=Path, default=Path("dataset_yolo_vbars_clean"),
+        help="new directory for the cleaned dataset (default: %(default)s)",
+    )
     args = parser.parse_args()
-    report = clean_dataset(args.source, args.output)
+    print(f"Checking {args.source} for exact duplicates...", flush=True)
+    try:
+        report = clean_dataset(args.source, args.output)
+    except (OSError, ValueError) as exc:
+        parser.exit(2, f"error: {exc}\n")
     for split in SPLITS:
         counts = report["counts"][split]
         print(f"{split}: kept {counts['kept']}, removed {counts['removed']}")
     print(f"Clean dataset: {args.output}")
+    print(f"YOLO data file: {args.output / 'data.yaml'}")
+    print(f"Removal report: {args.output / 'leakage_report.json'}")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,17 @@
 """Checks for cross-split removal without changing the source dataset."""
 
 import csv
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.dataset.remove_split_leakage import clean_dataset
+
+
+SCRIPT = Path(__file__).resolve().parents[1] / "src" / "dataset" / "remove_split_leakage.py"
 
 
 class RemoveSplitLeakageTest(unittest.TestCase):
@@ -85,7 +91,6 @@ class RemoveSplitLeakageTest(unittest.TestCase):
         self.assertEqual(
             (self.output / "data.yaml").read_text().splitlines()[1:],
             [
-                f"path: {self.output.resolve()}",
                 "train: images/train",
                 "val: images/val",
                 "test: images/test",
@@ -100,6 +105,27 @@ class RemoveSplitLeakageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Image/label IDs differ"):
             clean_dataset(self.source, self.output)
         self.assertFalse(self.output.exists())
+
+    def test_link_failure_leaves_no_partial_dataset(self):
+        self.add_image("test", 1, b"image")
+        with patch.object(Path, "hardlink_to", side_effect=OSError("cross-device link")):
+            with self.assertRaisesRegex(OSError, "same filesystem"):
+                clean_dataset(self.source, self.output)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(list(self.root.glob(".clean-*")), [])
+
+    def test_cli_explains_existing_output_without_changing_it(self):
+        self.output.mkdir()
+        marker = self.output / "keep.txt"
+        marker.write_text("keep")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--source", str(self.source), "--output", str(self.output)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Choose a new --output path", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(marker.read_text(), "keep")
 
 
 if __name__ == "__main__":

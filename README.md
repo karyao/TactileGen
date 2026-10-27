@@ -59,19 +59,23 @@ training annotations incorrect.
 
 ## Remove exact image leakage before YOLO training
 
-Some PlotQA vertical-bar images are byte-identical across official splits. After
-preparing all three splits, create a cleaned copy:
+Some PlotQA vertical-bar images are byte-identical across official splits. From
+the repository root, prepare all three splits, then create a cleaned copy:
 
 ```bash
-python3 src/dataset/remove_split_leakage.py --source dataset_yolo_vbars --output dataset_yolo_vbars_clean
+python3 src/dataset/remove_split_leakage.py
 ```
 
 For matching images, the command keeps the test copy first, then validation,
 then training. It writes `leakage_report.json` with removed IDs and hashes, and
 `data.yaml` with the split paths and 15 class names. Use the clean dataset for
 YOLO training and evaluation; models trained on the original data need
-retraining. This checks byte-identical PNGs only and leaves the source dataset
-unchanged.
+retraining. This checks byte-identical PNGs only.
+
+The output directory must be new. To run the cleaner again, pass a different
+`--output` path. PNGs in the cleaned dataset are hard-linked to the source to
+save disk space, so editing one also changes the corresponding source PNG.
+Keep source and output on the same filesystem.
 
 For the experimental four-type baseline, convert the full validation split and
 run the chart predictor. It returns one of the four PlotQA types and the
