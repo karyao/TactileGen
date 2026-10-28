@@ -22,8 +22,17 @@ test split. Boxes were matched at IoU 0.5; YOLO used a confidence threshold of
 
 | Detector | Precision | Recall | F1 | Exact bar count |
 | --- | ---: | ---: | ---: | ---: |
-| OpenCV | 0.954 | 0.763 | 0.848 | 0.474 |
-| YOLO | 0.992 | 0.942 | 0.966 | 0.792 |
+| OpenCV | 0.9537 | 0.7630 | 0.8477 | 0.4745 |
+| YOLO baseline | 0.9917 | 0.9416 | 0.9660 | 0.7917 |
+| YOLO, no mosaic | **0.9924** | **0.9431** | **0.9671** | **0.7941** |
+| YOLO, no HSV | 0.9898 | 0.9421 | 0.9653 | 0.7903 |
+
+The YOLO checkpoints used the same model and training settings except for the
+named augmentation change. The no-mosaic checkpoint disabled mosaic while
+retaining HSV augmentation; the no-HSV checkpoint retained mosaic while
+disabling HSV augmentation. The ablation mAP evaluations are still pending.
+See the [ablation benchmark](docs/ablation_benchmark.md) for the experimental
+plan and reproduction commands.
 
 These are detection results, not measures of chart understanding or tactile
 output. See the [experiment guide](docs/experiments.md) for methods and
