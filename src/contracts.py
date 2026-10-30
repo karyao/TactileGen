@@ -42,7 +42,8 @@ TEXT_ROLES = frozenset({
 })
 
 
-def _source_key(value: str) -> None:
+def validate_source_key(value: str) -> None:
+    """Validate a relative, namespaced image identifier."""
     parts = value.split("/") if isinstance(value, str) else []
     if len(parts) < 2 or any(part in ("", ".", "..") for part in parts):
         raise ValueError("source_key must be a relative, namespaced image path")
@@ -88,7 +89,7 @@ class DetectionFrame:
     detections: tuple[Detection, ...]
 
     def __post_init__(self) -> None:
-        _source_key(self.source_key)
+        validate_source_key(self.source_key)
         if (isinstance(self.width, bool) or isinstance(self.height, bool)
                 or not isinstance(self.width, int) or not isinstance(self.height, int)
                 or self.width <= 0 or self.height <= 0):
@@ -130,7 +131,7 @@ class OCRFrame:
     regions: tuple[RecognizedText, ...]
 
     def __post_init__(self) -> None:
-        _source_key(self.source_key)
+        validate_source_key(self.source_key)
         ids: set[str] = set()
         for region in self.regions:
             if not isinstance(region, RecognizedText):
@@ -181,7 +182,7 @@ class VerticalBarChart:
     series: tuple[BarSeries, ...]
 
     def __post_init__(self) -> None:
-        _source_key(self.source_key)
+        validate_source_key(self.source_key)
         for label in (self.title, self.x_axis_title, self.y_axis_title):
             if not isinstance(label, str) or not label:
                 raise ValueError("chart and axis titles must be nonempty")

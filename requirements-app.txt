@@ -1,0 +1,4 @@
+-r requirements.txt
+-r requirements-model.txt
+
+gradio>=6,<7

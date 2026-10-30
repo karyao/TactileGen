@@ -1,15 +1,17 @@
 """YOLO result adapter and comparable bar scoring without model dependencies."""
 
 import json
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.baseline.yolo_bars import check_model_classes, detection_frame, evaluate, validate
+from src.baseline.yolo_bars import check_model_classes, detection_frame, evaluate, main, validate
 from src.contract_io import load_detection_frame
-from src.contracts import CLASS_NAMES
+from src.contracts import CLASS_NAMES, Box, Detection, DetectionFrame
 
 
 class FakeTensor:
@@ -115,7 +117,7 @@ class YoloBaselineTest(unittest.TestCase):
                 calls = []
 
                 def predict(self, **kwargs):
-                    self.calls.append(kwargs["source"])
+                    self.calls.append(kwargs)
                     return iter(fake_result(path, [[10, 20, 30, 80]], [1], [0.9])
                                 for path in kwargs["source"])
 
@@ -124,7 +126,58 @@ class YoloBaselineTest(unittest.TestCase):
                  patch("src.baseline.yolo_bars._write_overlay"):
                 report = evaluate(model, Path("best.pt"), root, "test", root / "output", batch=1)
             self.assertEqual(report["images"], 2)
-            self.assertEqual([len(call) for call in model.calls], [1, 1])
+            self.assertEqual([len(call["source"]) for call in model.calls], [1, 1])
+            self.assertEqual([call["iou"] for call in model.calls], [0.70, 0.70])
+
+    def test_prediction_cli_uses_shared_detection_and_preserves_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root / "chart final.png"
+            output = root / "output"
+            image.write_bytes(b"")
+            frame = DetectionFrame("input/chart_final.png", 100, 100, (
+                Detection("det-00001", "vertical_bar", Box(10, 20, 30, 80), 0.9),
+            ))
+            model = object()
+            argv = [
+                "yolo_bars", "predict", "--image", str(image), "--output-dir", str(output),
+                "--source-key", "test/chart.png", "--confidence", "0.4", "--nms-iou", "0.6",
+            ]
+            with patch("sys.argv", argv), \
+                 patch("src.baseline.yolo_bars.load_model", return_value=model), \
+                 patch("src.baseline.yolo_bars.run_detection", return_value=frame) as run, \
+                 patch("src.baseline.yolo_bars.read_image", return_value=None), \
+                 patch("src.baseline.yolo_bars._write_overlay"), redirect_stdout(io.StringIO()) as stdout:
+                main()
+            run.assert_called_once_with(model, image, confidence=0.4,
+                                        nms_iou=0.6, device=None)
+            detection_path = output / "chart final_detections.json"
+            self.assertTrue(detection_path.is_file())
+            data = json.loads(detection_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(data), {"schema_version", "source_key", "width", "height",
+                                         "detections"})
+            self.assertEqual(data["source_key"], "test/chart.png")
+            summary = json.loads(stdout.getvalue())
+            self.assertEqual(set(summary), {"source_key", "detections", "vertical_bars", "output_dir"})
+
+    def test_prediction_cli_rejects_invalid_input_before_loading_model(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / "chart.png"
+            image.write_bytes(b"")
+            cases = (
+                ["--confidence", "nan"],
+                ["--nms-iou", "1.1"],
+                ["--source-key", "../chart.png"],
+            )
+            for extra in cases:
+                with self.subTest(extra=extra), \
+                     patch("sys.argv", ["yolo_bars", "predict", "--image", str(image),
+                                        "--output-dir", str(Path(temporary) / "out"), *extra]), \
+                     patch("src.baseline.yolo_bars.load_model") as load, \
+                     redirect_stderr(io.StringIO()):
+                    with self.assertRaisesRegex(SystemExit, "2"):
+                        main()
+                    load.assert_not_called()
 
 
 if __name__ == "__main__":

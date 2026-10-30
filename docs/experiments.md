@@ -47,6 +47,11 @@ overlay with predicted vertical bars:
 python3.12 -m src.baseline.yolo_bars predict --image dataset_yolo_vbars_clean/images/test/22415.png --source-key test/22415.png --output-dir output/yolo_prediction
 ```
 
+Single-image prediction uses a confidence threshold of `0.25` and an NMS IoU
+threshold of `0.70`. Override them with `--confidence` and `--nms-iou` when
+needed. NMS IoU controls duplicate suppression; it is separate from the `0.5`
+ground-truth box-matching IoU used by the evaluator below.
+
 Score the checkpoint on the cleaned test split with the same IoU 0.5,
 one-to-one bar matching used by the OpenCV baseline. The fixed confidence
 threshold is 0.25; `--limit 8` gives a quick smoke test before the full run.

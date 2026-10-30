@@ -40,13 +40,22 @@ reproduction steps.
 
 ## Try the detector
 
-From the repository root, install the dependencies and run the included
-checkpoint on a chart PNG:
+From the repository root, install the detector dependencies and run the
+included checkpoint on a chart PNG:
 
 ```bash
 python3.12 -m pip install -r requirements.txt -r requirements-model.txt
 python3.12 -m src.baseline.yolo_bars predict --image path/to/chart.png --output-dir output/demo
 ```
+
+To install the detector together with the Gradio application dependencies,
+use the dedicated application requirements file instead:
+
+```bash
+python3.12 -m pip install -r requirements-app.txt
+```
+
+This keeps Gradio optional for users who only need the command-line detector.
 
 The command writes a detection JSON file and a PNG overlay to `output/demo`.
 It uses [`models/yolo_vbars/best.pt`](models/yolo_vbars/best.pt) by default.

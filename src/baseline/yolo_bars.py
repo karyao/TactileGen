@@ -10,6 +10,7 @@ import argparse
 import csv
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from src.baseline.opencv_bars import (
@@ -19,57 +20,20 @@ from src.baseline.opencv_bars import (
     read_image,
 )
 from src.contract_io import write_detection_frame
-from src.contracts import CLASS_IDS, CLASS_NAMES, Box, Detection, DetectionFrame
+from src.contracts import CLASS_IDS, CLASS_NAMES, validate_source_key
+from src.detection import (
+    DEFAULT_CONFIDENCE,
+    DEFAULT_NMS_IOU,
+    _validate_threshold,
+    check_model_classes,
+    detection_frame,
+    load_model,
+    run_detection,
+)
 
 
 DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
 DEFAULT_DATA_ROOT = Path("dataset_yolo_vbars_clean")
-DEFAULT_CONFIDENCE = 0.25
-
-
-def _class_names(names: dict[int, str] | list[str] | tuple[str, ...]) -> tuple[str, ...]:
-    if isinstance(names, dict):
-        try:
-            return tuple(names[index] for index in range(len(names)))
-        except KeyError as exc:
-            raise ValueError("Model class IDs must be contiguous from zero") from exc
-    return tuple(names)
-
-
-def check_model_classes(model) -> None:
-    if _class_names(model.names) != CLASS_NAMES:
-        raise ValueError("Model class names/order differ from the chart contract")
-
-
-def load_model(weights: Path):
-    try:
-        from ultralytics import YOLO
-    except ImportError as exc:
-        raise RuntimeError("Install the model dependencies: python -m pip install -r requirements-model.txt") from exc
-    if not weights.is_file():
-        raise FileNotFoundError(f"Missing YOLO checkpoint: {weights}")
-    model = YOLO(str(weights))
-    check_model_classes(model)
-    return model
-
-
-def detection_frame(result, source_key: str) -> DetectionFrame:
-    """Adapt an Ultralytics result to the shared pixel-coordinate contract."""
-    height, width = result.orig_shape
-    boxes = result.boxes
-    detections = []
-    for index, (xyxy, class_id, confidence) in enumerate(zip(
-        boxes.xyxy.cpu().tolist(), boxes.cls.cpu().tolist(), boxes.conf.cpu().tolist(),
-        strict=True,
-    )):
-        if int(class_id) != class_id or not 0 <= int(class_id) < len(CLASS_NAMES):
-            raise ValueError(f"Invalid model class ID: {class_id}")
-        x1, y1, x2, y2 = xyxy
-        box = Box(max(0.0, min(x1, width)), max(0.0, min(y1, height)),
-                  max(0.0, min(x2, width)), max(0.0, min(y2, height)))
-        detections.append(Detection(f"det-{index + 1:05d}", CLASS_NAMES[int(class_id)],
-                                    box, float(confidence)))
-    return DetectionFrame(source_key, width, height, tuple(detections))
 
 
 def _test_images(data_root: Path, split: str, limit: int | None) -> list[Path]:
@@ -119,7 +83,8 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
     for start in range(0, len(images), batch):
         batch_images = images[start:start + batch]
         predictions = model.predict(source=[str(path) for path in batch_images], stream=True,
-                                    batch=batch, conf=confidence, device=device, verbose=False)
+                                    batch=batch, conf=confidence, iou=DEFAULT_NMS_IOU,
+                                    device=device, verbose=False)
         batch_processed = 0
         for path, result in zip(batch_images, predictions, strict=True):
             if Path(result.path).resolve() != path.resolve():
@@ -193,6 +158,10 @@ def main() -> None:
     prediction.add_argument("--image", type=Path, required=True)
     prediction.add_argument("--source-key", help="Namespaced source key, e.g. test/22415.png")
     prediction.add_argument("--output-dir", type=Path, required=True)
+    prediction.add_argument(
+        "--nms-iou", type=float, default=DEFAULT_NMS_IOU,
+        help="duplicate-suppression overlap threshold from 0 to 1 (default: 0.70)",
+    )
     scoring = commands.add_parser("evaluate", help="Score vertical bars on a labeled split")
     scoring.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     scoring.add_argument("--split", choices=("train", "val", "test"), default="test")
@@ -210,15 +179,22 @@ def main() -> None:
     for command in (prediction, scoring):
         command.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE)
     args = parser.parse_args()
+    if args.command == "predict":
+        try:
+            _validate_threshold(args.confidence, "--confidence")
+            _validate_threshold(args.nms_iou, "--nms-iou")
+            if not args.image.is_file():
+                raise ValueError(f"Missing image: {args.image}")
+            if args.source_key is not None:
+                validate_source_key(args.source_key)
+        except ValueError as exc:
+            parser.error(str(exc))
     model = load_model(args.weights)
     if args.command == "predict":
-        if not 0 <= args.confidence <= 1:
-            parser.error("--confidence must be between 0 and 1")
-        if not args.image.is_file():
-            parser.error(f"Missing image: {args.image}")
-        result = model.predict(source=str(args.image), conf=args.confidence,
-                               device=args.device, verbose=False)[0]
-        frame = detection_frame(result, args.source_key or f"input/{args.image.name}")
+        frame = run_detection(model, args.image, confidence=args.confidence,
+                              nms_iou=args.nms_iou, device=args.device)
+        if args.source_key is not None:
+            frame = replace(frame, source_key=args.source_key)
         args.output_dir.mkdir(parents=True, exist_ok=True)
         write_detection_frame(args.output_dir / f"{args.image.stem}_detections.json", frame)
         boxes = [item.box for item in frame.detections if item.role == "vertical_bar"]
