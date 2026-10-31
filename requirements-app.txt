@@ -1,0 +1,5 @@
+-r requirements.txt
+-r requirements-model.txt
+
+gradio>=6,<7
+Pillow>=10,<13
