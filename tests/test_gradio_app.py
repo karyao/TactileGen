@@ -185,7 +185,7 @@ class GradioAppTest(unittest.TestCase):
             for class_name in component["props"].get("elem_classes", []):
                 by_class[class_name] = component
         for class_name in (
-            "borealis-scope", "borealis-upload", "borealis-results",
+            "borealis-scope", "borealis-control-rail", "borealis-workspace",
             "borealis-status", "borealis-empty", "borealis-summary",
             "borealis-error",
         ):

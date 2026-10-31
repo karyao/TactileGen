@@ -31,6 +31,7 @@ class BorealisTest(unittest.TestCase):
             "aurora": "#669ECC", "glow": "#CCDFFF",
             "text": "#F7FBFF", "muted": "#B8CCE0",
             "panel": "#06243B", "elevated": "#0A304B",
+            "sun": "#F4C95D",
         })
         with self.assertRaises(TypeError):
             BOREALIS_COLORS["midnight"] = "#FFFFFF"
@@ -53,7 +54,7 @@ class BorealisTest(unittest.TestCase):
     def test_css_contains_tokens_layout_and_focus_contract(self):
         for name, value in BOREALIS_COLORS.items():
             self.assertIn(f"--borealis-{name.replace('_', '-')}: {value};", BOREALIS_CSS)
-        self.assertIn("linear-gradient(135deg, #001322 0%, #002744 55%, #003866 100%)", BOREALIS_CSS)
+        self.assertIn("background: var(--borealis-midnight)", BOREALIS_CSS)
         self.assertIn("--borealis-content-width: 1200px", BOREALIS_CSS)
         self.assertIn("--borealis-space-1: 8px", BOREALIS_CSS)
         self.assertIn("--borealis-radius-sm: 10px", BOREALIS_CSS)
@@ -62,21 +63,28 @@ class BorealisTest(unittest.TestCase):
         self.assertIn("--borealis-focus-width: 3px", BOREALIS_CSS)
         self.assertIn(":focus-visible", BOREALIS_CSS)
         self.assertIn(
-            "outline: var(--borealis-focus-width) solid var(--borealis-glow)",
+            "outline: var(--borealis-focus-width) solid var(--borealis-sun)",
             BOREALIS_CSS,
         )
         for class_name in (
-            "app", "header", "nav", "panel", "scope", "upload", "summary",
-            "results", "table", "downloads", "error", "empty",
+            "app", "header", "actions", "scope", "control-rail", "upload-image",
+            "summary", "workspace", "workspace-grid", "error", "empty",
         ):
             self.assertIn(f".borealis-{class_name}", BOREALIS_CSS)
-        self.assertIn("@media (max-width: 768px)", BOREALIS_CSS)
+        self.assertIn("@media (max-width: 900px)", BOREALIS_CSS)
+        self.assertIn("@media (max-width: 600px)", BOREALIS_CSS)
+        self.assertIn(".borealis-workspace-heading .borealis-workspace-heading", BOREALIS_CSS)
+        self.assertIn(".borealis-workspace-heading,", BOREALIS_CSS)
+        self.assertIn("margin-block: 12px !important", BOREALIS_CSS)
+        self.assertIn("padding: 20px 16px !important", BOREALIS_CSS)
+        self.assertIn("padding: 16px 12px !important", BOREALIS_CSS)
 
     def test_text_and_control_pairs_meet_wcag_aa(self):
         pairs = (
             ("text", "midnight"), ("text", "panel"), ("muted", "panel"),
             ("glow", "midnight"), ("text", "deep_sky"),
             ("aurora", "midnight"), ("aurora", "panel"),
+            ("sun", "midnight"), ("midnight", "sun"),
         )
         for foreground, background in pairs:
             with self.subTest(foreground=foreground, background=background):
@@ -96,8 +104,8 @@ class BorealisTest(unittest.TestCase):
             "body_text_color_subdued": "#B8CCE0",
             "block_background_fill": "#06243B",
             "input_background_fill": "#0A304B",
-            "input_border_color_focus": "#CCDFFF",
-            "button_primary_background_fill": "#CCDFFF",
+            "input_border_color_focus": "#F4C95D",
+            "button_primary_background_fill": "#F4C95D",
             "button_primary_text_color": "#001322",
             "button_secondary_background_fill": "transparent",
             "button_secondary_border_color": "#669ECC",

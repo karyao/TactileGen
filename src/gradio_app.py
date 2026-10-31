@@ -238,22 +238,21 @@ def build_app(model, *, device: str | None = None):
         with gr.Column(elem_classes="borealis-app"):
             with gr.Column(elem_classes="borealis-header"):
                 gr.Markdown(
+                    "**Statistical chart element detector**\n\n"
                     "# TactileGen\n\n"
-                    "**Statistical Chart Element Detector**\n\n"
-                    "Upload a vertical categorical bar chart to inspect the regions "
-                    "detected by YOLO."
+                    "Inspect the regions detected by YOLO in a vertical categorical "
+                    "bar chart."
                 )
-                gr.HTML('<div class="borealis-divider" aria-hidden="true"></div>')
+                gr.Markdown(
+                    "**Scope:** Vertical categorical bar charts only. The detector "
+                    "returns chart elements and bounding boxes; it does not read text, "
+                    "values, or trends.",
+                    elem_classes="borealis-scope",
+                )
 
-            gr.Markdown(
-                "**Detection scope:** Validated for vertical categorical bar charts. "
-                "Other chart types are unsupported. This prototype detects chart "
-                "elements and bounding boxes; it does not read text, values, or trends.",
-                elem_classes="borealis-scope",
-            )
-
-            with gr.Row(elem_classes="borealis-two-column"):
-                with gr.Column(elem_classes="borealis-upload"):
+            with gr.Row(elem_classes="borealis-workspace-grid"):
+                with gr.Column(elem_classes="borealis-control-rail"):
+                    gr.Markdown("## Input", elem_classes="borealis-section-title")
                     image_input = gr.Image(
                         type="filepath",
                         sources=["upload"],
@@ -263,10 +262,11 @@ def build_app(model, *, device: str | None = None):
                         placeholder="Upload a chart image",
                         buttons=["fullscreen"],
                         alt_text="Preview of the uploaded chart",
+                        elem_classes="borealis-upload-image",
                     )
                     gr.Markdown(
-                        "Supported formats: PNG, JPEG, and WebP. Maximum file size: "
-                        "20 MB. Maximum decoded size: 40 megapixels."
+                        "PNG, JPEG, or WebP · up to 20 MB and 40 megapixels.",
+                        elem_classes="borealis-helper",
                     )
                     gr.Examples(
                         examples=[[str(EXAMPLE_IMAGE)]],
@@ -282,8 +282,13 @@ def build_app(model, *, device: str | None = None):
                         step=0.05,
                         label="Minimum detection confidence",
                         info="Hide detections below this confidence score.",
+                        elem_classes="borealis-setting",
                     )
-                    with gr.Accordion("Advanced settings", open=False):
+                    with gr.Accordion(
+                        "Advanced settings",
+                        open=False,
+                        elem_classes="borealis-advanced",
+                    ):
                         nms_iou = gr.Slider(
                             0.10,
                             0.95,
@@ -294,12 +299,20 @@ def build_app(model, *, device: str | None = None):
                                 "Controls duplicate suppression during inference. "
                                 "This is not evaluation or box-matching IoU."
                             ),
+                            elem_classes="borealis-setting",
                         )
-                    with gr.Row(elem_classes="borealis-nav"):
+                    with gr.Row(elem_classes="borealis-actions"):
                         analyze_button = gr.Button("Analyze chart", variant="primary")
                         clear_button = gr.Button("Clear", variant="secondary")
 
-                with gr.Column(elem_classes="borealis-results"):
+                with gr.Column(elem_classes="borealis-workspace"):
+                    gr.Markdown(
+                        "## Analysis result",
+                        elem_classes=[
+                            "borealis-section-title",
+                            "borealis-workspace-heading",
+                        ],
+                    )
                     status_output = gr.HTML(
                         ready_status(), elem_classes="borealis-status"
                     )
@@ -322,6 +335,7 @@ def build_app(model, *, device: str | None = None):
                         visible=False,
                         buttons=["download", "fullscreen"],
                         alt_text="Uploaded chart with labeled detection boxes",
+                        elem_classes="borealis-result-image",
                     )
                     error_output = gr.HTML(
                         "", visible=False, elem_classes="borealis-error"
