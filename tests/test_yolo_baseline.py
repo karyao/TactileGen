@@ -86,6 +86,51 @@ class YoloBaselineTest(unittest.TestCase):
                              "test/1.png")
             self.assertEqual(json.loads((root / "output/metrics.json").read_text())["images"], 1)
 
+    def test_evaluation_uses_configurable_matching_iou(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root / "images/test/1.png"
+            label = root / "labels/test/1.txt"
+            image.parent.mkdir(parents=True)
+            label.parent.mkdir(parents=True)
+            image.write_bytes(b"")
+            label.write_text("1 0.5 0.5 0.4 0.4\n", encoding="utf-8")
+            (root / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
+            # The prediction has IoU 0.8 with the label: it passes 0.75 but fails 0.90.
+            result = fake_result(image, [[34, 30, 74, 70]], [1], [0.9])
+            with patch("src.baseline.yolo_bars.read_image", return_value=None), \
+                 patch("src.baseline.yolo_bars._write_overlay"):
+                report_75 = evaluate(FakeModel([result]), Path("best.pt"), root, "test",
+                                     root / "iou75", match_iou=0.75)
+                report_90 = evaluate(FakeModel([result]), Path("best.pt"), root, "test",
+                                     root / "iou90", match_iou=0.90)
+            self.assertEqual(report_75["iou"], 0.75)
+            self.assertEqual(report_75["true_positive"], 1)
+            self.assertEqual(report_90["iou"], 0.90)
+            self.assertEqual(report_90["true_positive"], 0)
+            self.assertEqual(report_75["exact_bar_count_accuracy"], 1)
+            self.assertEqual(report_90["exact_bar_count_accuracy"], 1)
+
+    def test_evaluation_scores_multiple_matching_ious_in_one_inference_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root / "images/test/1.png"
+            label = root / "labels/test/1.txt"
+            image.parent.mkdir(parents=True)
+            label.parent.mkdir(parents=True)
+            image.write_bytes(b"")
+            label.write_text("1 0.5 0.5 0.4 0.4\n", encoding="utf-8")
+            (root / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
+            model = FakeModel([fake_result(image, [[34, 30, 74, 70]], [1], [0.9])])
+            with patch("src.baseline.yolo_bars.read_image", return_value=None), \
+                 patch("src.baseline.yolo_bars._write_overlay"):
+                report = evaluate(model, Path("best.pt"), root, "test", root / "strict",
+                                  match_iou=(0.75, 0.90))
+            results = report["matching_results"]
+            self.assertEqual([item["iou"] for item in results], [0.75, 0.90])
+            self.assertEqual([item["true_positive"] for item in results], [1, 0])
+            self.assertEqual(len(model.results), 1)
+
     def test_validation_records_standard_map(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

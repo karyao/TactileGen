@@ -58,6 +58,14 @@ threshold is 0.25; `--limit 8` gives a quick smoke test before the full run.
 The evaluator saves `metrics.json`, eight contract JSON examples, and eight
 overlays.
 
+Pass `--match-iou` to change the ground-truth box-matching threshold. Repeat
+the flag to score several thresholds from the same inference pass; in that
+case, `metrics.json` contains a `matching_results` list.
+
+```bash
+python3.12 -m src.baseline.yolo_bars evaluate --data-root dataset_yolo_vbars_clean --split test --weights models/yolo_vbars/best.pt --match-iou 0.75 --match-iou 0.90 --output-dir output/yolo_test_strict
+```
+
 ```bash
 python3.12 -m src.baseline.yolo_bars evaluate --data-root dataset_yolo_vbars_clean --split test --weights models/yolo_vbars/best.pt --output-dir output/yolo_test
 python3.12 -m src.baseline.opencv_bars evaluate --data-root dataset_yolo_vbars_clean --split test --output-dir output/opencv_clean_test
@@ -84,6 +92,21 @@ box matching at IoU 0.5. YOLO used confidence 0.25.
 | --- | ---: | ---: | ---: | ---: |
 | OpenCV | 0.9537 | 0.7630 | 0.8477 | 0.4745 |
 | YOLO `best.pt` | 0.9917 | 0.9416 | 0.9660 | 0.7917 |
+
+Stricter one-to-one box matching on the same 11,242 images, with confidence
+0.25 and NMS IoU 0.70 unchanged, produced:
+
+| Model | Match IoU | Precision | Recall | F1 | Exact bar count |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| YOLO baseline | 0.75 | 0.9830 | 0.9333 | 0.9575 | 0.7917 |
+| YOLO baseline | 0.90 | 0.9558 | 0.9075 | 0.9310 | 0.7917 |
+| YOLO, no mosaic | 0.75 | **0.9846** | **0.9357** | **0.9595** | **0.7941** |
+| YOLO, no mosaic | 0.90 | **0.9572** | **0.9097** | **0.9329** | **0.7941** |
+| YOLO, no HSV | 0.75 | 0.9810 | 0.9337 | 0.9568 | 0.7903 |
+| YOLO, no HSV | 0.90 | 0.9536 | 0.9077 | 0.9301 | 0.7903 |
+
+Exact bar-count accuracy is independent of the matching threshold because it
+compares prediction and label counts, not box overlap.
 
 The machine-readable reports are `output/opencv_clean_test/metrics.json` and
 `output/yolo_test/metrics.json`. These values measure bar detection; they do

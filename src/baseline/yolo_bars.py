@@ -68,16 +68,25 @@ def _class_id(data_root: Path) -> int:
 
 def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path,
              limit: int | None = None, confidence: float = DEFAULT_CONFIDENCE,
-             batch: int = 16, device: str | None = None) -> dict:
+             batch: int = 16, device: str | None = None,
+             match_iou: float | tuple[float, ...] = 0.5) -> dict:
     if not 0 <= confidence <= 1:
         raise ValueError("--confidence must be between 0 and 1")
+    match_ious = (match_iou,) if isinstance(match_iou, (int, float)) else tuple(match_iou)
+    if not match_ious:
+        raise ValueError("At least one --match-iou value is required")
+    if len(set(match_ious)) != len(match_ious):
+        raise ValueError("--match-iou values must be unique")
+    for threshold in match_ious:
+        _validate_threshold(threshold, "--match-iou")
     if batch < 1:
         raise ValueError("--batch must be positive")
     class_id = _class_id(data_root)
     images = _test_images(data_root, split, limit)
     output_dir.mkdir(parents=True, exist_ok=True)
-    tp = fp = fn = exact_count = processed = 0
-    sample_rows = []
+    counts = {threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in match_ious}
+    sample_rows = {threshold: [] for threshold in match_ious}
+    exact_count = processed = 0
     # Ultralytics opens every path in a list before yielding results. Limit each
     # call to one batch so a full test split does not fill memory with PNGs.
     for start in range(0, len(images), batch):
@@ -93,18 +102,22 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
             predicted = [item.box for item in frame.detections if item.role == "vertical_bar"]
             actual = load_yolo_boxes(data_root / "labels" / split / f"{path.stem}.txt",
                                      class_id, (frame.width, frame.height), len(CLASS_NAMES))
-            matched = match_boxes(predicted, actual)
-            tp += matched
-            fp += len(predicted) - matched
-            fn += len(actual) - matched
+            for threshold in match_ious:
+                matched = match_boxes(predicted, actual, threshold=threshold)
+                counts[threshold]["tp"] += matched
+                counts[threshold]["fp"] += len(predicted) - matched
+                counts[threshold]["fn"] += len(actual) - matched
+                if len(sample_rows[threshold]) < 8:
+                    sample_rows[threshold].append({
+                        "image_id": path.stem, "predicted": len(predicted),
+                        "actual": len(actual), "matched": matched,
+                    })
             exact_count += len(predicted) == len(actual)
             processed += 1
             batch_processed += 1
             if processed % 500 == 0 or processed == len(images):
                 print(f"Scored {processed}/{len(images)} images", file=sys.stderr, flush=True)
-            if len(sample_rows) < 8:
-                sample_rows.append({"image_id": path.stem, "predicted": len(predicted),
-                                    "actual": len(actual), "matched": matched})
+            if processed <= 8:
                 write_detection_frame(output_dir / f"{path.stem}_detections.json", frame)
                 _write_overlay(output_dir / f"{path.stem}_overlay.png", read_image(path),
                                predicted, actual)
@@ -112,17 +125,23 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
             raise ValueError(f"Expected {len(batch_images)} model results, got {batch_processed}")
     if processed != len(images):
         raise ValueError(f"Expected {len(images)} model results, got {processed}")
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    recall = tp / (tp + fn) if tp + fn else 0.0
-    report = {
-        "model": str(weights), "data_root": str(data_root), "split": split,
-        "class": "vertical_bar", "confidence": confidence, "iou": 0.5,
-        "images": processed, "true_positive": tp, "false_positive": fp,
-        "false_negative": fn, "precision": precision, "recall": recall,
-        "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
-        "exact_bar_count_accuracy": exact_count / processed,
-        "sample_images": sample_rows,
-    }
+    reports = []
+    for threshold in match_ious:
+        tp = counts[threshold]["tp"]
+        fp = counts[threshold]["fp"]
+        fn = counts[threshold]["fn"]
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        reports.append({
+            "model": str(weights), "data_root": str(data_root), "split": split,
+            "class": "vertical_bar", "confidence": confidence, "iou": threshold,
+            "images": processed, "true_positive": tp, "false_positive": fp,
+            "false_negative": fn, "precision": precision, "recall": recall,
+            "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+            "exact_bar_count_accuracy": exact_count / processed,
+            "sample_images": sample_rows[threshold],
+        })
+    report = reports[0] if len(reports) == 1 else {"matching_results": reports}
     (output_dir / "metrics.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
 
@@ -168,6 +187,10 @@ def main() -> None:
     scoring.add_argument("--output-dir", type=Path, required=True)
     scoring.add_argument("--limit", type=int)
     scoring.add_argument("--batch", type=int, default=16)
+    scoring.add_argument(
+        "--match-iou", type=float, action="append", dest="match_ious",
+        help="ground-truth matching threshold; repeat for multiple thresholds (default: 0.5)",
+    )
     validation = commands.add_parser("validate", help="Compute standard detection mAP")
     validation.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     validation.add_argument("--split", choices=("train", "val", "test"), default="test")
@@ -189,6 +212,16 @@ def main() -> None:
                 validate_source_key(args.source_key)
         except ValueError as exc:
             parser.error(str(exc))
+    elif args.command == "evaluate":
+        try:
+            _validate_threshold(args.confidence, "--confidence")
+            args.match_ious = tuple(args.match_ious or (0.5,))
+            if len(set(args.match_ious)) != len(args.match_ious):
+                raise ValueError("--match-iou values must be unique")
+            for threshold in args.match_ious:
+                _validate_threshold(threshold, "--match-iou")
+        except ValueError as exc:
+            parser.error(str(exc))
     model = load_model(args.weights)
     if args.command == "predict":
         frame = run_detection(model, args.image, confidence=args.confidence,
@@ -204,7 +237,7 @@ def main() -> None:
     elif args.command == "evaluate":
         print(json.dumps(evaluate(model, args.weights, args.data_root, args.split,
                                   args.output_dir, args.limit, args.confidence,
-                                  args.batch, args.device), indent=2))
+                                  args.batch, args.device, args.match_ious), indent=2))
     else:
         print(json.dumps(validate(model, args.weights, args.data_root, args.split,
                                   args.output_dir, args.batch, args.device), indent=2))
