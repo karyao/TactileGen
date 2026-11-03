@@ -223,6 +223,59 @@ upscaling can help: at native resolution there is too little of it. Realistic ne
 not preprocessing but evidence from outside the crop (consistent decimals across a chart's
 ticks, the tick step, printed value labels), or a recogniser trained on small tick text.
 
+## A fixed-setting backend on the same crops (Karen's `TesseractBackend`)
+
+`feat/ocr-label-support` (Karen Yao, not merged) adds an OCR backend that reads the text boxes
+of a detector's JSON with `pytesseract`: crop with 2 to 8 px of padding, upscale by an integer
+factor toward 32 px, read both the grayscale and the Otsu-thresholded crop in each orientation
+tried (0 and plus or minus 90 degrees for tall boxes) with `--psm 7`, and keep the most
+confident read. Its settings are fixed, so nothing is tuned here: **val is a clean score**
+(our engines were tuned on a sample of val crops, so their val numbers are slightly
+optimistic) and **test was scored once**. The same ground-truth boxes, crops, normalization
+and per-class table as above; each image goes through the backend's own `run_ocr`.
+`src/baseline/ocr_backend_eval.py` runs it. The backend's code is not part of this
+repository: export `src/ocr.py` and `src/tesseract_ocr.py` from the branch unmodified into
+`output/karen_ocr/`, and install `pytesseract` there (`pip install --no-deps --target
+output/karen_ocr/pylib "pytesseract>=0.3.13,<0.4"`); the scored files had Git blob ids
+`e12b2d13` and `89777e2d`.
+
+Exact match (normalized) / character error rate, all vertical charts. Our engines are the tuned
+Tesseract and EasyOCR from the tables above.
+
+| Class | Crops (val / test) | Karen val | Karen **test** | Tesseract val | Tesseract **test** | EasyOCR val | EasyOCR **test** |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| x_title | 75 / 54 | 0.840 / 0.046 | **0.944 / 0.008** | 0.800 / 0.021 | **0.907 / 0.011** | 0.680 / 0.035 | **0.815 / 0.030** |
+| y_title | 139 / 127 | 0.655 / 0.158 | **0.693 / 0.233** | 0.640 / 0.064 | **0.724 / 0.047** | 0.446 / 0.130 | **0.583 / 0.109** |
+| chart_title | 20 / 26 | 0.750 / 0.013 | **0.731 / 0.181** | 0.700 / 0.013 | **0.692 / 0.190** | 0.750 / 0.015 | **0.654 / 0.142** |
+| xlabel | 987 / 1039 | 0.673 / 0.351 | **0.583 / 0.454** | 0.630 / 0.290 | **0.581 / 0.385** | 0.615 / 0.255 | **0.579 / 0.321** |
+| ylabel | 1129 / 1028 | 0.921 / 0.043 | **0.933 / 0.041** | 0.865 / 0.069 | **0.868 / 0.074** | 0.906 / 0.052 | **0.931 / 0.038** |
+| legend_label | 240 / 245 | 0.717 / 0.201 | **0.767 / 0.157** | 0.708 / 0.062 | **0.820 / 0.030** | 0.646 / 0.094 | **0.755 / 0.050** |
+| value_label | 355 / 208 | 0.699 / 0.171 | **0.731 / 0.134** | 0.549 / 0.234 | **0.663 / 0.197** | 0.637 / 0.200 | **0.615 / 0.258** |
+
+Value-axis numbers (ground truth that parses; correct = parses to the ground-truth number):
+
+| | Karen val | Karen **test** | Tesseract val | Tesseract **test** | EasyOCR val | EasyOCR **test** |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ylabel parse / correct | 0.967 / 0.936 | **0.971 / 0.938** | 0.929 / 0.878 | **0.925 / 0.887** | 0.996 / 0.934 | **0.999 / 0.936** |
+| value_label parse / correct | 0.858 / 0.757 | **0.839 / 0.745** | 0.803 / 0.631 | **0.891 / 0.766** | 0.883 / 0.726 | **0.844 / 0.677** |
+| Charts with every ylabel right | 109 of 148 | **111 of 137** | 89 of 148 | **84 of 137** | 121 of 148 | **112 of 137** |
+
+- **Value-axis labels:** the untuned backend is on par with our tuned EasyOCR and about 5 points
+  ahead of our tuned Tesseract on correct-parse. It reads every candidate crop and keeps the most
+  confident read, which our one-setting-per-class tuning never tried. It is also ahead of our
+  Tesseract on `x_title` and `value_label` exact match.
+- **Multi-line text is where it loses.** It reads each box as one line: category labels whose
+  ground truth has a line break are exact 0 of 61 (our Tesseract 0.607, EasyOCR 0.393), and
+  `y_title` and `legend_label` character error rates are several times ours (0.233 against
+  0.047, 0.157 against 0.030). On boxes 25 px or higher, `xlabel` is 0.240 exact against 0.302
+  and 0.374; on single-line labels and boxes under 25 px high it is ahead (0.620 against 0.580
+  and 0.591 single-line; 0.816 against 0.771 and 0.719 under 25 px).
+  These breakdowns slice the test reads already scored, so they are descriptive only.
+- **Decimal points (val only):** it drops 7.3% of decimals on `ylabel` and 13.7% on `value_label`
+  (ours: 5.6% and 13.2% for Tesseract, 10.5% and 16.1% for EasyOCR) and never invents one.
+- A natural follow-up is to give our Tesseract engine the same candidate ensemble while keeping
+  block mode for multi-line boxes. That has not been tried.
+
 ## Recreating the environments
 
 Nothing here is in `requirements*.txt`; both engines are optional. Neither changes the
