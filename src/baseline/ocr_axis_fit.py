@@ -146,9 +146,11 @@ def analyse(rows, ticks, strict_ambiguity=False):
                 reasons.append("ambiguous best line")
         entry = {"chart": name, "ticks": len(pts), "parsed": len(parsed), "all_reads_correct": all_correct,
                  "flagged": bool(reasons), "reasons": reasons}
+        entry.update(tick_ys=[y for y, _, _ in pts], reads=[p for _, _, p in pts])
         if fit is not None:
             entry.update(slope_rel_err=abs(fit[1] - ref_b) / abs(ref_b),
-                         offset_err=abs(fit[0] - ref_a) / val_span, inliers=len(fit[2]))
+                         offset_err=abs(fit[0] - ref_a) / val_span, inliers=len(fit[2]),
+                         fit_a=fit[0], fit_b=fit[1])
         result["charts"].append(entry)
     return result
 
@@ -177,10 +179,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--predictions", type=Path, required=True)
     ap.add_argument("--root", type=Path, default=Path("data/pmc_yolo_bars"))
+    ap.add_argument("--split", default="test")
     ap.add_argument("--output", type=Path)
     args = ap.parse_args()
     rows = json.loads(args.predictions.read_text())
-    ticks = tick_positions(args.root)
+    ticks = tick_positions(args.root, args.split)
     out = {}
     for label, strict in (("ambiguity by inlier set", False), ("first version: ambiguity by slope", True)):
         result = analyse(rows, ticks, strict)

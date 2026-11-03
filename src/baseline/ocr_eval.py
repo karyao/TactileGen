@@ -12,6 +12,7 @@ same steps:
            per class group (numeric: highest correct-parse rate; text: lowest CER)
   test     score the chosen settings once on test (refuses a second run)
   rescore  recompute the test tables from saved reads (metric changes only)
+  predict  save reads for val with the chosen settings (no scoring)
 
 Metrics: exact match raw (strip only) and normalized (see normalize), character
 error rate on normalized text, and for value-axis labels the share that parse to
@@ -272,11 +273,30 @@ def rescore(engine, args):
     report(out, out["charts"])
 
 
+def predict_split(engine, args):
+    """Save reads for a split with the settings chosen by ``tune``; nothing is scored.
+
+    Used to get val reads for choosing thresholds in later steps (test has its own command).
+    """
+    if args.split == "test":
+        raise SystemExit("test reads come from the `test` command, which scores it once")
+    chosen = json.loads((args.out / "ocr_tuning.json").read_text())["chosen"]
+    crops, _ = load_crops(args.root, args.split)
+    rows = []
+    for klass in {c["klass"] for c in crops}:
+        rows += score_crops(engine, [c for c in crops if c["klass"] == klass],
+                            chosen.get(klass) or chosen["legend_label"])
+    (args.out / f"ocr_{args.split}_predictions.json").write_text(json.dumps(
+        [{k: (str(v) if k == "image" else v) for k, v in r.items()} for r in rows]))
+    print(f"{engine.name}: saved {len(rows)} {args.split} reads")
+
+
 def main(engine):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=("tune", "test", "rescore"))
+    ap.add_argument("command", choices=("tune", "test", "rescore", "predict"))
     ap.add_argument("--root", type=Path, default=Path("data/pmc_yolo_bars"))
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--per-class", type=int, default=300)
+    ap.add_argument("--split", default="val", help="split for the predict command (not test)")
     args = ap.parse_args()
-    {"tune": tune, "test": test, "rescore": rescore}[args.command](engine, args)
+    {"tune": tune, "test": test, "rescore": rescore, "predict": predict_split}[args.command](engine, args)
