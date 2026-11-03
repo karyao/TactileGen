@@ -3,15 +3,28 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import logging
+import re
+import tempfile
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from src.borealis import BOREALIS_CSS, borealis_theme
+from src.contract_io import write_ocr_frame
+from src.contracts import DetectionFrame, OCRFrame
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
-from src.presentation import render_detection_overlay, summarize_detections
+from src.ocr import run_ocr
+from src.presentation import (
+    OCR_TABLE_HEADERS,
+    ocr_rows,
+    render_detection_overlay,
+    summarize_detections,
+)
+from src.tesseract_ocr import TesseractBackend
 
 
 DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
@@ -21,6 +34,11 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 SUPPORTED_FORMATS = frozenset({"PNG", "JPEG", "WEBP"})
 EXAMPLE_IMAGE = Path(__file__).parents[1] / "tests/fixtures/contracts/val/example.png"
+DEFAULT_OCR_LANGUAGE = "eng"
+OCR_WARNING = (
+    "Text recognition was unavailable. Detection results are still shown. "
+    "Check the terminal for details."
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +52,9 @@ class AnalysisResult:
     summary: str
     overlay_rgb: Any
     detection_count: int
+    detection_frame: DetectionFrame
+    ocr_frame: OCRFrame | None
+    ocr_warning: str | None
 
 
 def ready_status() -> str:
@@ -44,13 +65,18 @@ def analyzing_status() -> str:
     return '<div role="status" aria-live="polite">Analyzing chart.</div>'
 
 
-def complete_status(detection_count: int) -> str:
+def complete_status(detection_count: int, ocr_count: int | None = None) -> str:
     if detection_count == 0:
         message = "Analysis complete. No detections found."
     elif detection_count == 1:
         message = "Analysis complete. 1 detection found."
     else:
         message = f"Analysis complete. {detection_count} detections found."
+    if ocr_count is not None:
+        message += (
+            f" OCR attempted {ocr_count} text region"
+            f"{'s' if ocr_count != 1 else ''}."
+        )
     return f'<div role="status" aria-live="polite">{message}</div>'
 
 
@@ -140,10 +166,12 @@ def analyze_image(
     confidence: float,
     nms_iou: float,
     *,
+    language: str = DEFAULT_OCR_LANGUAGE,
+    ocr_backend=None,
     device: str | None = None,
     progress: Callable[..., None] | None = None,
 ) -> AnalysisResult:
-    """Validate, detect, summarize, and annotate one uploaded chart."""
+    """Validate, detect, recognize text, summarize, and annotate one chart."""
     import cv2
 
     _report_progress(progress, 0.05, "Validating image")
@@ -152,20 +180,45 @@ def analyze_image(
     frame = run_detection(
         model, path, confidence=confidence, nms_iou=nms_iou, device=device
     )
-    _report_progress(progress, 0.80, "Rendering annotations")
+    if image.shape[:2] != (frame.height, frame.width):
+        raise ValueError("image dimensions do not match the detection frame")
+    _report_progress(progress, 0.65, "Reading detected text")
+    ocr_frame = None
+    ocr_warning = None
+    try:
+        backend = ocr_backend if ocr_backend is not None else TesseractBackend()
+        ocr_frame = run_ocr(image, frame, backend, language)
+    except Exception:
+        LOGGER.exception("Chart text recognition failed")
+        ocr_warning = OCR_WARNING
+    _report_progress(progress, 0.85, "Rendering annotations")
     overlay = render_detection_overlay(image, frame)
     rgb_overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
     _report_progress(progress, 1.0, "Analysis complete")
     return AnalysisResult(
-        summary=summarize_detections(frame),
+        summary=summarize_detections(frame, ocr=ocr_frame),
         overlay_rgb=rgb_overlay,
         detection_count=len(frame.detections),
+        detection_frame=frame,
+        ocr_frame=ocr_frame,
+        ocr_warning=ocr_warning,
     )
 
 
-def build_app(model, *, device: str | None = None):
+def _download_path(root: Path, image_path: str | Path, ocr: OCRFrame) -> Path:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(image_path).stem).strip("._-")
+    path = root / f"{stem or 'chart'}_ocr_{uuid.uuid4().hex}.json"
+    write_ocr_frame(path, ocr)
+    return path
+
+
+def build_app(model, *, ocr_backend=None, device: str | None = None):
     """Build the interface around an already-loaded model without launching it."""
     gr = _import_gradio()
+    backend = ocr_backend if ocr_backend is not None else TesseractBackend()
+    artifacts = tempfile.TemporaryDirectory(prefix="tactilegen-gradio-ocr-")
+    atexit.register(artifacts.cleanup)
+    artifact_root = Path(artifacts.name)
 
     def ready_results():
         return (
@@ -173,34 +226,58 @@ def build_app(model, *, device: str | None = None):
             gr.update(value="Upload a chart and choose Analyze chart.", visible=True),
             gr.update(value="", visible=False),
             gr.update(value=None, visible=False),
+            gr.update(value=[], visible=False),
+            gr.update(value=None, visible=False),
+            gr.update(value="", visible=False),
             gr.update(value="", visible=False),
         )
 
     def begin_analysis():
         return (
-            *(gr.update(interactive=False) for _ in range(5)),
+            *(gr.update(interactive=False) for _ in range(6)),
             gr.update(value=analyzing_status()),
             gr.update(value="", visible=False),
             gr.update(value="", visible=False),
             gr.update(value=None, visible=False),
+            gr.update(value=[], visible=False),
+            gr.update(value=None, visible=False),
+            gr.update(value="", visible=False),
             gr.update(value="", visible=False),
         )
 
-    def analyze_event(image_path, confidence, nms_iou, progress=gr.Progress()):
+    def analyze_event(image_path, confidence, nms_iou, language, progress=gr.Progress()):
         try:
             result = analyze_image(
                 model,
                 image_path,
                 confidence,
                 nms_iou,
+                language=language,
+                ocr_backend=backend,
                 device=device,
                 progress=progress,
             )
+            ocr_count = len(result.ocr_frame.regions) if result.ocr_frame is not None else None
+            rows = (
+                ocr_rows(result.detection_frame, result.ocr_frame)
+                if result.ocr_frame is not None else []
+            )
+            download = (
+                _download_path(artifact_root, image_path, result.ocr_frame)
+                if result.ocr_frame is not None else None
+            )
             return (
-                gr.update(value=complete_status(result.detection_count)),
+                gr.update(value=complete_status(result.detection_count, ocr_count)),
                 gr.update(value="", visible=False),
                 gr.update(value=result.summary, visible=True),
                 gr.update(value=result.overlay_rgb, visible=True),
+                gr.update(value=rows, visible=result.ocr_frame is not None),
+                gr.update(value=download, visible=download is not None),
+                gr.update(
+                    value=(alert_message(result.ocr_warning)
+                           if result.ocr_warning is not None else ""),
+                    visible=result.ocr_warning is not None,
+                ),
                 gr.update(value="", visible=False),
             )
         except UploadValidationError as exc:
@@ -214,17 +291,21 @@ def build_app(model, *, device: str | None = None):
             gr.update(value="", visible=False),
             gr.update(value="", visible=False),
             gr.update(value=None, visible=False),
+            gr.update(value=[], visible=False),
+            gr.update(value=None, visible=False),
+            gr.update(value="", visible=False),
             gr.update(value=alert_message(message), visible=True),
         )
 
     def finish_analysis():
-        return tuple(gr.update(interactive=True) for _ in range(5))
+        return tuple(gr.update(interactive=True) for _ in range(6))
 
     def clear_all():
         return (
             gr.update(value=None, interactive=True),
             gr.update(value=DEFAULT_CONFIDENCE, interactive=True),
             gr.update(value=DEFAULT_NMS_IOU, interactive=True),
+            gr.update(value=DEFAULT_OCR_LANGUAGE, interactive=True),
             gr.update(interactive=True),
             gr.update(interactive=True),
             *ready_results(),
@@ -241,12 +322,12 @@ def build_app(model, *, device: str | None = None):
                     "**Statistical chart element detector**\n\n"
                     "# TactileGen\n\n"
                     "Inspect the regions detected by YOLO in a vertical categorical "
-                    "bar chart."
+                    "bar chart and read detected text with Tesseract."
                 )
                 gr.Markdown(
                     "**Scope:** Vertical categorical bar charts only. The detector "
-                    "returns chart elements and bounding boxes; it does not read text, "
-                    "values, or trends.",
+                    "returns chart elements, bounding boxes, and OCR text. It does not "
+                    "yet reconstruct chart values or trends.",
                     elem_classes="borealis-scope",
                 )
 
@@ -301,6 +382,12 @@ def build_app(model, *, device: str | None = None):
                             ),
                             elem_classes="borealis-setting",
                         )
+                        language = gr.Textbox(
+                            value=DEFAULT_OCR_LANGUAGE,
+                            label="OCR language",
+                            info="Tesseract language code, such as eng or eng+fra.",
+                            elem_classes="borealis-setting",
+                        )
                     with gr.Row(elem_classes="borealis-actions"):
                         analyze_button = gr.Button("Analyze chart", variant="primary")
                         clear_button = gr.Button("Clear", variant="secondary")
@@ -337,6 +424,28 @@ def build_app(model, *, device: str | None = None):
                         alt_text="Uploaded chart with labeled detection boxes",
                         elem_classes="borealis-result-image",
                     )
+                    ocr_output = gr.Dataframe(
+                        value=[],
+                        headers=list(OCR_TABLE_HEADERS),
+                        datatype=["str", "str", "str", "number",
+                                  "number", "number", "number", "number"],
+                        type="array",
+                        label="Recognized text",
+                        interactive=False,
+                        visible=False,
+                        wrap=True,
+                        elem_classes="borealis-ocr-table",
+                    )
+                    ocr_download = gr.DownloadButton(
+                        "Download OCR JSON",
+                        value=None,
+                        visible=False,
+                        variant="secondary",
+                        elem_classes="borealis-ocr-download",
+                    )
+                    ocr_warning_output = gr.HTML(
+                        "", visible=False, elem_classes="borealis-error"
+                    )
                     error_output = gr.HTML(
                         "", visible=False, elem_classes="borealis-error"
                     )
@@ -348,18 +457,26 @@ def build_app(model, *, device: str | None = None):
                 empty_output,
                 summary_output,
                 annotated_output,
+                ocr_output,
+                ocr_download,
+                ocr_warning_output,
                 error_output,
             ],
             queue=False,
             api_visibility="private",
         )
 
-        controls = [image_input, confidence, nms_iou, analyze_button, clear_button]
+        controls = [
+            image_input, confidence, nms_iou, language, analyze_button, clear_button
+        ]
         result_components = [
             status_output,
             empty_output,
             summary_output,
             annotated_output,
+            ocr_output,
+            ocr_download,
+            ocr_warning_output,
             error_output,
         ]
         start = analyze_button.click(
@@ -371,7 +488,7 @@ def build_app(model, *, device: str | None = None):
         )
         analysis = start.then(
             analyze_event,
-            inputs=[image_input, confidence, nms_iou],
+            inputs=[image_input, confidence, nms_iou, language],
             outputs=result_components,
             show_progress="full",
             show_progress_on=annotated_output,
@@ -403,7 +520,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         _import_gradio()
         model = load_model(args.weights)
-        demo = build_app(model, device=args.device)
+        ocr_backend = TesseractBackend()
+        demo = build_app(model, ocr_backend=ocr_backend, device=args.device)
         theme = borealis_theme()
     except Exception as exc:
         parser.error(f"Could not start TactileGen: {exc}")

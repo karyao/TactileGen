@@ -112,6 +112,44 @@ The machine-readable reports are `output/opencv_clean_test/metrics.json` and
 `output/yolo_test/metrics.json`. These values measure bar detection; they do
 not measure OCR, chart interpretation, or tactile rendering.
 
+## OCR baseline against PlotQA text
+
+The measured full-test results and interpretation are recorded in the
+[Tesseract OCR baseline report](ocr_baseline.md).
+
+The OCR evaluator reports two complementary tracks. The oracle track crops the
+authoritative PlotQA text boxes and isolates recognition quality. The
+end-to-end track runs the trained detector first, matches predicted text boxes
+to same-role PlotQA boxes at IoU 0.5, and counts missed and spurious boxes in
+the pipeline score. Exact duplicate PlotQA text annotations are removed before
+scoring.
+
+Install both model and OCR dependencies, then smoke-test ten cleaned test
+images. Increase `--workers` when the local Tesseract installation can support
+parallel subprocesses:
+
+```bash
+python3.12 -m pip install -r requirements-model.txt -r requirements-ocr.txt
+python3.12 -m src.baseline.ocr evaluate \
+  --annotations data/annotations_test.json \
+  --data-root dataset_yolo_vbars_clean \
+  --weights models/yolo_vbars/best.pt \
+  --limit 10 \
+  --workers 2 \
+  --output-dir output/ocr_test_smoke
+```
+
+Remove `--limit` for the full 11,242-image clean-test baseline. The command
+writes aggregate and per-role exact-match, character-error-rate, and
+word-error-rate metrics to `metrics.json`, plus one diagnostic row per region
+to `regions.csv`. Normalized matching ignores case and repeated whitespace but
+preserves punctuation and numeric symbols.
+
+The scoring core accepts any implementation of the shared `OCRBackend`
+protocol. Register another backend factory with
+`src.baseline.ocr.register_engine()` to compare it using the same extraction,
+matching, normalization, and report schema.
+
 Standard Ultralytics validation on the same test split gave overall box
 mAP50 **0.8325** and mAP50–95 **0.8141** across the roles present in these
 charts. Vertical-bar mAP50–95 was **0.9317**. Its machine-readable report is

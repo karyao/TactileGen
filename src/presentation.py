@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Any
 
 from src.borealis import BOREALIS_COLORS, hex_to_bgr
-from src.contracts import CLASS_NAMES, DetectionFrame
+from src.contracts import CLASS_NAMES, DetectionFrame, OCRFrame, join_text_regions
 
 
 # OpenCV uses BGR channel order.
@@ -30,7 +30,13 @@ def _display_role(role: str) -> str:
     return role.replace("_", " ")
 
 
-def summarize_detections(frame: DetectionFrame) -> str:
+OCR_TABLE_HEADERS = (
+    "Detection ID", "Role", "Recognized text", "OCR confidence",
+    "X1", "Y1", "X2", "Y2",
+)
+
+
+def summarize_detections(frame: DetectionFrame, *, ocr: OCRFrame | None = None) -> str:
     """Return a plain-language summary of one detection frame."""
     total = len(frame.detections)
     counts = Counter(detection.role for detection in frame.detections)
@@ -49,8 +55,33 @@ def summarize_detections(frame: DetectionFrame) -> str:
     else:
         parts.append("No roles were detected.")
     parts.append(f"Vertical bars: {counts['vertical_bar']}.")
-    parts.append("Chart text and numeric values have not been read.")
+    if ocr is None:
+        parts.append("Chart text and numeric values have not been read.")
+    else:
+        readable = sum(bool(region.text.strip()) for region in ocr.regions)
+        parts.append(
+            f"OCR attempted {len(ocr.regions)} text region"
+            f"{'s' if len(ocr.regions) != 1 else ''}; "
+            f"{readable} returned readable text."
+        )
     return " ".join(parts)
+
+
+def ocr_rows(frame: DetectionFrame, ocr: OCRFrame) -> list[list[Any]]:
+    """Return OCR table rows joined to authoritative detection geometry."""
+    return [
+        [
+            detection.id,
+            _display_role(detection.role),
+            region.text,
+            region.confidence,
+            detection.box.x1,
+            detection.box.y1,
+            detection.box.x2,
+            detection.box.y2,
+        ]
+        for detection, region in join_text_regions(frame, ocr)
+    ]
 
 
 def detection_rows(frame: DetectionFrame) -> list[dict[str, Any]]:
