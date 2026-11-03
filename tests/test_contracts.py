@@ -17,12 +17,16 @@ from src.contract_io import (
 )
 from src.contracts import (
     CLASS_NAMES,
+    EXTRA_ROLES,
+    ROLES,
     BarSeries,
     Box,
     Detection,
     DetectionFrame,
+    InterpretationResult,
     OCRFrame,
     RecognizedText,
+    ReviewItem,
     VerticalBarChart,
     join_text_regions,
 )
@@ -164,6 +168,44 @@ class ContractTest(unittest.TestCase):
                 self.chart(**overrides)
         with self.assertRaisesRegex(ValueError, "positive"):
             self.chart(y_scale="log", series=(BarSeries("N", (0, 6)),))
+
+    def test_extra_roles_are_valid_but_do_not_change_the_class_ids(self):
+        self.assertEqual(EXTRA_ROLES, ("x_tick", "y_tick", "value_label"))
+        self.assertEqual(ROLES, CLASS_NAMES + EXTRA_ROLES)
+        self.assertEqual(len(CLASS_NAMES), 15)  # YOLO class ids of the PlotQA model stay put
+        frame = DetectionFrame("val/a.png", 10, 10, tuple(
+            Detection(f"d{i}", role, Box(0, 0, 5, 5), 0.9) for i, role in enumerate(EXTRA_ROLES)))
+        label = OCRFrame("val/a.png", (RecognizedText("d2", "42", 0.9),))
+        self.assertEqual(len(join_text_regions(frame, label)), 1)  # value_label is a text role
+        with self.assertRaisesRegex(ValueError, "non-text role"):
+            join_text_regions(frame, OCRFrame("val/a.png", (RecognizedText("d0", "x", 0.9),)))
+
+    def test_interpretation_result_statuses_are_consistent(self):
+        chart = self.chart()
+        flagged = ReviewItem("category", 0, "d1", "A", 0.4, flagged=True, reason="low OCR confidence")
+        InterpretationResult("val/a.png", "accepted", chart, (ReviewItem("category", 0, "d1", "A", 0.99),))
+        InterpretationResult("val/a.png", "needs_review", chart, (flagged,))
+        InterpretationResult("val/a.png", "needs_review", None, (), ("5 bars but 4 category labels",))
+        InterpretationResult("val/a.png", "rejected", None, (), ("out of scope: 11 bars",))
+        for status, result_chart, items, reasons in (
+                ("accepted", chart, (flagged,), ()),         # accepted but flagged
+                ("accepted", None, (), ()),                  # accepted without a chart
+                ("rejected", chart, (), ("x",)),             # rejected with a chart
+                ("rejected", None, (), ()),                  # rejected without a reason
+                ("needs_review", chart, (), ()),             # nothing to review
+                ("done", chart, (), ())):                    # unknown status
+            with self.subTest(status=status, reasons=reasons), self.assertRaises(ValueError):
+                InterpretationResult("val/a.png", status, result_chart, items, reasons)
+
+    def test_review_item_validation(self):
+        with self.assertRaisesRegex(ValueError, "Unknown review item kind"):
+            ReviewItem("banana")
+        with self.assertRaisesRegex(ValueError, "needs a reason"):
+            ReviewItem("category", flagged=True)
+        with self.assertRaisesRegex(ValueError, "confidence"):
+            ReviewItem("category", confidence=1.5)
+        with self.assertRaisesRegex(ValueError, "finite"):
+            ReviewItem("bar", value=math.nan)
 
     def test_rejects_unsupported_json_version(self):
         data = json.loads((FIXTURES / "detections.json").read_text(encoding="utf-8"))

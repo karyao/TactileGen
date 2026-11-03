@@ -30,6 +30,10 @@ CLASS_NAMES = (
     "legend_label",
 )
 CLASS_IDS = {name: index for index, name in enumerate(CLASS_NAMES)}
+# Roles beyond the 15 PlotQA classes. Kept out of CLASS_NAMES so the PlotQA YOLO class
+# order, classes.txt files and model checks stay valid; a Detection may use any of ROLES.
+EXTRA_ROLES = ("x_tick", "y_tick", "value_label")
+ROLES = CLASS_NAMES + EXTRA_ROLES
 CHART_MARK_ROLE = {
     "hbar_categorical": "horizontal_bar",
     "vbar_categorical": "vertical_bar",
@@ -38,7 +42,7 @@ CHART_MARK_ROLE = {
 }
 TEXT_ROLES = frozenset({
     "chart_title", "x_axis_title", "y_axis_title",
-    "x_tick_label", "y_tick_label", "legend_label",
+    "x_tick_label", "y_tick_label", "legend_label", "value_label",
 })
 
 
@@ -74,7 +78,7 @@ class Detection:
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id:
             raise ValueError("detection ID must be nonempty")
-        if self.role not in CLASS_IDS:
+        if self.role not in ROLES:
             raise ValueError(f"Unknown detection role: {self.role}")
         if not isinstance(self.box, Box):
             raise ValueError("detection box must be a Box")
@@ -241,6 +245,79 @@ class VerticalBarChart:
                         if v is not None]
             if any(v <= 0 for v in positive):
                 raise ValueError("log axis requires positive values, limits and ticks")
+
+
+REVIEW_KINDS = frozenset({
+    "category", "y_tick_label", "chart_title", "x_axis_title", "y_axis_title",
+    "value_label", "bar", "axis", "legend",
+})
+RESULT_STATUSES = frozenset({"accepted", "needs_review", "rejected"})
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    """One thing a person may need to check or correct.
+
+    ``text`` is the raw OCR read for a text element (``None`` when there was no
+    read); ``value`` and ``uncertainty`` describe a computed number such as a bar
+    value. ``flagged`` items carry the reason they need attention.
+    """
+
+    kind: str
+    index: int | None = None          # position within its kind, e.g. category 0, 1, 2 left to right
+    detection_id: str | None = None
+    text: str | None = None
+    confidence: float | None = None
+    box: Box | None = None
+    value: float | None = None
+    uncertainty: float | None = None
+    flagged: bool = False
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in REVIEW_KINDS:
+            raise ValueError(f"Unknown review item kind: {self.kind}")
+        if self.confidence is not None:
+            _confidence(self.confidence)
+        if self.flagged and not self.reason:
+            raise ValueError("a flagged review item needs a reason")
+        for number in (self.value, self.uncertainty):
+            if number is not None and not _finite_number(number):
+                raise ValueError("review item numbers must be finite")
+
+
+@dataclass(frozen=True)
+class InterpretationResult:
+    """What the interpreter hands on: a chart, or why a person has to look first.
+
+    ``accepted``: ``chart`` is set and nothing is flagged. ``needs_review``: something is
+    flagged; ``chart`` is a provisional chart when one could be built and ``None`` when
+    not (for example the bar and label counts differ). ``rejected``: out of scope, no
+    chart. ``items`` lists the elements a person may check, flagged or not; ``reasons``
+    are chart-level reasons.
+    """
+
+    source_key: str
+    status: str
+    chart: VerticalBarChart | None
+    items: tuple[ReviewItem, ...] = ()
+    reasons: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        validate_source_key(self.source_key)
+        if self.status not in RESULT_STATUSES:
+            raise ValueError(f"status must be one of {', '.join(sorted(RESULT_STATUSES))}")
+        if self.chart is not None and not isinstance(self.chart, VerticalBarChart):
+            raise ValueError("chart must be a VerticalBarChart or None")
+        if any(not isinstance(item, ReviewItem) for item in self.items):
+            raise ValueError("items must contain ReviewItem objects")
+        flagged = any(item.flagged for item in self.items) or bool(self.reasons)
+        if self.status == "accepted" and (self.chart is None or flagged):
+            raise ValueError("an accepted result needs a chart and nothing flagged")
+        if self.status == "rejected" and (self.chart is not None or not self.reasons):
+            raise ValueError("a rejected result has no chart and at least one reason")
+        if self.status == "needs_review" and not flagged:
+            raise ValueError("a needs_review result needs a flagged item or a reason")
 
 
 class ChartInterpretationError(ValueError):

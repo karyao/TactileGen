@@ -56,6 +56,34 @@ without them is still valid and the renderer must then scale from the data.
 Adding these fields keeps `schema_version` 1: existing JSON files load with
 the defaults, and new files write the extra keys.
 
+## Roles beyond the 15 YOLO classes
+
+`CLASS_NAMES` stays the 15 PlotQA classes so existing class ids, `classes.txt` files and
+the PlotQA model checks keep working. Three more roles are valid for a `Detection`
+(`ROLES = CLASS_NAMES + EXTRA_ROLES`) and have no YOLO class id in the PlotQA model:
+
+| Role | Meaning |
+| --- | --- |
+| `x_tick`, `y_tick` | The small tick mark on an axis (about 10 px square in the PMC data). Pixel positions for the axis fit come from here; label centres are only a fallback. |
+| `value_label` | A number printed on or next to a bar. It is a text role, so OCR may reference it. Used to cross-check the fitted axis. |
+
+## Interpretation result
+
+The interpreter (`src/interpret_bars.py`) returns an `InterpretationResult` instead of a
+bare chart, so that a person can see what to check. `VerticalBarChart` is unchanged.
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `accepted`: a chart and nothing flagged. `needs_review`: something is flagged; `chart` is a provisional chart when one could be built, else `None` (for example the bar and label counts differ). `rejected`: out of scope (no bars, more than 10 bars, or more than one series), no chart. |
+| `chart` | The `VerticalBarChart`, or `None`. |
+| `items` | One `ReviewItem` per element a person may check: category labels (left to right), value-axis tick labels, titles, value labels, and each bar with its computed value and uncertainty. |
+| `reasons` | Chart-level reasons, such as "6 bars but 5 category labels". |
+
+A `ReviewItem` carries `kind`, `index`, `detection_id`, the raw OCR `text` and its
+`confidence`, the `box`, a computed `value` with `uncertainty` for bars, and `flagged`
+with a `reason`. A flagged item must have a reason. The raw read is kept even when the
+chart holds a cleaned version, so staff correct what the OCR actually said.
+
 ## Example fixtures
 
 `tests/fixtures/contracts/` contains a small synthetic chart image plus
