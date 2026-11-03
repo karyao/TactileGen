@@ -148,6 +148,36 @@ do not lie on a line (likely log or irregular axes), leaving 132.
   this, on test. The fits and the 126 matches are identical either way. Ground-truth
   tick positions are used, so a real tick detector would add error.
 
+## Checks for a wrong axis scale (factor-of-ten errors)
+
+The fit accepts a chart whose reads are consistently wrong by a factor of ten.
+`src/baseline/ocr_axis_checks.py` measures independent signals that flag such charts;
+the fit itself is unchanged. Thresholds were chosen on val only (pooled over both
+engines): the most sensitive setting whose false-flag rate on val charts the fit
+already got right is at most 10%. Val has just 1 silent error (Tesseract) and none for
+EasyOCR, so val sets the cost limit but cannot tune catch rates.
+
+| Signal | Setting | Val false flags |
+| --- | --- | ---: |
+| Unit suffix: some tick reads end in `%`, others do not (a `%` read as 6 or 8) | none | 0.4% |
+| Value labels: median \|log10(printed / fitted)\| over bars with a printed number | above 0.05 | 3.4% |
+| Decimals: reads do not use one number of decimal places | lenient (strict is 13%, over the cap) | 6.1% |
+| Percent title: y-axis title read mentions % but fitted ticks pass a cap | 100 | 8.0% |
+| Nice step: fitted tick step not 1, 2, 2.5 or 5 times a power of ten | none | 1.9% |
+
+Adopted: **unit suffix and value labels**. The nice-step check was dropped (a pure scale
+error leaves a nice step nice, and it caught nothing); decimals and the percent title
+are not adopted (cost with little or no catch, or over the cap).
+
+On test, among charts the fit accepted (Tesseract 122, one silent error; EasyOCR 128,
+three), the adopted pair caught **0 of 1** (Tesseract) and **2 of 3** (EasyOCR) silent
+errors and newly flagged **5 of 121** and **1 of 125** correct charts. The value-label
+check is only available where numbers are printed on bars (12-13 test charts per
+engine); the unit-suffix check does the work. Not caught: decimals dropped from every
+tick (`4.5` read as `45` with `4`, `3` kept) and `0,6` read as `06`; strict
+decimals would catch the second. These rates rest on 4 silent errors in total, so
+treat them as indicative only.
+
 ## Recreating the environments
 
 Nothing here is in `requirements*.txt`; both engines are optional. Neither changes the
