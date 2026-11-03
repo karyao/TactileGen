@@ -81,8 +81,11 @@ def load_vertical_bar_chart(path: Path) -> VerticalBarChart:
             for item in _array(data["series"], "series")
         )
         return VerticalBarChart(
-            data["source_key"], data["title"], data["x_axis_title"],
-            data["y_axis_title"], tuple(_array(data["categories"], "categories")), series,
+            data["source_key"], data.get("title"), data.get("x_axis_title"),
+            data.get("y_axis_title"), tuple(_array(data["categories"], "categories")), series,
+            data.get("y_min"), data.get("y_max"),
+            tuple(_array(data.get("y_tick_values", []), "y_tick_values")),
+            data.get("y_scale", "linear"),
         )
     except (KeyError, TypeError) as exc:
         raise ValueError(f"Invalid vertical-bar chart: {path}") from exc

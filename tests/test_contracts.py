@@ -105,6 +105,66 @@ class ContractTest(unittest.TestCase):
                 BarSeries("North", (1,)),
             ))
 
+    def chart(self, **overrides):
+        fields = dict(source_key="val/a.png", title="T", x_axis_title="X",
+                      y_axis_title="Y", categories=("A", "B"),
+                      series=(BarSeries("N", (4, 6)),))
+        fields.update(overrides)
+        return VerticalBarChart(**fields)
+
+    def test_titles_are_optional_but_never_empty(self):
+        chart = self.chart(title=None, x_axis_title=None, y_axis_title=None)
+        self.assertIsNone(chart.title)
+        for field in ("title", "x_axis_title", "y_axis_title"):
+            with self.assertRaisesRegex(ValueError, "nonempty or absent"):
+                self.chart(**{field: ""})
+            with self.assertRaisesRegex(ValueError, "nonempty or absent"):
+                self.chart(**{field: 5})
+
+    def test_missing_titles_round_trip_through_json(self):
+        chart = self.chart(title=None, x_axis_title=None, y_axis_title="Y")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "chart.json"
+            write_vertical_bar_chart(path, chart)
+            self.assertIsNone(json.loads(path.read_text())["title"])
+            self.assertEqual(load_vertical_bar_chart(path), chart)
+            data = json.loads(path.read_text())
+            del data["title"], data["x_axis_title"]  # absent key also means None
+            path.write_text(json.dumps(data))
+            self.assertEqual(load_vertical_bar_chart(path), chart)
+
+    def test_axis_fields_default_so_existing_fixture_validates(self):
+        chart = load_vertical_bar_chart(FIXTURES / "vertical_bar_chart.json")
+        self.assertIsNone(chart.y_min)
+        self.assertIsNone(chart.y_max)
+        self.assertEqual(chart.y_tick_values, ())
+        self.assertEqual(chart.y_scale, "linear")
+
+    def test_axis_fields_round_trip_through_json(self):
+        chart = self.chart(y_min=0, y_max=10, y_tick_values=(0, 5, 10), y_scale="linear")
+        log = self.chart(y_min=1, y_max=100.0, y_tick_values=(1, 10, 100), y_scale="log")
+        with tempfile.TemporaryDirectory() as directory:
+            for item in (chart, log):
+                path = Path(directory) / "chart.json"
+                write_vertical_bar_chart(path, item)
+                self.assertEqual(load_vertical_bar_chart(path), item)
+
+    def test_rejects_invalid_axis(self):
+        cases = {
+            "y_scale": dict(y_scale="sqrt"),
+            "finite number": dict(y_min=math.nan),
+            "less than y_max": dict(y_min=5, y_max=5),
+            "strictly increasing": dict(y_tick_values=(0, 5, 5)),
+            "tuple of finite": dict(y_tick_values=(0, math.inf)),
+            "lie within": dict(y_min=1, y_max=10, y_tick_values=(0, 5)),
+            "positive": dict(y_scale="log", y_min=0),
+        }
+        for message, overrides in cases.items():
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
+                self.chart(**overrides)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            self.chart(y_scale="log", series=(BarSeries("N", (0, 6)),))
+
     def test_rejects_unsupported_json_version(self):
         data = json.loads((FIXTURES / "detections.json").read_text(encoding="utf-8"))
         data["schema_version"] = 2

@@ -172,20 +172,41 @@ class BarSeries:
             raise ValueError("series values must be finite numbers")
 
 
+AXIS_SCALES = ("linear", "log")
+
+
+def _finite_number(value: object) -> bool:
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and math.isfinite(value))
+
+
 @dataclass(frozen=True)
 class VerticalBarChart:
+    """A vertical bar chart ready for rendering.
+
+    ``title`` and the axis titles are ``None`` when the source chart has none;
+    they are never filled in. The ``y_*`` fields describe the printed value
+    axis and are optional: ``y_min``/``y_max`` are the axis ends (not the data
+    range), ``y_tick_values`` the numbers printed at the ticks in ascending
+    order, and ``y_scale`` is ``"linear"`` or ``"log"``.
+    """
+
     source_key: str
-    title: str
-    x_axis_title: str
-    y_axis_title: str
+    title: str | None
+    x_axis_title: str | None
+    y_axis_title: str | None
     categories: tuple[str, ...]
     series: tuple[BarSeries, ...]
+    y_min: float | None = None
+    y_max: float | None = None
+    y_tick_values: tuple[float, ...] = ()
+    y_scale: str = "linear"
 
     def __post_init__(self) -> None:
         validate_source_key(self.source_key)
         for label in (self.title, self.x_axis_title, self.y_axis_title):
-            if not isinstance(label, str) or not label:
-                raise ValueError("chart and axis titles must be nonempty")
+            if label is not None and (not isinstance(label, str) or not label):
+                raise ValueError("chart and axis titles must be nonempty or absent")
         if not self.categories or any(not isinstance(item, str) or not item
                                       for item in self.categories):
             raise ValueError("categories must be nonempty strings")
@@ -193,6 +214,33 @@ class VerticalBarChart:
             raise ValueError("chart must contain at least one BarSeries")
         if any(len(item.values) != len(self.categories) for item in self.series):
             raise ValueError("series values must match category count")
+        self._validate_axis()
+
+    def _validate_axis(self) -> None:
+        if self.y_scale not in AXIS_SCALES:
+            raise ValueError(f"y_scale must be one of {', '.join(AXIS_SCALES)}")
+        for name, value in (("y_min", self.y_min), ("y_max", self.y_max)):
+            if value is not None and not _finite_number(value):
+                raise ValueError(f"{name} must be a finite number or absent")
+        if not isinstance(self.y_tick_values, tuple) or not all(
+                _finite_number(value) for value in self.y_tick_values):
+            raise ValueError("y_tick_values must be a tuple of finite numbers")
+        if self.y_min is not None and self.y_max is not None and self.y_min >= self.y_max:
+            raise ValueError("y_min must be less than y_max")
+        ticks = self.y_tick_values
+        if any(a >= b for a, b in zip(ticks, ticks[1:])):
+            raise ValueError("y_tick_values must be strictly increasing")
+        if ticks:
+            if self.y_min is not None and ticks[0] < self.y_min:
+                raise ValueError("y_tick_values must lie within y_min and y_max")
+            if self.y_max is not None and ticks[-1] > self.y_max:
+                raise ValueError("y_tick_values must lie within y_min and y_max")
+        if self.y_scale == "log":
+            positive = [v for v in (self.y_min, self.y_max, *ticks,
+                                    *(v for s in self.series for v in s.values))
+                        if v is not None]
+            if any(v <= 0 for v in positive):
+                raise ValueError("log axis requires positive values, limits and ticks")
 
 
 class ChartInterpretationError(ValueError):

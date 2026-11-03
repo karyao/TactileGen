@@ -15,7 +15,7 @@ between every stage.
 | --- | --- | --- | --- |
 | `DetectionFrame` | Detector | OCR and interpreter | Image size and identified chart elements with role, pixel box, and confidence. |
 | `OCRFrame` | OCR | Interpreter | Text and confidence keyed by detection ID; role and location come from the matching detection. |
-| `VerticalBarChart` | Interpreter | Tactile renderer | Title, axis titles, ordered categories, and one or more bar series with numeric values. |
+| `VerticalBarChart` | Interpreter | Tactile renderer | Optional title and axis titles, ordered categories, one or more bar series with numeric values, and an optional description of the value axis. |
 
 Every result has a `source_key` such as `val/22410.png`. PlotQA reuses numeric
 image IDs across splits, so the split or another namespace is required. The
@@ -34,6 +34,27 @@ The interpreter must either produce a complete `VerticalBarChart` or raise
 `ChartInterpretationError`; it must not invent missing values. A series name
 may be `None` when the source chart has no legend. Each series has one value
 per category in the same order.
+
+`title`, `x_axis_title` and `y_axis_title` are `None` when the source chart
+has no such text. The renderer omits them; the interpreter must not make one up
+(for example from the file name or a category). An empty string is rejected, so
+OCR that read nothing should produce `None` only when no title box was
+detected, and otherwise raise `ChartInterpretationError`. In JSON a missing key
+and `null` both mean `None`.
+
+### Value axis (optional)
+
+These fields describe the printed value (y) axis. All are optional; a chart
+without them is still valid and the renderer must then scale from the data.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `y_min`, `y_max` | `None` | Ends of the printed axis, which may extend past the data. `y_min` must be less than `y_max`. |
+| `y_tick_values` | `()` | Numbers printed at the ticks, strictly increasing, inside `y_min`/`y_max` when those are set. |
+| `y_scale` | `"linear"` | `"linear"` or `"log"`. A log axis requires every limit, tick and bar value to be positive. |
+
+Adding these fields keeps `schema_version` 1: existing JSON files load with
+the defaults, and new files write the extra keys.
 
 ## Example fixtures
 
