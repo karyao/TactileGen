@@ -31,6 +31,7 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
+from src.axis_fit import pair_by_overlap
 from src.baseline.ocr_axis_fit import analyse, tick_positions
 from src.baseline.ocr_eval import COCO, COCO_FILES, normalize, parse_number
 
@@ -65,18 +66,6 @@ def decimals(read):
     return len(m.group(1)) if m else 0
 
 
-def pair_labels(labels, bars):
-    """{bar index: label index} by largest horizontal overlap, one label per bar."""
-    options = sorted(((min(l[0] + l[2], b[0] + b[2]) - max(l[0], b[0]), li, bi)
-                      for li, l in enumerate(labels) for bi, b in enumerate(bars)), reverse=True)
-    pairs, used = {}, set()
-    for overlap, li, bi in options:
-        if overlap > 0 and li not in used and bi not in pairs:
-            pairs[bi] = li
-            used.add(li)
-    return pairs
-
-
 def features(entry, rows_of_chart, bars):
     """Numbers each check needs, from one chart's fit and OCR reads."""
     a, b = entry["fit_a"], entry["fit_b"]
@@ -86,7 +75,7 @@ def features(entry, rows_of_chart, bars):
     titles = [r["pred"] for r in rows_of_chart if r["klass"] == "y_title"]
     f["title_percent"] = any("%" in t or "percent" in t.lower() for t in titles)
     labels = [r for r in rows_of_chart if r["klass"] == "value_label"]
-    pairs = pair_labels([r["box"] for r in labels], bars)
+    pairs = pair_by_overlap([r["box"] for r in labels], bars)
     logs = []
     for bi, li in pairs.items():
         printed = parse_number(labels[li]["pred"])

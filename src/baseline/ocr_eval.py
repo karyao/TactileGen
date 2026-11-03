@@ -27,7 +27,6 @@ import re
 import shutil
 import statistics
 import subprocess
-import unicodedata
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -35,6 +34,7 @@ from pathlib import Path
 import cv2
 
 from src.dataset.bar_orientation import orientation, read_label_boxes
+from src.textutil import normalize, parse_number  # noqa: F401  (re-exported for the scoring scripts)
 
 COCO = Path("data/pmc_2022/pmc_coco/plots_detection")
 COCO_FILES = {"train": "bar_train.json", "val": "bar_val.json", "test": "bar_test.json"}
@@ -46,36 +46,6 @@ WHITELIST = "0123456789.,-+%eE−–"
 
 
 # ---------------------------------------------------------------- text helpers
-_QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"',
-                         "−": "-", "–": "-", "—": "-"})
-
-
-def normalize(text: str) -> str:
-    """Normalized form used by the normalized metrics (the raw metric only strips).
-
-    A literal backslash followed by n (an annotation artifact for a line break) becomes a
-    space; then NFKC (ligatures to letters), curly quotes and dashes to ASCII, and runs of
-    whitespace collapse. The backslash-n rule was added after the first Tesseract test scoring.
-    """
-    text = text.replace("\\n", " ")
-    return " ".join(unicodedata.normalize("NFKC", text).translate(_QUOTES).split())
-
-
-def parse_number(text: str) -> float | None:
-    """Parse a tick or value label; trailing % is dropped, thousands commas removed."""
-    t = normalize(text).replace(" ", "")
-    t = t[:-1] if t.endswith("%") else t
-    if re.fullmatch(r"[-+]?\d{1,3}(,\d{3})+(\.\d+)?", t):
-        t = t.replace(",", "")
-    elif re.fullmatch(r"[-+]?\d+,\d+", t):
-        t = t.replace(",", ".")
-    try:
-        value = float(t)
-    except ValueError:
-        return None
-    return value if math.isfinite(value) else None
-
-
 def edit_distance(a: str, b: str) -> int:
     previous = list(range(len(b) + 1))
     for i, ca in enumerate(a, 1):
