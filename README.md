@@ -9,10 +9,14 @@ that can be embossed.
 
 The project currently prepares [PlotQA](https://github.com/NiteshMethani/PlotQA/blob/master/PlotQA_Dataset.md)
 charts for object detection and includes OpenCV and trained YOLO baselines for
-finding chart elements. The vertical-bar detector produces boxes and labels
-that later stages can use. OCR, chart interpretation, and tactile rendering are
-still in development; the project does not yet generate complete tactile
+finding chart elements. The application uses YOLO to detect chart elements and
+Tesseract to read detected text. Chart interpretation and tactile rendering are
+still in development, so the project does not yet generate complete tactile
 graphics.
+
+```text
+Chart image -> YOLO boxes -> Tesseract text -> frontend results
+```
 
 ## Early results
 
@@ -27,15 +31,19 @@ test split. Boxes were matched at IoU 0.5; YOLO used a confidence threshold of
 | YOLO, no mosaic | **0.9924** | **0.9431** | **0.9671** | **0.7941** |
 | YOLO, no HSV | 0.9898 | 0.9421 | 0.9653 | 0.7903 |
 
+Tesseract achieved **96.41%** normalized exact accuracy with authoritative
+PlotQA boxes and **95.57%** through the end-to-end YOLO and OCR pipeline. See
+the [OCR baseline report](docs/ocr_baseline.md) for the full results.
+
 Boxes were also matched at IoU 0.75 and 0.90 where no-mosaic model still scored highly at scores of 0.9595 and 0.9329 respectively. Refer to [experiment guide](docs/experiments.md) for full results.
 
 The YOLO checkpoints used the same model and training settings except for the
 named augmentation change. The no-mosaic checkpoint disabled mosaic while retaining HSV augmentation; the no-HSV checkpoint retained mosaic while disabling HSV augmentation. 
 See the [ablation benchmark](docs/ablation_benchmark.md) for the experimental plan and reproduction commands.
 
-These are detection results, not measures of chart understanding or tactile
-output. See the [experiment guide](docs/experiments.md) for methods and
-reproduction steps.
+The detector table and ablation results measure detection, not chart
+understanding or tactile output. See the
+[experiment guide](docs/experiments.md) for methods and reproduction steps.
 
 ## Try the detector
 
@@ -47,25 +55,30 @@ python3.12 -m pip install -r requirements.txt -r requirements-model.txt
 python3.12 -m src.baseline.yolo_bars predict --image path/to/chart.png --output-dir output/demo
 ```
 
+The detector command writes a detection JSON file and a PNG overlay to
+`output/demo`. It uses [`models/yolo_vbars/best.pt`](models/yolo_vbars/best.pt)
+by default. Replace `path/to/chart.png` with your image path. For an example
+image already in the repository, use
+`tests/fixtures/contracts/val/example.png`.
+
 To install the detector together with the Gradio application dependencies,
 use the dedicated application requirements file instead:
 
 ```bash
 python3.12 -m pip install -r requirements-app.txt
+python3.12 -m src.gradio_app
 ```
 
-This keeps Gradio optional for users who only need the command-line detector.
-
-The command writes a detection JSON file and a PNG overlay to `output/demo`.
-It uses [`models/yolo_vbars/best.pt`](models/yolo_vbars/best.pt) by default.
-Replace `path/to/chart.png` with your image path. For an example image already
-in the repository, use `tests/fixtures/contracts/val/example.png`.
+With the Tesseract executable installed, this starts the frontend with YOLO
+detection and Tesseract OCR. Gradio remains optional for users who only need
+the command-line detector.
 
 ## Read detected text with Tesseract
 
-OCR uses the text labels and boxes in YOLO's detection JSON to crop the same
-original image. Install the optional Python dependency plus the Tesseract
-executable then run:
+The standalone OCR command uses the text labels and boxes in YOLO's detection
+JSON to crop the original image. The frontend performs the same handoff in
+memory without requiring an intermediate JSON file. Install the optional
+Python dependency plus the Tesseract executable, then run:
 
 ```bash
 python3.12 -m pip install -r requirements-ocr.txt
@@ -82,9 +95,11 @@ YOLO's detection JSON remains the sole source of roles and box coordinates.
 ## Contributing and documentation
 
 The [experiment guide](docs/experiments.md) covers data preparation, model
-evaluation, and the OpenCV benchmarks. The [stage contracts](docs/contracts.md)
-describe how detection, OCR, interpretation, and rendering will exchange data.
-The original PlotQA dataset must be obtained separately from its
+evaluation, and the OpenCV benchmarks. The
+[OCR baseline report](docs/ocr_baseline.md) records the Tesseract accuracy
+results. The [stage contracts](docs/contracts.md) describe how detection, OCR,
+interpretation, and rendering exchange data. The original PlotQA dataset must
+be obtained separately from its
 [project page](https://github.com/NiteshMethani/PlotQA/blob/master/PlotQA_Dataset.md).
 
 ## Real-chart data 

@@ -10,8 +10,7 @@ vertical-bar test split. There are two primary evaluation modes:
 | Oracle OCR | Authoritative PlotQA text boxes | **96.41%** | **1.90%** | **2.30%** |
 | End-to-end | Text boxes predicted by YOLO | **95.57%** | **2.58%** | **3.46%** |
 
-The **end-to-end result represents the frontend pipeline**. Both use the same
-path:
+The **end-to-end result represents the frontend pipeline**:
 
 ```text
 Image -> YOLO text boxes -> Tesseract -> recognized text
@@ -20,8 +19,9 @@ Image -> YOLO text boxes -> Tesseract -> recognized text
 The evaluator compares the frontend's OCR results with the correct PlotQA
 text. It does not change the frontend pipeline or its output.
 
-The oracle test skips YOLO and gives Tesseract the correct PlotQA boxes. This
-shows how accurately Tesseract reads text when the boxes are correct.
+The **oracle test uses a different evaluation path**: it skips YOLO and gives
+Tesseract the correct PlotQA boxes. This shows how accurately Tesseract reads
+text when the boxes are correct.
 
 ## Supporting diagnostics
 
@@ -96,8 +96,9 @@ OMP_THREAD_LIMIT=1 .venv/bin/python -m src.baseline.ocr evaluate \
   --output-dir output/ocr_test
 ```
 
-The complete machine-readable results are in
-[`output/ocr_test/metrics.json`](../output/ocr_test/metrics.json). Per-region
-comparisons are in
-[`output/ocr_test/regions.csv`](../output/ocr_test/regions.csv).
+The command generates machine-readable results at
+`output/ocr_test/metrics.json` and per-region comparisons at
+`output/ocr_test/regions.csv`. The `output/` directory is intentionally ignored
+by Git, so these generated files are available locally after running the
+evaluation but are not published in this repository.
 
