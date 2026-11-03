@@ -139,3 +139,88 @@ overall, 49.1% on horizontal charts) remain weak.
   val has 54 horizontal images and test 53, so per-orientation numbers are noisy.
 - The mapping of PlotQA's `vertical_bar` to `bar` applies only to the as-is
   PlotQA row; the fine-tuned models predict `bar` directly.
+
+## Vertical-only fine-tune
+
+Variant A (COCO initial weights, all charts) against a model with the same settings trained
+only on vertical charts. `src/dataset/pmc_bars_vertical.py` builds `data/pmc_yolo_bars_vertical`:
+train and val keep only images that `src/dataset/bar_orientation.py` calls vertical, and test
+is copied whole.
+
+- **Dropped:** train 441 of 1,612 images (431 horizontal, 10 undecided), leaving 1,171; val 55
+  of 205 (54 horizontal, 1 undecided), leaving 150. Test is untouched (192 images, 139 vertical).
+- **Settings:** identical to A (YOLOv8s from `yolov8s.pt`, 50 epochs, 640 px, batch 16, seed 0,
+  mosaic off). Training took 10.9 min on the same GPU, with OCR running on the CPU at the same
+  time, so the time is not comparable to the earlier runs.
+- **Confidence:** chosen for each model on the 150 vertical val images (best F1 at IoU 0.5).
+  Variant A is shown at its original 0.40 (chosen on all of val) and re-chosen on vertical val
+  (0.50). The vertical-only model (V) chose 0.50.
+- **Reproduce:** `python -m src.baseline.pmc_bars_vertical_eval --output-dir <dir>`.
+
+| Model, confidence | Set | F1 at 0.5 | F1 at 0.75 | F1 at 0.9 | Exact bar count |
+| --- | --- | ---: | ---: | ---: | ---: |
+| A, 0.40 | vertical val (150) | 0.916 | 0.858 | 0.595 | **0.747** |
+| A, 0.50 | vertical val | 0.916 | 0.863 | 0.601 | 0.733 |
+| V, 0.50 | vertical val | **0.918** | 0.859 | **0.609** | 0.727 |
+| A, 0.40 | vertical test (139), reporting only | **0.892** | 0.783 | 0.498 | **0.691** |
+| A, 0.50 | vertical test, reporting only | 0.884 | 0.787 | 0.507 | 0.676 |
+| V, 0.50 | vertical test, reporting only | 0.887 | **0.803** | **0.525** | 0.662 |
+
+Dropping the horizontal charts made no meaningful difference. V is slightly ahead on F1 at IoU
+0.9 on both val and test, and A is slightly ahead on exact count on both. Every gap is within
+what one training seed could change. Nothing was chosen on test.
+
+## Failure analysis of exact bar count (diagnosis only)
+
+**This reads the test split to understand errors. No model, threshold or setting was chosen
+from it, and none should be tuned against it.** Model A at confidence 0.40, `bar_test`, boxes
+matched at IoU 0.5. Reproduce with `python -m src.baseline.pmc_bars_failures --output-dir <dir>`,
+which also saves a montage of 12 failures (green ground truth, red predictions).
+
+**Overall.** 70 of 192 images (36.5%) have the wrong bar count. In 33 the model missed bars only,
+in 12 it predicted extra boxes only, and in 25 both. The net error is an undercount in 51 images
+and an overcount in 19 (median predicted minus true: -2; 20 images are off by exactly one and
+20 by five or more).
+
+| True bars | Images | Wrong | Rate |
+| --- | ---: | ---: | ---: |
+| 1-3 | 16 | 2 | 12% |
+| 4-6 | 33 | 3 | 9% |
+| 7-10 | 37 | 7 | 19% |
+| 11-20 | 67 | 30 | 45% |
+| 21+ | 39 | 28 | 72% |
+
+Orientation: horizontal 27 of 53 wrong (51%), vertical 43 of 139 (31%). The median chart has 17
+true bars among wrong-count images and 9 among correct ones.
+
+The annotations do not mark series, so two inferred proxies are used. *Multi-series* means two
+or more legend patches; *grouped or stacked* means more bars than category labels.
+
+| Group | Images | Wrong | Rate |
+| --- | ---: | ---: | ---: |
+| Multi-series | 103 | 48 | 47% |
+| Single series | 89 | 22 | 25% |
+| Grouped or stacked | 112 | 51 | 46% |
+| One bar per label | 80 | 19 | 24% |
+| Horizontal, multi-series | 28 | 20 | 71% |
+| Vertical, multi-series | 75 | 28 | 37% |
+| Horizontal, single series | 25 | 7 | 28% |
+| Vertical, single series | 64 | 15 | 23% |
+
+The horizontal penalty is mostly a multi-series effect: single-series horizontal charts are
+close to vertical ones.
+
+**What the wrong boxes look like.** In wrong-count images 485 true bars have no prediction at IoU
+0.5: 259 with no overlapping prediction at all (truly missed) and 226 with a partial overlap
+(localization or merged boxes). Of the 164 unmatched predictions, 107 partly overlap a real bar
+(split or loose boxes) and only 12 sit on background. So the model rarely invents bars; extras
+are mostly duplicate or split boxes.
+
+In the montage the typical failures are stacked bars where the annotation marks each segment
+but the model boxes the whole stack or only some segments, a long tail of very short bars,
+very dense multi-series horizontal charts with hatched fills (96 true bars against 44
+predicted), and near-misses of one or two bars. This is a qualitative reading of 12 images, not
+a statistic.
+
+**Caveats.** Series and grouping are inferred, not annotated. The same 192 test images were
+already scored once for the winning model, so these breakdowns are descriptive only.
