@@ -12,7 +12,7 @@ import os
 import statistics
 from pathlib import Path
 
-from src.baseline.ocr_eval import WHITELIST, main
+from src.baseline.ocr_eval import allow_chars, main
 
 MODEL_DIR = Path(os.environ.get("EASYOCR_MODEL_DIR", Path.home() / ".venvs/tactilegen-easyocr/models"))
 
@@ -38,7 +38,7 @@ class EasyOCR:
                 for h, b, m in itertools.product((32, 64), (False, True), ("recognize", "readtext"))]
 
     def read(self, gray, cfg):
-        allow = WHITELIST if cfg.get("whitelist") else None
+        allow = allow_chars(cfg)
         if cfg["mode"] == "recognize":
             results = self.reader.recognize(gray, allowlist=allow, detail=1)
         else:

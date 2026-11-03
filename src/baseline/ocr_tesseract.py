@@ -16,7 +16,7 @@ from pathlib import Path
 
 import cv2
 
-from src.baseline.ocr_eval import WHITELIST, main
+from src.baseline.ocr_eval import allow_chars, main
 
 FALLBACK_CMD = Path.home() / "miniconda3/envs/tactilegen-ocr/bin/tesseract"
 
@@ -29,12 +29,12 @@ def tesseract_cmd() -> str:
     return found
 
 
-def run_tesseract(gray, psm, whitelist, cmd):
+def run_tesseract(gray, psm, allow, cmd):
     """-> (text, confidence 0-1). Text lines are joined with newlines."""
     ok, png = cv2.imencode(".png", gray)
     args = ["nice", "-n", "19", cmd, "stdin", "stdout", "--psm", str(psm), "-l", "eng"]
-    if whitelist:
-        args += ["-c", f"tessedit_char_whitelist={WHITELIST}"]
+    if allow:
+        args += ["-c", f"tessedit_char_whitelist={allow}"]
     out = subprocess.run(args + ["tsv"], input=png.tobytes(), capture_output=True,
                          env={**os.environ, "OMP_THREAD_LIMIT": "1"}).stdout.decode("utf-8", "replace")
     lines, confs = defaultdict(list), []
@@ -57,7 +57,7 @@ class Tesseract:
         return [dict(height=h, binarize=b, psm=p) for h, b, p in itertools.product((32, 64), (False, True), (7, 6))]
 
     def read(self, gray, cfg):
-        return run_tesseract(gray, cfg["psm"], cfg.get("whitelist"), self.cmd)
+        return run_tesseract(gray, cfg["psm"], allow_chars(cfg), self.cmd)
 
 
 if __name__ == "__main__":

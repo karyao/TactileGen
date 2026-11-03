@@ -93,16 +93,23 @@ def crop_image(img, box, pad=4):
     return cv2.copyMakeBorder(crop, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
 
 
-def prepare(crop, height, binarize):
+def prepare(crop, height, binarize, sharpen=False):
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
     if gray.shape[0] < height:
         scale = height / gray.shape[0]
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    if sharpen:  # mild unsharp mask
+        gray = cv2.addWeighted(gray, 1.5, cv2.GaussianBlur(gray, (0, 0), 1.0), -0.5, 0)
     if binarize:
         gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
         if gray.mean() < 127:  # text should be dark on a light page
             gray = 255 - gray
     return gray
+
+
+def allow_chars(cfg):
+    """Characters an engine may output: cfg["allow"] if given, else WHITELIST when cfg["whitelist"]."""
+    return cfg.get("allow") or (WHITELIST if cfg.get("whitelist") else None)
 
 
 # ------------------------------------------------------------------ engines
@@ -112,7 +119,8 @@ def read_best(engine, crop, cfg):
     variants = [crop]
     if h > 1.5 * w:  # possibly rotated text: try both quarter turns
         variants += [cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE), cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)]
-    reads = [engine.read(prepare(v, cfg["height"], cfg["binarize"]), cfg) for v in variants]
+    reads = [engine.read(prepare(v, cfg["height"], cfg["binarize"], cfg.get("sharpen", False)), cfg)
+             for v in variants]
     return max(reads, key=lambda r: (bool(r[0]), r[1]))
 
 

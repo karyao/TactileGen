@@ -178,6 +178,51 @@ tick (`4.5` read as `45` with `4`, `3` kept) and `0,6` read as `06`; strict
 decimals would catch the second. These rates rest on 4 silent errors in total, so
 treat them as indicative only.
 
+## Decimal points lost in value-axis reads (val only)
+
+Test was not read for this. `src/baseline/ocr_decimal_diagnosis.py` counts, on the val
+`ylabel` and `value_label` crops (150 vertical charts), how often the ground truth has a
+decimal point (or decimal comma, not a thousands comma) and the read does not.
+
+| Engine | Class | Crops with a decimal | Point dropped | Digits right, only the point missing | Point invented |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Tesseract | ylabel | 248 | 14 (5.6%) | 13 | 0 of 881 |
+| Tesseract | value_label | 205 | 27 (13.2%) | 8 | 0 of 150 |
+| EasyOCR | ylabel | 248 | 26 (10.5%) | 19 | 0 of 881 |
+| EasyOCR | value_label | 205 | 33 (16.1%) | 10 | 0 of 150 |
+
+- **Neither engine invents a decimal point.** The loss is one-directional. A comma read
+  for a point (`0,46` for `0.46`) happens (4 and 20 times for Tesseract, 11 and 11 for
+  EasyOCR) and still counts as a decimal.
+- **Failures are small crops.** The median failing crop is 12-13 px high and 22-25 px wide,
+  against 14-15 px and 26-32 px for crops whose point survived. Of the ylabel and
+  value_label crops that have a decimal, those under 14 px high lose it far more often
+  (for example Tesseract value labels: 17 of 96 at 10-13 px against 4 of 76 at 14-19 px).
+- **What the montage shows** (`decimal_failures_montage.png` in each engine's output
+  folder): the point is a few pixels, often low contrast or on a coloured fill, touching a
+  digit (`7.52` read as `72`) or crossed by a gridline (`28|.37` read as `28137`).
+  Some failures are not only a missing point: `11.7` read as `4117`.
+
+One change at a time, with each class's tuned setting plus the change, on all val crops of
+both classes. The best setting was defined before running: the highest correct-parse rate
+pooled over both classes (within 0.3 points, the lower drop rate).
+
+| Change | Tesseract: pooled correct-parse / drop rate | EasyOCR: pooled correct-parse / drop rate |
+| --- | ---: | ---: |
+| Current setting | **82.3% / 9.1%** | **88.8% / 13.0%** |
+| Upscale to 96 px | 81.7% / 8.8% | 88.8% / 13.2% |
+| Upscale to 128 px | 80.5% / 9.5% | 88.5% / 15.0% |
+| No binarization | 82.3% / 9.1% | 88.8% / 13.0% |
+| Mild sharpening | 81.7% / 9.5% | 88.7% / 13.2% |
+| Allow only `0-9 . , - %` | 82.0% / 9.1% | 88.4% / 13.0% |
+
+**No change helped, so the current settings stay and the reads are unchanged.** The numeric
+classes were already unbinarized, so "no binarization" is identical to the current setting.
+EasyOCR resizes crops to 64 px internally, so 96 px changes little. The point is lost before
+upscaling can help: at native resolution there is too little of it. Realistic next steps are
+not preprocessing but evidence from outside the crop (consistent decimals across a chart's
+ticks, the tick step, printed value labels), or a recogniser trained on small tick text.
+
 ## Recreating the environments
 
 Nothing here is in `requirements*.txt`; both engines are optional. Neither changes the
