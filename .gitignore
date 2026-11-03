@@ -9,3 +9,8 @@ dataset_yolo_all/
 data/
 .DS_Store
 output/
+data/pmc_yolo/
+data/pmc_yolo_bars/
+data/pmc_2022/
+weights/
+yolov8s.pt
