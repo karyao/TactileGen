@@ -65,7 +65,7 @@ in the repository, use `tests/fixtures/contracts/val/example.png`.
 
 OCR uses the text labels and boxes in YOLO's detection JSON to crop the same
 original image. Install the optional Python dependency plus the Tesseract
-executable (for example, `brew install tesseract` on macOS), then run:
+executable then run:
 
 ```bash
 python3.12 -m pip install -r requirements-ocr.txt
