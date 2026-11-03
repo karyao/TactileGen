@@ -61,6 +61,24 @@ It uses [`models/yolo_vbars/best.pt`](models/yolo_vbars/best.pt) by default.
 Replace `path/to/chart.png` with your image path. For an example image already
 in the repository, use `tests/fixtures/contracts/val/example.png`.
 
+## Read detected text with Tesseract
+
+OCR uses the text labels and boxes in YOLO's detection JSON to crop the same
+original image. Install the optional Python dependency plus the Tesseract
+executable (for example, `brew install tesseract` on macOS), then run:
+
+```bash
+python3.12 -m pip install -r requirements-ocr.txt
+python3.12 -m src.ocr \
+  --image path/to/chart.png \
+  --detections output/demo/chart_detections.json \
+  --output output/demo/chart_ocr.json \
+  --language eng
+```
+
+The OCR JSON stores recognized text and confidence linked by detection ID.
+YOLO's detection JSON remains the sole source of roles and box coordinates.
+
 ## Contributing and documentation
 
 The [experiment guide](docs/experiments.md) covers data preparation, model

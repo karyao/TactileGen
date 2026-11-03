@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
+import sys
+import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -14,6 +21,7 @@ from src.contracts import (
     OCRFrame,
     RecognizedText,
 )
+from src.contract_io import load_detection_frame, write_ocr_frame
 
 
 @dataclass(frozen=True)
@@ -91,3 +99,77 @@ def run_ocr(
         regions.append(RecognizedText(detection.id, result.text, result.confidence))
 
     return OCRFrame(frame.source_key, tuple(regions))
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Recognize text in regions from a YOLO detection JSON file."
+    )
+    parser.add_argument("--engine", choices=("tesseract",), default="tesseract")
+    parser.add_argument("--image", type=Path, required=True)
+    parser.add_argument("--detections", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--language", default="eng")
+    return parser.parse_args(argv)
+
+
+def _read_image(path: Path) -> np.ndarray:
+    import cv2
+
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing image: {path}")
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"Could not read image: {path}")
+    return image
+
+
+def _write_ocr_atomically(path: Path, frame: OCRFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    os.close(descriptor)
+    temporary_path = Path(temporary_name)
+    try:
+        write_ocr_frame(temporary_path, frame)
+        temporary_path.replace(path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _run_command(args: argparse.Namespace) -> OCRFrame:
+    if not args.detections.is_file():
+        raise FileNotFoundError(f"Missing detections: {args.detections}")
+    image = _read_image(args.image)
+    detections = load_detection_frame(args.detections)
+    if args.engine == "tesseract":
+        from src.tesseract_ocr import TesseractBackend
+
+        backend = TesseractBackend()
+    else:  # argparse constrains this today; keep dispatch explicit for future engines.
+        raise ValueError(f"Unsupported OCR engine: {args.engine}")
+    result = run_ocr(image, detections, backend, args.language)
+    _write_ocr_atomically(args.output, result)
+    return result
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    try:
+        args = parse_args(argv)
+        result = _run_command(args)
+    except (OSError, ValueError, RuntimeError) as exc:
+        parser.error(str(exc))
+    print(json.dumps({
+        "source_key": result.source_key,
+        "regions": len(result.regions),
+        "output": str(args.output),
+    }))
+
+
+if __name__ == "__main__":
+    # Keep protocol/result class identity stable when the adapter imports
+    # ``src.ocr`` while this file is executing under its ``-m`` name.
+    sys.modules.setdefault("src.ocr", sys.modules[__name__])
+    main()

@@ -7,8 +7,20 @@ from pathlib import Path
 
 import numpy as np
 
-from src.contracts import Box, Detection, DetectionFrame
-from src.presentation import detection_rows, render_detection_overlay, summarize_detections
+from src.contracts import (
+    Box,
+    Detection,
+    DetectionFrame,
+    OCRFrame,
+    RecognizedText,
+)
+from src.presentation import (
+    OCR_TABLE_HEADERS,
+    detection_rows,
+    ocr_rows,
+    render_detection_overlay,
+    summarize_detections,
+)
 
 
 def sample_frame(*detections: Detection, width: int = 120, height: int = 100):
@@ -54,6 +66,30 @@ import src.presentation
         self.assertIn("No roles were detected.", summary)
         self.assertIn("Vertical bars: 0.", summary)
         self.assertNotIn("Confidence range", summary)
+
+    def test_ocr_summary_and_rows_use_joined_detection_geometry(self):
+        frame = sample_frame(
+            Detection("title", "chart_title", Box(1, 2, 30, 12), 0.9),
+            Detection("bar", "vertical_bar", Box(10, 20, 20, 80), 0.8),
+            Detection("tick", "x_tick_label", Box(40, 85, 55, 95), 0.85),
+        )
+        ocr = OCRFrame("input/chart.png", (
+            RecognizedText("title", "Sales", 0.9),
+            RecognizedText("tick", "", 0.0),
+        ))
+
+        summary = summarize_detections(frame, ocr=ocr)
+        rows = ocr_rows(frame, ocr)
+
+        self.assertIn("OCR attempted 2 text regions; 1 returned readable text.", summary)
+        self.assertEqual(OCR_TABLE_HEADERS, (
+            "Detection ID", "Role", "Recognized text", "OCR confidence",
+            "X1", "Y1", "X2", "Y2",
+        ))
+        self.assertEqual(rows, [
+            ["title", "chart title", "Sales", 0.9, 1, 2, 30, 12],
+            ["tick", "x tick label", "", 0.0, 40, 85, 55, 95],
+        ])
 
     def test_table_preserves_order_and_numeric_values(self):
         frame = sample_frame(

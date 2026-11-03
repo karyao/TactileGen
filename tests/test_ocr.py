@@ -1,14 +1,25 @@
 """Engine-neutral OCR pipeline behavior and contract integration."""
 
 import json
+import importlib.util
 import math
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
-from src.contract_io import load_ocr_frame, write_ocr_frame
+from src.contract_io import (
+    load_detection_frame,
+    load_ocr_frame,
+    write_detection_frame,
+    write_ocr_frame,
+)
 from src.contracts import (
     TEXT_ROLES,
     Box,
@@ -16,7 +27,7 @@ from src.contracts import (
     DetectionFrame,
     join_text_regions,
 )
-from src.ocr import OCRBackendResult, run_ocr
+from src.ocr import OCRBackendResult, _run_command, parse_args, run_ocr
 
 
 class RecordingBackend:
@@ -218,6 +229,144 @@ class OCRPipelineTest(unittest.TestCase):
         self.assertEqual(set(serialized), {"schema_version", "source_key", "regions"})
         for region in serialized["regions"]:
             self.assertEqual(set(region), {"detection_id", "text", "confidence"})
+
+
+class OCRCommandTest(unittest.TestCase):
+    def test_argument_defaults(self):
+        args = parse_args([
+            "--image", "chart.png", "--detections", "chart_detections.json",
+            "--output", "chart_ocr.json",
+        ])
+        self.assertEqual(args.engine, "tesseract")
+        self.assertEqual(args.language, "eng")
+
+    def test_command_loads_yolo_json_and_writes_joinable_ocr_without_geometry(self):
+        fixture_root = Path(__file__).parent / "fixtures/contracts"
+
+        class Backend:
+            def recognize(self, image, item, *, language):
+                return OCRBackendResult(f"read-{item.id}", 0.75)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "nested/chart_ocr.json"
+            args = Namespace(
+                engine="tesseract",
+                image=fixture_root / "val/example.png",
+                detections=fixture_root / "detections.json",
+                output=output,
+                language="eng",
+            )
+            with patch("src.tesseract_ocr.TesseractBackend", return_value=Backend()):
+                result = _run_command(args)
+            loaded = load_ocr_frame(output)
+            serialized = json.loads(output.read_text(encoding="utf-8"))
+
+        detections = load_detection_frame(fixture_root / "detections.json")
+        self.assertEqual(loaded, result)
+        expected_count = sum(item.role in TEXT_ROLES for item in detections.detections)
+        self.assertEqual(len(join_text_regions(detections, loaded)), expected_count)
+        for region in serialized["regions"]:
+            self.assertEqual(set(region), {"detection_id", "text", "confidence"})
+
+    def test_dimension_mismatch_fails_without_creating_output(self):
+        fixture_root = Path(__file__).parent / "fixtures/contracts"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            detections = frame(
+                detection("title", "chart_title"), width=319, height=240
+            )
+            detection_path = root / "detections.json"
+            output = root / "ocr.json"
+            write_detection_frame(detection_path, detections)
+            args = Namespace(
+                engine="tesseract", image=fixture_root / "val/example.png",
+                detections=detection_path, output=output, language="eng",
+            )
+            with patch("src.tesseract_ocr.TesseractBackend", return_value=RecordingBackend()):
+                with self.assertRaisesRegex(ValueError, "dimensions"):
+                    _run_command(args)
+            self.assertFalse(output.exists())
+
+    def test_backend_failure_preserves_existing_output(self):
+        fixture_root = Path(__file__).parent / "fixtures/contracts"
+
+        class FailingBackend:
+            def recognize(self, image, item, *, language):
+                raise RuntimeError("OCR failed")
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "ocr.json"
+            output.write_text("keep me", encoding="utf-8")
+            args = Namespace(
+                engine="tesseract", image=fixture_root / "val/example.png",
+                detections=fixture_root / "detections.json", output=output,
+                language="eng",
+            )
+            with patch("src.tesseract_ocr.TesseractBackend", return_value=FailingBackend()):
+                with self.assertRaisesRegex(RuntimeError, "OCR failed"):
+                    _run_command(args)
+            self.assertEqual(output.read_text(encoding="utf-8"), "keep me")
+
+    def test_missing_inputs_fail_before_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "ocr.json"
+            args = Namespace(
+                engine="tesseract", image=root / "missing.png",
+                detections=root / "missing.json", output=output, language="eng",
+            )
+            with self.assertRaisesRegex(FileNotFoundError, "Missing detections"):
+                _run_command(args)
+            self.assertFalse(output.exists())
+
+            fixture_root = Path(__file__).parent / "fixtures/contracts"
+            args.detections = fixture_root / "detections.json"
+            with self.assertRaisesRegex(FileNotFoundError, "Missing image"):
+                _run_command(args)
+            self.assertFalse(output.exists())
+
+    def test_invalid_detection_json_fails_without_output(self):
+        fixture_root = Path(__file__).parent / "fixtures/contracts"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid = root / "detections.json"
+            invalid.write_text('{"schema_version": 1, "detections": "bad"}',
+                               encoding="utf-8")
+            output = root / "ocr.json"
+            args = Namespace(
+                engine="tesseract", image=fixture_root / "val/example.png",
+                detections=invalid, output=output, language="eng",
+            )
+            with self.assertRaises((KeyError, ValueError)):
+                _run_command(args)
+            self.assertFalse(output.exists())
+
+    @unittest.skipUnless(
+        shutil.which("tesseract") and importlib.util.find_spec("pytesseract"),
+        "Tesseract and pytesseract are not installed",
+    )
+    def test_module_command_uses_one_result_class_and_writes_valid_output(self):
+        fixture_root = Path(__file__).parent / "fixtures/contracts"
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "ocr.json"
+            completed = subprocess.run(
+                [
+                    sys.executable, "-m", "src.ocr",
+                    "--image", str(fixture_root / "val/example.png"),
+                    "--detections", str(fixture_root / "detections.json"),
+                    "--output", str(output),
+                    "--language", "eng",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            summary = json.loads(completed.stdout)
+            loaded = load_ocr_frame(output)
+        self.assertEqual(summary["regions"], 10)
+        self.assertEqual(len(loaded.regions), 10)
 
 
 if __name__ == "__main__":

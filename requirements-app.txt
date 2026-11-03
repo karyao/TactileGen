@@ -1,4 +1,4 @@
--r requirements.txt
+-r requirements-ocr.txt
 -r requirements-model.txt
 
 gradio>=6,<7
