@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import re
+import tempfile
+from collections.abc import Sequence
 from typing import Any
 
 import cv2
@@ -188,3 +190,88 @@ class TesseractBackend:
             if result is not None and (best is None or result.confidence > best.confidence):
                 best = result
         return best
+
+    def recognize_many(
+        self,
+        image: np.ndarray,
+        detections: Sequence[Detection],
+        *,
+        language: str,
+    ) -> tuple[OCRBackendResult | None, ...]:
+        """Recognize many crops in one multipage Tesseract invocation.
+
+        Each page is exactly one candidate produced by the single-region path,
+        so batching changes process startup cost but not preprocessing,
+        orientation selection, confidence selection, or returned text.
+        """
+        if not detections:
+            return ()
+        pytesseract = _load_pytesseract()
+        self._validate_language(pytesseract, language)
+        try:
+            from PIL import Image
+        except ImportError as exc:  # Pillow is normally installed by pytesseract.
+            raise RuntimeError("Install Pillow to use batched Tesseract OCR") from exc
+
+        pages = []
+        owners = []
+        for detection_index, detection in enumerate(detections):
+            for candidate in _recognition_candidates(image, detection):
+                pages.append(Image.fromarray(candidate))
+                owners.append(detection_index)
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".tiff") as temporary:
+                pages[0].save(
+                    temporary.name,
+                    save_all=True,
+                    append_images=pages[1:],
+                    compression="tiff_deflate",
+                )
+                try:
+                    data = pytesseract.image_to_data(
+                        temporary.name,
+                        lang=language,
+                        config=_TESSERACT_CONFIG,
+                        output_type=pytesseract.Output.DICT,
+                        timeout=self.timeout_seconds * len(pages),
+                    )
+                except RuntimeError as exc:
+                    raise RuntimeError("Tesseract recognition timed out") from exc
+                except Exception as exc:
+                    if _not_found_error(pytesseract, exc):
+                        raise RuntimeError(
+                            "Tesseract is not installed or is not available on PATH"
+                        ) from exc
+                    raise
+        finally:
+            for page in pages:
+                page.close()
+
+        page_numbers = data.get("page_num")
+        if not isinstance(page_numbers, list):
+            raise RuntimeError("Tesseract batch output did not contain page numbers")
+        indexes_by_page: dict[int, list[int]] = {}
+        for index, raw_page in enumerate(page_numbers):
+            try:
+                page_number = int(raw_page)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Tesseract returned an invalid page number") from exc
+            indexes_by_page.setdefault(page_number, []).append(index)
+        if set(indexes_by_page) != set(range(1, len(pages) + 1)):
+            raise RuntimeError("Tesseract batch output pages differ from input candidates")
+
+        best: list[OCRBackendResult | None] = [None] * len(detections)
+        for page_number in range(1, len(pages) + 1):
+            indexes = indexes_by_page[page_number]
+            page_data = {
+                key: [values[index] for index in indexes]
+                for key, values in data.items()
+            }
+            result = _candidate_result(page_data)
+            owner = owners[page_number - 1]
+            if result is not None and (
+                best[owner] is None or result.confidence > best[owner].confidence
+            ):
+                best[owner] = result
+        return tuple(best)

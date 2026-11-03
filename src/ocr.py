@@ -81,11 +81,24 @@ def run_ocr(
 
     readonly_image = image.view()
     readonly_image.setflags(write=False)
+    text_detections = tuple(
+        detection for detection in frame.detections if detection.role in TEXT_ROLES
+    )
+    recognize_many = getattr(backend, "recognize_many", None)
+    if callable(recognize_many):
+        results = recognize_many(readonly_image, text_detections, language=language)
+        if not isinstance(results, (tuple, list)) or len(results) != len(text_detections):
+            raise TypeError(
+                "backend recognize_many must return one OCRBackendResult or None per detection"
+            )
+    else:
+        results = [
+            recognize(readonly_image, detection, language=language)
+            for detection in text_detections
+        ]
+
     regions = []
-    for detection in frame.detections:
-        if detection.role not in TEXT_ROLES:
-            continue
-        result = recognize(readonly_image, detection, language=language)
+    for detection, result in zip(text_detections, results, strict=True):
         if result is None:
             regions.append(RecognizedText(detection.id, "", 0.0))
             continue
