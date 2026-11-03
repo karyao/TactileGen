@@ -3,7 +3,7 @@
 Scope: vertical bar charts with one series and at most 10 bars. Stage 1 feeds the
 interpreter **ground-truth boxes and ground-truth text**, so its errors come from the
 interpreter's logic, not from detection or OCR. Stage 2 (ground-truth boxes, OCR reads)
-and Stage 3 (detector boxes, OCR reads) are not run yet.
+is below; Stage 3 (detector boxes, OCR reads) is not run yet.
 
 ## What the interpreter does (`src/interpret_bars.py`)
 
@@ -68,8 +68,77 @@ Nothing is tuned here; val was used to debug, test was run once after the logic 
   (15 charts across both splits). `src/dataset/handread_sheet.py` makes a blank sheet
   for reading about 25 more charts by eye.
 
+## Stage 2: ground-truth boxes, OCR reads (`python -m src.baseline.e2e_stage2`)
+
+The text of every box comes from the engine's read instead of the annotation. The OCR
+settings are the tuned ones from `docs/ocr_baselines.md`; the decimal-point fixes tried
+there did not help, so the reads are unchanged. The reference for each chart is the Stage 1
+result on ground-truth text; only charts Stage 1 accepted have a trusted reference
+(53 in val, 39 in test).
+
+- **Wrong chart:** no chart was built, a category name differs from the reference
+  (after normalization), or a bar value is more than 1% of the axis span off.
+- **Flagged chart:** the status is not `accepted`. Flag precision is the share of flagged
+  charts that are wrong; recall is the share of wrong charts that are flagged.
+- **Confidence threshold:** a read below it is flagged. It was chosen **on val only**, per
+  engine, as the best F1 of the flags over 0.3 to 0.95 (ties to the higher value): **0.8**
+  for Tesseract and **0.6** for EasyOCR. **Test was scored once** with those values.
+
+**Val numbers** (used to choose the threshold, so optimistic) and **test numbers** (reporting):
+
+| | Tess val | Easy val | Tess **test** | Easy **test** |
+| --- | ---: | ---: | ---: | ---: |
+| Scope charts (reference charts) | 58 (53) | 58 (53) | 47 (39) | 47 (39) |
+| Accepted / needs review / rejected | 5 / 53 / 0 | 18 / 40 / 0 | **6 / 41 / 0** | **16 / 31 / 0** |
+| Chart built, bars = categories (of reference) | 51 | 49 | **37** | **37** |
+| Category names exactly right | 149 of 277 | 159 of 266 | **89 of 185** | **108 of 182** |
+| Charts with every category right | 9 | 14 | **14 of 39** | **14 of 39** |
+| Charts with every value within 1% of span | 50 | 49 | **37 of 39** | **37 of 39** |
+| Factor-of-ten errors (charts) | 1 (flagged) | 0 | **0** | **0** |
+| Printed-number truth, accepted charts: bars within 1% | 13 of 13 | 13 of 13 | none accepted | **4 of 4** |
+| Charts without a trusted reference that were flagged | 5 of 5 | 5 of 5 | **8 of 8** | **8 of 8** |
+
+**Do the flags find the wrong charts?** "Wrong" counts category names as well as values.
+
+| Flag quality, any wrong output | Tess val | Easy val | Tess **test** | Easy **test** |
+| --- | ---: | ---: | ---: | ---: |
+| Wrong / flagged / caught | 44 / 48 / 44 | 39 / 35 / 32 | **25 / 33 / 24** | **25 / 23 / 20** |
+| Precision | 0.92 | 0.91 | **0.73** | **0.87** |
+| Recall | 1.00 | 0.82 | **0.96** | **0.80** |
+| Silent errors (wrong, not flagged) | 0 | 7 | **1** | **5** |
+| False flags (flagged, not wrong) | 4 | 3 | **9** | **3** |
+
+- **Values are safe; names are the problem.** Only 2 test charts (3 in val for Tesseract,
+  4 for EasyOCR) have a wrong value or no chart, and every one is flagged (recall 1.00 on
+  values alone, for both engines and both splits). No value error went unflagged and no
+  factor-of-ten error reached a test chart. All 6 silent errors on test (1 Tesseract, 5
+  EasyOCR) are category-name mistakes only (1 to 3 wrong names in a chart).
+- **Category names are poor**: right 48% (Tesseract) and 59% (EasyOCR) of the time on test,
+  and every category in only 14 of 39 charts. Part of that cannot be fixed by OCR: ground
+  truth contains markup such as `\alpha` and `\beta`.
+- **Review burden is high.** At the val-chosen thresholds Tesseract sends 41 of 47 test
+  charts to review and EasyOCR 31 of 47, mostly because of low-confidence category reads.
+  Tesseract's threshold is the stricter one (0.8), which buys recall but costs 9 false flags
+  on test against 3.
+- **Silent errors with EasyOCR** are the worry: 5 of 25 wrong charts were not flagged at the
+  val threshold (0.6); the val sweep shows higher thresholds trade silent errors for review
+  load (0.9 flags all 53 val reference charts).
+- **Bar count** was right whenever a chart was built (37 of 37): boxes are ground truth, so
+  the failures here are empty category reads, which leave no chart (2 of 39 in test).
+
+**Rotated category labels.** `python -m src.baseline.e2e_spotcheck` draws red numbers on
+bars and blue numbers on the label each bar was paired with, with ground truth and both
+engines' reads underneath (4 val and 4 test charts with slanted labels; I viewed 4: val
+`PMC5456925...g005` and `PMC5449974...g005`, test `PMC3614921...g003` and
+`PMC5964208...g003`). Pairing by order was right in all four, even where neighbouring
+rotated labels overlap heavily. The reads of slanted names are the weak point: Tesseract
+returns mostly noise and EasyOCR often returns a mix of the label and its neighbours,
+because the boxes of 45-degree text overlap. Crops are only tried at 0 and plus or minus
+90 degrees, so slanted text needs deskewing before reading.
+
+
 ## Not done
 
-- Stage 2 and 3; log axes; multi-series, stacked or horizontal charts.
+- Stage 3; deskewing slanted labels; log axes; multi-series, stacked or horizontal charts.
 - `y_min`/`y_max` come from the plot area and are not checked against any printed axis end.
 - The review page and the corrections file that rebuilds a chart.
