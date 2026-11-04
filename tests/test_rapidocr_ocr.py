@@ -12,8 +12,8 @@ from src.ocr import OCRBackendResult
 from src.rapidocr_ocr import RapidOCRBackend, _load_rapidocr
 
 
-def detection(box, role="chart_title"):
-    return Detection("text", role, Box(*box), 0.9)
+def detection(box, role="x_tick_label", id="text"):
+    return Detection(id, role, Box(*box), 0.9)
 
 
 def output(text="Label", score=0.9):
@@ -85,6 +85,37 @@ class RapidOCRBackendTest(unittest.TestCase):
             "use_det": False, "use_cls": True, "use_rec": True,
         })
 
+    def test_title_uses_full_width_strip_and_other_roles_keep_padded_crop(self):
+        module, engine, _ = fake_rapidocr([output(), output()])
+        with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
+            backend = RapidOCRBackend()
+        image = np.zeros((60, 200, 3), dtype=np.uint8)
+        title = detection((80, 10, 100, 26), "chart_title")
+        tick = detection((80, 10, 100, 26))
+
+        backend.recognize(image, title, language="eng")
+        backend.recognize(image, tick, language="eng")
+
+        self.assertEqual([call[0].shape for call in engine.calls], [
+            (20, 200, 3), (20, 24, 3),
+        ])
+
+    def test_recognize_accepts_neighbors_for_title_strip_bounds(self):
+        module, engine, _ = fake_rapidocr([output()])
+        with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
+            backend = RapidOCRBackend()
+        title = detection((80, 10, 100, 26), "chart_title", "title")
+        tick = detection((10, 12, 40, 24), id="tick")
+
+        backend.recognize(
+            np.zeros((60, 200, 3), dtype=np.uint8),
+            title,
+            language="eng",
+            neighbors=(title, tick),
+        )
+
+        self.assertEqual(engine.calls[0][0].shape, (20, 158, 3))
+
     def test_tall_crop_tries_both_rotations_and_keeps_best_confidence(self):
         module, engine, _ = fake_rapidocr([
             output("vertical", 0.4), output("clockwise", 0.95),
@@ -141,6 +172,23 @@ class RapidOCRBackendTest(unittest.TestCase):
         self.assertEqual([item.text for item in results], ["first", "second"])
         self.assertEqual(len(backend._engine.cls_calls), 1)
         self.assertEqual(len(backend._engine.rec_calls), 1)
+
+    def test_recognize_many_gives_title_all_detection_neighbors(self):
+        module, engine, _ = fake_rapidocr([output("title"), output("tick")])
+        with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
+            backend = RapidOCRBackend()
+        title = detection((80, 10, 100, 26), "chart_title", "title")
+        tick = detection((10, 12, 40, 24), id="tick")
+
+        backend.recognize_many(
+            np.zeros((60, 200, 3), dtype=np.uint8),
+            (title, tick),
+            language="eng",
+        )
+
+        self.assertEqual([candidate.shape for candidate in engine.cls_calls[0]], [
+            (20, 158, 3), (16, 34, 3),
+        ])
 
     def test_missing_dependency_error_is_actionable(self):
         real_import = builtins.__import__

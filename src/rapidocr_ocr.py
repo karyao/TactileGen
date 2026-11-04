@@ -11,10 +11,9 @@ import numpy as np
 
 from src.contracts import Detection
 from src.ocr import OCRBackendResult
+from src.ocr_crop import crop_text_region
 
 
-_MIN_PADDING = 2
-_MAX_PADDING = 8
 _TALL_ASPECT_RATIO = 1.5
 
 
@@ -29,24 +28,12 @@ def _load_rapidocr():
     return rapidocr
 
 
-def _crop_with_padding(image: np.ndarray, detection: Detection) -> np.ndarray:
-    height, width = image.shape[:2]
-    box = detection.box
-    padding = max(
-        _MIN_PADDING,
-        min(_MAX_PADDING, math.ceil(0.1 * min(box.x2 - box.x1, box.y2 - box.y1))),
-    )
-    left = max(0, math.floor(box.x1) - padding)
-    top = max(0, math.floor(box.y1) - padding)
-    right = min(width, math.ceil(box.x2) + padding)
-    bottom = min(height, math.ceil(box.y2) + padding)
-    return image[top:bottom, left:right].copy()
-
-
 def _recognition_candidates(
-    image: np.ndarray, detection: Detection
+    image: np.ndarray,
+    detection: Detection,
+    neighbors: Sequence[Detection] = (),
 ) -> tuple[np.ndarray, ...]:
-    crop = _crop_with_padding(image, detection)
+    crop = crop_text_region(image, detection, neighbors)
     box = detection.box
     if box.y2 - box.y1 <= _TALL_ASPECT_RATIO * (box.x2 - box.x1):
         return (crop,)
@@ -103,10 +90,11 @@ class RapidOCRBackend:
         detection: Detection,
         *,
         language: str,
+        neighbors: Sequence[Detection] = (),
     ) -> OCRBackendResult | None:
         """Recognize one crop; PP-OCRv6 uses one multilingual model."""
         best = None
-        for candidate in _recognition_candidates(image, detection):
+        for candidate in _recognition_candidates(image, detection, neighbors):
             output = self._engine(
                 candidate, use_det=False, use_cls=True, use_rec=True
             )
@@ -129,7 +117,7 @@ class RapidOCRBackend:
         candidates = []
         owners = []
         for detection_index, detection in enumerate(detections):
-            current = _recognition_candidates(image, detection)
+            current = _recognition_candidates(image, detection, detections)
             candidates.extend(current)
             owners.extend([detection_index] * len(current))
 

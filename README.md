@@ -96,7 +96,10 @@ YOLO's detection JSON remains the sole source of roles and box coordinates.
 
 RapidOCR provides a local ONNX Runtime build of PP-OCRv6. The integration uses
 only its recognition and orientation stages: YOLO remains the sole source of
-text boxes. Install the optional backend and select it on the same OCR command:
+text boxes. Like Tesseract, it expands `chart_title` boxes into the shared,
+neighbor-aware title strip before recognition, while all other roles retain
+their padded YOLO crops. Install the optional backend and select it on the same
+OCR command:
 
 ```bash
 python3.12 -m pip install -r requirements-rapidocr.txt
