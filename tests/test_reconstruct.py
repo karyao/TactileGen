@@ -349,3 +349,10 @@ def test_unrescuable_slot_keeps_mismatch():
     spec = chart.run()
     assert "baseline_outside_plot" in spec.flags
     assert "category_count_mismatch" in spec.flags
+
+
+def test_rescue_counts_the_dark_bar_outline():
+    chart = base_chart(values=(120, 60, 2))  # 3 px: rows 337..339
+    _drop_detection(chart, 2)
+    chart.image[337, 410:470] = (20, 40, 10)  # outline blended over the top row
+    assert_values(chart.run(), [120, 60, 2])

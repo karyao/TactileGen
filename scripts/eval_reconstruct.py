@@ -53,23 +53,49 @@ def _match_series(spec, models):
     return pairs
 
 
+def _aligned_values(spec, record):
+    """Yield ``(series_index, category_index, predicted, truth, chart_scale)``.
+
+    Yields nothing when categories or series cannot be aligned with the
+    ground truth; ``chart_scale`` is the chart's largest absolute true value.
+    """
+    models = record["models"]
+    if len(spec.categories) != len(models[0]["x"]):
+        return
+    pairs = _match_series(spec, models)
+    if len(pairs) != len(models):
+        return
+    scale = max((abs(v) for m in models for v in m["y"] if v is not None), default=0) or 1.0
+    for series, model in pairs:
+        index = spec.series.index(series)
+        for j, (predicted, truth) in enumerate(zip(series.values, model["y"])):
+            if truth is not None:
+                yield index, j, predicted, truth, scale
+
+
 def _relative_errors(spec, record):
     """Per-value relative errors, or None if series/categories cannot be aligned."""
     models = record["models"]
-    truth_categories = [_norm(c) for c in models[0]["x"]]
-    if len(spec.categories) != len(truth_categories):
+    if len(spec.categories) != len(models[0]["x"]) or len(_match_series(spec, models)) != len(models):
         return None
-    pairs = _match_series(spec, models)
-    if len(pairs) != len(models):
-        return None
-    errors = []
-    for series, model in pairs:
-        for predicted, truth in zip(series.values, model["y"]):
-            if truth is None or truth == 0:
-                continue
-            errors.append(math.inf if predicted is None
-                          else abs(predicted - truth) / abs(truth))
-    return errors
+    return [math.inf if predicted is None else abs(predicted - truth) / abs(truth)
+            for _, _, predicted, truth, _ in _aligned_values(spec, record) if truth != 0]
+
+
+def _rescued_values(spec, record):
+    """Details of rescued values that line up with the ground truth."""
+    details = []
+    for index, j, predicted, truth, scale in _aligned_values(spec, record):
+        if not spec.series[index].value_rescued[j]:
+            continue
+        details.append({
+            "zero": predicted == 0.0, "truth": truth, "predicted": predicted,
+            "relative": None if truth == 0 else abs(predicted - truth) / abs(truth),
+            "scaled": abs(predicted - truth) / scale,
+            "truth_below_5pct": abs(truth) < 0.05 * scale,
+            "truth_below_1pct": abs(truth) < 0.01 * scale,
+        })
+    return details
 
 
 def _percentile(values, q):
@@ -240,6 +266,59 @@ def print_diagnosis(rows):
         print(f"  {label}: {sum(test(x) for _, x in lost)} bars, e.g. {ids[:3]}")
 
 
+def print_rescue_comparison(rows):
+    done = [r for r in rows if r["ok"]]
+
+    def summary(flags_of, errors_of):
+        mismatch = sum("category_count_mismatch" in flags_of(r) for r in done)
+        errs = [e for r in done if errors_of(r) for e in errors_of(r)]
+        comparable = sum(1 for r in done if errors_of(r))
+        return (mismatch, comparable, sum(math.isinf(e) for e in errs),
+                statistics.median(errs) if errs else float("nan"),
+                _percentile(errs, 0.9) if errs else float("nan"),
+                sum(e <= 0.01 for e in errs) / len(errs) if errs else float("nan"))
+
+    print("\n=== bar rescue: before vs after ===")
+    print("            | mismatch | comparable | missing | median | p90    | within 1%")
+    for label, flags_of, errors_of in (
+            ("before", lambda r: r["before"]["flags"], lambda r: r["before"]["errors"]),
+            ("after ", lambda r: r["flags"], lambda r: r["errors"])):
+        m, c, miss, med, p90, w1 = summary(flags_of, errors_of)
+        print(f"{label:<11} | {m:>8} | {c:>10} | {miss:>7} | {med:.4f} | {p90:.4f} | {w1:.1%}")
+
+    rescued_charts = [r for r in done if r["rescued_total"]]
+    total = sum(r["rescued_total"] for r in done)
+    aligned = [d for r in done for d in r["rescued"]]
+    print(f"\nrescued values: {total} in {len(rescued_charts)} charts "
+          f"({len(aligned)} line up with GT; the rest are in charts whose categories/series "
+          f"do not align)")
+    if aligned:
+        rel = [d["relative"] for d in aligned if d["relative"] is not None]
+        scaled = [d["scaled"] for d in aligned]
+        print(f"  relative error: median {statistics.median(rel):.4f}, p90 {_percentile(rel, 0.9):.4f} "
+              f"({len(aligned) - len(rel)} with GT == 0 excluded)")
+        print(f"  |error| / chart max|GT|: median {statistics.median(scaled):.4f}, "
+              f"p90 {_percentile(scaled, 0.9):.4f}")
+        print(f"  within 1% / 5% relative: {sum(e <= 0.01 for e in rel) / len(rel):.1%} / "
+              f"{sum(e <= 0.05 for e in rel) / len(rel):.1%}")
+        zeros = [d for d in aligned if d["zero"]]
+        print(f"  inferred zero: {len(zeros)}; GT not near zero: "
+              f"{sum(not d['truth_below_5pct'] for d in zeros)} (GT >= 5% of chart max), "
+              f"{sum(not d['truth_below_1pct'] for d in zeros)} (GT >= 1% of chart max)")
+        print("  GT values behind inferred zeros:",
+              sorted((round(d["truth"], 4) for d in zeros), key=abs)[-5:], "(largest 5)")
+        worst = sorted(aligned, key=lambda d: -d["scaled"])[:5]
+        print("  worst rescued (predicted, truth):",
+              [(round(d["predicted"], 4), round(d["truth"], 4)) for d in worst])
+    gained = [r["image_id"] for r in done if r["errors"] and not r["before"]["errors"]]
+    fixed = [r["image_id"] for r in done if "category_count_mismatch" in r["before"]["flags"]
+             and "category_count_mismatch" not in r["flags"]]
+    print(f"charts that became value-comparable: {len(gained)}; mismatch cleared: {len(fixed)}")
+    worse = [r["image_id"] for r in done if "category_count_mismatch" not in r["before"]["flags"]
+             and "category_count_mismatch" in r["flags"]]
+    print(f"charts that newly mismatch: {len(worse)} {worse[:5]}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--annotations", type=Path, default=Path("data/annotations_test.json"))
@@ -248,6 +327,8 @@ def main() -> None:
     parser.add_argument("--n", type=int, default=200)
     parser.add_argument("--diagnose", action="store_true",
                         help="explain bar loss in category_count_mismatch charts")
+    parser.add_argument("--compare-rescue", action="store_true",
+                        help="also reconstruct without bar rescue and report before/after")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", type=Path, default=Path("output/eval_reconstruct.json"))
     args = parser.parse_args()
@@ -267,6 +348,11 @@ def main() -> None:
             frame = run_detection(model, path)
             ocr = run_ocr(image, frame, backend, "eng")
             spec = reconstruct_vbar(frame, ocr, image)
+            row.update(rescued_total=sum(sum(x.value_rescued) for x in spec.series),
+                       rescued=_rescued_values(spec, record))
+            if args.compare_rescue:
+                before = reconstruct_vbar(frame, ocr, image, rescue_bars=False)
+                row["before"] = {"flags": before.flags, "errors": _relative_errors(before, record)}
             row.update(ok=True, flags=spec.flags,
                        categories_match=[_norm(c) for c in spec.categories]
                        == [_norm(c) for c in record["models"][0]["x"]],
@@ -312,6 +398,8 @@ def main() -> None:
     print("\n10 worst reconstructed charts (median relative error per chart):")
     for r in sorted(comparable, key=chart_error, reverse=True)[:10]:
         print(f"  {r['image_id']}: {chart_error(r):.3f} flags={r['flags']}")
+    if args.compare_rescue:
+        print_rescue_comparison(rows)
     if args.diagnose:
         print_diagnosis(rows)
     print("\nfailed or not value-comparable (first 10 ids):",

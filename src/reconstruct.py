@@ -31,6 +31,8 @@ COLOR_DISTANCE = 40.0
 RESCUE_CONFIDENCE = 0.2
 RESCUE_STRIP_FRACTION = 0.5   # central share of the bar width that is probed
 RESCUE_ROW_FRACTION = 0.6     # share of strip pixels that must match for a row to count
+_LUMA = np.array([0.299, 0.587, 0.114])
+_BORDER_LUMINANCE = 100.0
 RESCUE_AXIS_ROWS = 2          # non-matching rows tolerated at the zero line (axis stroke)
 SEED_MERGE_DISTANCE = 10.0  # swatches this close are one legend entry (duplicate detections)
 DARK_LUMINANCE = 60.0
@@ -257,6 +259,7 @@ def _run_length(rgb: np.ndarray, left: int, right: int, start: int, step: int,
     stroke does not hide a short bar.
     """
     height = rgb.shape[0]
+    color_luma = float(np.dot(color, _LUMA))
     run = skipped = 0
     y = start
     while 0 <= y < height:
@@ -267,6 +270,9 @@ def _run_length(rgb: np.ndarray, left: int, right: int, start: int, step: int,
         elif run == 0 and skipped < RESCUE_AXIS_ROWS:
             skipped += 1
         else:
+            # Bars carry a dark outline: count it when it caps a run of fill.
+            if run and np.mean(pixels @ _LUMA) < min(_BORDER_LUMINANCE, 0.8 * color_luma):
+                run += 1
             break
         y += step
     return run
