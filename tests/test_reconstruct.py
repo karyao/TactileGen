@@ -199,3 +199,45 @@ def test_bar_clipped_at_plot_edge_is_flagged():
     assert "value_clipped_at_axis" in clipped.flags
     assert clipped.y_axis.max == pytest.approx(200, rel=0.01)
     assert "value_clipped_at_axis" not in base_chart().run().flags
+
+
+def _grouped(colours, legend=True):
+    """Two-series grouped chart; colours are BGR for the two series."""
+    chart = Chart()
+    chart.add("plot_area", PLOT)
+    for tick in (0, 50, 100, 150, 200):
+        chart.add("y_tick_label", (40, y_of(tick) - 6, 75, y_of(tick) + 6), text=str(tick))
+    slot = (PLOT[2] - PLOT[0]) / 3
+    for i, pair in enumerate([(100, 50), (150, 80), (40, 120)]):
+        cx = PLOT[0] + slot * (i + 0.5)
+        for dx, value, colour in zip((-22, 22), pair, colours):
+            box = (cx + dx - 20, y_of(value), cx + dx + 20, ZERO_Y)
+            chart.add("vertical_bar", box)
+            chart.paint(box, colour)
+        chart.add("x_tick_label", (cx - 20, 345, cx + 20, 360), text=f"G{i}")
+    for row, (name, colour) in enumerate(zip(("Alpha", "Beta"), colours)):
+        if legend:
+            y = 365 + 18 * row
+            chart.add("legend_swatch", (100, y, 114, y + 14))
+            chart.paint((100, y, 114, y + 14), colour)
+            chart.add("legend_label", (120, y, 180, y + 14), text=name)
+    return chart
+
+
+# #FFA500 and #FF8C00 as BGR: about 25 apart in RGB, inside the clustering threshold.
+SIMILAR = ((0, 165, 255), (0, 140, 255))
+
+
+def test_legend_swatches_keep_similar_colours_apart():
+    spec = _grouped(SIMILAR).run()
+    assert [s.name for s in spec.series] == ["Alpha", "Beta"]
+    assert_values(spec, [100, 150, 40], series=0)
+    assert_values(spec, [50, 80, 120], series=1)
+    assert "category_count_mismatch" not in spec.flags
+    assert "series_ambiguous" not in spec.flags
+
+
+def test_similar_colours_without_legend_fall_back_to_one_cluster():
+    spec = _grouped(SIMILAR, legend=False).run()
+    assert len(spec.series) == 1
+    assert {"category_count_mismatch", "category_ambiguous"} <= set(spec.flags)

@@ -28,6 +28,7 @@ from src.contracts import (
 MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
+SEED_MERGE_DISTANCE = 10.0  # swatches this close are one legend entry (duplicate detections)
 DARK_LUMINANCE = 60.0
 TITLE_EDGE_PX = 2
 ADJACENT_GAP_RATIO = 0.10
@@ -194,24 +195,52 @@ def _distance(a, b) -> float:
     return math.dist(a, b)
 
 
-def _cluster_colors(colors: list[tuple[int, int, int] | None]) -> list[list[int]]:
-    """Greedy grouping of bar indexes by colour; bars without a colour are alone."""
-    clusters: list[list[int]] = []
-    centres: list[tuple[float, ...]] = []
+def _cluster_colors(colors: list[tuple[int, int, int] | None],
+                    seeds: list[tuple[int, int, int]] = ()):
+    """Group bar indexes by colour.
+
+    Each seed (a legend swatch colour) owns a cluster; bars go to the nearest
+    seed within ``COLOR_DISTANCE``. Remaining bars are grouped greedily, and
+    bars without a colour stay alone. Returns ``(clusters, seed_of_cluster)``
+    ordered by first bar, where ``seed_of_cluster`` is the seed index or None.
+    """
+    clusters: list[list[int]] = [[] for _ in seeds]
+    owner: list[int | None] = list(range(len(seeds)))
+    centres: list[tuple[float, ...]] = [tuple(float(v) for v in seed) for seed in seeds]
     for index, color in enumerate(colors):
         if color is None:
             clusters.append([index])
+            owner.append(None)
             centres.append((-1e9,) * 3)
             continue
-        nearest = min(range(len(centres)), key=lambda c: _distance(centres[c], color), default=None)
+        seeded = [c for c in range(len(centres)) if owner[c] is not None]
+        nearest = min(seeded, key=lambda c: _distance(centres[c], color), default=None)
+        if nearest is not None and _distance(centres[nearest], color) <= COLOR_DISTANCE:
+            clusters[nearest].append(index)
+            continue
+        free = [c for c in range(len(centres)) if owner[c] is None]
+        nearest = min(free, key=lambda c: _distance(centres[c], color), default=None)
         if nearest is not None and _distance(centres[nearest], color) <= COLOR_DISTANCE:
             clusters[nearest].append(index)
             members = [colors[k] for k in clusters[nearest]]
             centres[nearest] = tuple(statistics.median(m[ch] for m in members) for ch in range(3))
         else:
             clusters.append([index])
+            owner.append(None)
             centres.append(tuple(float(v) for v in color))
-    return clusters
+    order = sorted((c for c in range(len(clusters)) if clusters[c]), key=lambda c: clusters[c][0])
+    return [clusters[c] for c in order], [owner[c] for c in order]
+
+
+def _legend_seeds(swatch_colors):
+    """Distinct swatch colours as seeds: ``(seed colours, seed -> swatch index)``."""
+    seeds, swatch_of_seed = [], []
+    for index, color in enumerate(swatch_colors):
+        if color is None or any(_distance(color, seed) < SEED_MERGE_DISTANCE for seed in seeds):
+            continue
+        seeds.append(color)
+        swatch_of_seed.append(index)
+    return seeds, swatch_of_seed
 
 
 # --- legend --------------------------------------------------------------------
@@ -354,7 +383,6 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     # series by colour
     rgb = _to_rgb(image)
     bar_colors = [_sample_rgb(rgb, bar) for bar in bars]
-    clusters = _cluster_colors(bar_colors)
 
     swatches = [d for d in roles.get("legend_swatch", [])
                 if legend is None or _inside(_centre(d), legend, 4, 4)]
@@ -363,17 +391,21 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     swatch_colors = [_sample_rgb(rgb, d) for d in swatches]
     swatch_name = {s: (texts.get(legend_labels[l].id, ("", 0.0))[0] or None)
                    for s, l in _pair_legend(swatches, legend_labels).items()}
+    seeds, swatch_of_seed = _legend_seeds(swatch_colors)
+    clusters, seed_of_cluster = _cluster_colors(bar_colors, seeds)
     cluster_centre = [
         tuple(statistics.median(bar_colors[k][ch] for k in members) for ch in range(3))
         if bar_colors[members[0]] is not None else None
         for members in clusters
     ]
     # one-to-one nearest-colour match between clusters and legend swatches
-    matches: dict[int, int] = {}
+    matches: dict[int, int] = {c: swatch_of_seed[seed] for c, seed in enumerate(seed_of_cluster)
+                               if seed is not None}
     candidates = sorted(
         (_distance(cluster_centre[c], swatch_colors[s]), c, s)
         for c in range(len(clusters)) for s in range(len(swatches))
-        if cluster_centre[c] is not None and swatch_colors[s] is not None)
+        if cluster_centre[c] is not None and swatch_colors[s] is not None
+        and c not in matches and s not in swatch_of_seed)
     for distance, c, s in candidates:
         if distance > COLOR_DISTANCE:
             break
@@ -381,7 +413,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             matches[c] = s
 
     ambiguous_series = False
-    if swatches and len(matches) < max(len(clusters), len(swatches)):
+    if swatches and len(matches) < max(len(clusters), len(seeds)):
         ambiguous_series = True
     if not swatches and len(clusters) > 1:
         ambiguous_series = True
