@@ -31,8 +31,8 @@ test split. Boxes were matched at IoU 0.5; YOLO used a confidence threshold of
 | YOLO, no mosaic | **0.9924** | **0.9431** | **0.9671** | **0.7941** |
 | YOLO, no HSV | 0.9898 | 0.9421 | 0.9653 | 0.7903 |
 
-Tesseract achieved **96.41%** normalized exact accuracy with authoritative
-PlotQA boxes and **95.57%** through the end-to-end YOLO and OCR pipeline. See
+Tesseract achieved **99.25%** normalized exact accuracy with authoritative
+PlotQA boxes and **98.68%** through the end-to-end YOLO and OCR pipeline. See
 the [OCR baseline report](docs/ocr_baseline.md) for the full results.
 
 Boxes were also matched at IoU 0.75 and 0.90 where no-mosaic model still scored highly at scores of 0.9595 and 0.9329 respectively. Refer to [experiment guide](docs/experiments.md) for full results.
