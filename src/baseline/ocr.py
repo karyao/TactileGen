@@ -611,8 +611,15 @@ def _tesseract_factory() -> OCRBackend:
     return TesseractBackend()
 
 
+def _rapidocr_factory() -> OCRBackend:
+    from src.rapidocr_ocr import RapidOCRBackend
+
+    return RapidOCRBackend()
+
+
 ENGINE_FACTORIES: dict[str, Callable[[], OCRBackend]] = {
     "tesseract": _tesseract_factory,
+    "rapidocr": _rapidocr_factory,
 }
 
 

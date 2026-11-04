@@ -233,6 +233,7 @@ class OCRBaselineIntegrationTest(unittest.TestCase):
     def test_engine_registry_accepts_another_backend(self):
         from src.baseline.ocr import ENGINE_FACTORIES
 
+        self.assertIn("rapidocr", ENGINE_FACTORIES)
         try:
             register_engine("fake-model", RoleBackend)
             self.assertIs(ENGINE_FACTORIES["fake-model"], RoleBackend)

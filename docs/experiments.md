@@ -150,6 +150,28 @@ protocol. Register another backend factory with
 `src.baseline.ocr.register_engine()` to compare it using the same extraction,
 matching, normalization, and report schema.
 
+To compare the PP-OCRv6-small recognition model through RapidOCR's ONNX
+Runtime backend, install its optional dependencies and select the registered
+engine. RapidOCR text detection is disabled; both evaluator tracks continue to
+use the PlotQA or YOLO boxes described above. Currently using the pre-trained model because need to figure out how to work with custom-trained weight models on different environments...
+
+```bash
+python3.12 -m pip install -r requirements-model.txt -r requirements-rapidocr.txt
+python3.12 -m src.baseline.ocr evaluate \
+  --engine rapidocr \
+  --annotations data/annotations_test.json \
+  --data-root dataset_yolo_vbars_clean \
+  --weights models/yolo_vbars/best.pt \
+  --limit 10 \
+  --workers 1 \
+  --output-dir output/rapidocr_test_smoke
+```
+
+The first recognition call initializes the ONNX model. Start with one worker;
+each additional evaluator worker creates and retains its own backend instance.
+The shared `--language` value is recorded in the report but does not select a
+different PP-OCRv6 model because this model is multilingual.
+
 Standard Ultralytics validation on the same test split gave overall box
 mAP50 **0.8325** and mAP50–95 **0.8141** across the roles present in these
 charts. Vertical-bar mAP50–95 was **0.9317**. Its machine-readable report is

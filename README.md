@@ -92,6 +92,26 @@ python3.12 -m src.ocr \
 The OCR JSON stores recognized text and confidence linked by detection ID.
 YOLO's detection JSON remains the sole source of roles and box coordinates.
 
+## Try PP-OCRv6 with RapidOCR
+
+RapidOCR provides a local ONNX Runtime build of PP-OCRv6. The integration uses
+only its recognition and orientation stages: YOLO remains the sole source of
+text boxes. Install the optional backend and select it on the same OCR command:
+
+```bash
+python3.12 -m pip install -r requirements-rapidocr.txt
+python3.12 -m src.ocr \
+  --engine rapidocr \
+  --image path/to/chart.png \
+  --detections output/demo/chart_detections.json \
+  --output output/demo/chart_rapidocr.json
+```
+
+The backend uses the multilingual PP-OCRv6-small recognition model. The
+`--language` option remains accepted because it is part of the shared OCR
+interface, but PP-OCRv6 does not use Tesseract language-pack codes. Tesseract
+remains the default engine, and the Gradio application continues to use it.
+
 ## Contributing and documentation
 
 The [experiment guide](docs/experiments.md) covers data preparation, model

@@ -118,7 +118,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Recognize text in regions from a YOLO detection JSON file."
     )
-    parser.add_argument("--engine", choices=("tesseract",), default="tesseract")
+    parser.add_argument(
+        "--engine", choices=("tesseract", "rapidocr"), default="tesseract"
+    )
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--detections", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -160,6 +162,10 @@ def _run_command(args: argparse.Namespace) -> OCRFrame:
         from src.tesseract_ocr import TesseractBackend
 
         backend = TesseractBackend()
+    elif args.engine == "rapidocr":
+        from src.rapidocr_ocr import RapidOCRBackend
+
+        backend = RapidOCRBackend()
     else:  # argparse constrains this today; keep dispatch explicit for future engines.
         raise ValueError(f"Unsupported OCR engine: {args.engine}")
     result = run_ocr(image, detections, backend, args.language)
