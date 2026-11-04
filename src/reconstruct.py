@@ -28,6 +28,10 @@ from src.contracts import (
 MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
+# Correct x labels in 400 PlotQA charts all had OCR confidence >= 0.88; confidence
+# only separates empty reads, so this is a floor, not a filter for wrong text.
+MIN_CATEGORY_OCR_CONFIDENCE = 0.8
+UNREADABLE_CATEGORY_CONFIDENCE = 0.1
 RESCUE_CONFIDENCE = 0.2
 RESCUE_STRIP_FRACTION = 0.5   # central share of the bar width that is probed
 RESCUE_ROW_FRACTION = 0.6     # share of strip pixels that must match for a row to count
@@ -249,6 +253,11 @@ def _legend_seeds(swatch_colors):
     return seeds, swatch_of_seed
 
 
+def _unreadable_category(text: str, ocr_confidence: float) -> bool:
+    """Empty, punctuation-only (including a lone symbol like ``|``) or low-confidence text."""
+    return not any(ch.isalnum() for ch in text) or ocr_confidence < MIN_CATEGORY_OCR_CONFIDENCE
+
+
 # --- bar rescue ---------------------------------------------------------------
 
 def _run_length(rgb: np.ndarray, left: int, right: int, start: int, step: int,
@@ -327,7 +336,8 @@ def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: s
 
 def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      min_confidence: float = MIN_CONFIDENCE,
-                     rescue_bars: bool = True) -> VerticalBarSpec:
+                     rescue_bars: bool = True,
+                     category_guard: bool = True) -> VerticalBarSpec:
     """Turn detections plus OCR into a ``VerticalBarSpec``.
 
     Raises ``ChartInterpretationError`` when there are no bars, no x tick
@@ -424,10 +434,17 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
 
     # categories
     categories = [texts.get(d.id, ("", 0.0))[0] for d in x_labels]
-    if any(not c for c in categories):
+    label_confidence = []
+    for j, d in enumerate(x_labels):
+        text, ocr_conf = texts.get(d.id, ("", 0.0))
+        unreadable = _unreadable_category(text, ocr_conf) if category_guard else not text
+        label_confidence.append(
+            UNREADABLE_CATEGORY_CONFIDENCE if unreadable else d.confidence * ocr_conf)
+        if unreadable:
+            confidence[f"category[{j}]"] = UNREADABLE_CATEGORY_CONFIDENCE
+    if any(key.startswith("category[") for key in confidence):
         flags.append("category_unreadable")
-    confidence["categories"] = round(statistics.mean(
-        d.confidence * texts.get(d.id, ("", 0.0))[1] for d in x_labels), 4)
+    confidence["categories"] = round(statistics.mean(label_confidence), 4)
     label_x = [_centre(d)[0] for d in x_labels]
     bar_label = [min(range(len(label_x)), key=lambda k: abs(label_x[k] - _centre(bar)[0]))
                  for bar in bars]

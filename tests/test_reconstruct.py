@@ -356,3 +356,43 @@ def test_rescue_counts_the_dark_bar_outline():
     _drop_detection(chart, 2)
     chart.image[337, 410:470] = (20, 40, 10)  # outline blended over the top row
     assert_values(chart.run(), [120, 60, 2])
+
+
+# --- category guard ------------------------------------------------------------
+
+def chart_with_label(text, ocr_conf=0.95):
+    chart = base_chart()
+    label = [d for d in chart.detections if d.role == "x_tick_label"][1]
+    chart.texts[label.id] = (text, ocr_conf)
+    return chart
+
+
+@pytest.mark.parametrize("text", ["", "|", "-", "...", "  "])
+def test_empty_or_symbol_only_category_is_unreadable(text):
+    spec = chart_with_label(text).run()
+    assert "category_unreadable" in spec.flags
+    assert spec.confidence["category[1]"] < 0.2
+    assert "category[0]" not in spec.confidence
+    assert spec.confidence["categories"] < 0.9 * 0.95 * 0.9  # pulled down by the bad label
+
+
+def test_low_confidence_category_is_unreadable():
+    spec = chart_with_label("Iran", ocr_conf=0.5).run()
+    assert "category_unreadable" in spec.flags
+
+
+@pytest.mark.parametrize("text", ["Iran", "1999", "a", "3", "US$", "Latin America(developing only)"])
+def test_readable_categories_are_not_flagged(text):
+    spec = chart_with_label(text).run()
+    assert "category_unreadable" not in spec.flags
+    assert not any(key.startswith("category[") for key in spec.confidence)
+
+
+def test_guard_off_only_flags_empty_text():
+    def off(text, conf):
+        chart = chart_with_label(text, conf)
+        return reconstruct_vbar(chart.frame(), chart.texts, chart.image, category_guard=False)
+
+    assert "category_unreadable" not in off("|", 0.95).flags
+    assert "category_unreadable" not in off("Iran", 0.5).flags
+    assert "category_unreadable" in off("", 0.0).flags
