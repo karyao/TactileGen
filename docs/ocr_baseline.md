@@ -82,6 +82,52 @@ baseline for this test split, but they do not prove equivalent performance on
 real charts with different fonts, backgrounds, resolutions, rotations, or
 annotation conventions.
 
+## Chart title clipping
+
+> The headline numbers in this document and in the README were measured before
+> this change and are unchanged. They will be updated after the full-split
+> rerun; the chart-title results below come from a 300-image sample only.
+
+**Problem.** PlotQA's `chart_title` annotation boxes end short of the drawn
+text (for example "...Agricultural sector" is boxed as "...Agricultural"). The
+oracle track was clipped too, so this is not a YOLO or Tesseract fault alone.
+YOLO was trained on those boxes and inherits the short ones; end-to-end also
+clipped the left end ("Amount spent" read as "unt spent").
+
+**Fix.** For `chart_title` only, `src/tesseract_ocr.py` OCRs a full-width strip:
+x from 0 to the image width, y from the box top to the box bottom plus vertical
+padding. Text detected in the same vertical band is skipped: the strip starts
+after text to the left of the title (y tick labels, the rotated y-axis title)
+and stops before text to the right (a legend at the top right). Text
+overlapping the title box itself is ignored. Upscaling, grayscale/Otsu
+candidates and `--psm 7` are unchanged, and all other roles crop as before.
+`_TITLE_FULL_WIDTH_STRIP` turns the behavior off. The 40 px margin kept clear
+of legend labels (to avoid the legend swatch and frame) was derived from three
+charts' annotations and is unverified on others.
+
+**Results** on the same 300 test images (`--limit 300`, before -> after):
+
+| Measure | Oracle | End-to-end |
+| --- | --- | --- |
+| Title normalized exact accuracy | 0.8667 -> 0.9733 | 0.7867 -> 0.9733 |
+| Title character error rate | 1.33% -> 0.28% | 3.60% -> 1.82% |
+| Images with all labels correct | 0.78 -> 0.8767 | 0.6533 -> 0.8033 |
+
+All other roles are unchanged to the digit.
+
+**Remaining misses** (20 rows in `output/ocr_title_fix/regions.csv`):
+
+- 8 charts whose long titles are cut off by the image's right edge in the
+  source PNG, counted in both tracks. In `test/22514.png` the title ends
+  "...Central Eu"; the missing letters are not in the pixels. This was
+  confirmed by viewing 22514.png; the other 7 charts were not individually
+  viewed.
+- 4 extra YOLO `chart_title` detections, scored as spurious although their
+  text is correct.
+
+**Caveats.** Only 300 images were measured, not the full 11,242; the full-split
+rerun is pending. The 40 px legend margin needs checking on more charts.
+
 ## Reproduction and artifacts
 
 Run the full evaluation from the repository root:
