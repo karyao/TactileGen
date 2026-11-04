@@ -22,6 +22,15 @@ _TARGET_TEXT_HEIGHT = 32
 _MAX_UPSCALE = 4
 _TALL_ASPECT_RATIO = 1.5
 _TESSERACT_CONFIG = "--psm 7"
+# PlotQA's chart_title boxes stop short of the drawn text, and YOLO inherits
+# that bias, so titles are read from a full-width strip. Set to False to crop
+# titles like every other role.
+_TITLE_FULL_WIDTH_STRIP = True
+_TITLE_ROLE = "chart_title"
+_STRIP_NEIGHBOR_MARGIN = 2
+# A legend label sits ~35 px right of its swatch and frame, neither of which is
+# a detected text region, so keep clear of them.
+_STRIP_LEGEND_MARGIN = 40
 
 
 def _load_pytesseract():
@@ -53,6 +62,47 @@ def _crop_with_padding(image: np.ndarray, detection: Detection) -> np.ndarray:
     return image[top:bottom, left:right].copy()
 
 
+def _title_strip_bounds(
+    detection: Detection, neighbors: Sequence[Detection], width: int
+) -> tuple[int, int]:
+    """Horizontal extent of the title strip, stopping at other text in its band."""
+    box = detection.box
+    padding = max(
+        _MIN_PADDING, min(_MAX_PADDING, math.ceil(0.1 * (box.y2 - box.y1)))
+    )
+    top, bottom = box.y1 - padding, box.y2 + padding
+    left, right = 0, width
+    for other in neighbors:
+        other_box = other.box
+        if other.id == detection.id or other.role == _TITLE_ROLE:
+            continue
+        if other_box.y2 <= top or other_box.y1 >= bottom:
+            continue
+        margin = (_STRIP_LEGEND_MARGIN if other.role == "legend_label"
+                  else _STRIP_NEIGHBOR_MARGIN)
+        # Text overlapping the title box itself is ambiguous; leave it alone.
+        if other_box.x2 <= box.x1:
+            left = max(left, math.ceil(other_box.x2) + margin)
+        elif other_box.x1 >= box.x2:
+            right = min(right, math.floor(other_box.x1) - margin)
+    # Never let a neighbour cut into the detected title box itself.
+    return min(left, math.floor(box.x1)), max(right, math.ceil(box.x2))
+
+
+def _title_strip(
+    image: np.ndarray, detection: Detection, neighbors: Sequence[Detection]
+) -> np.ndarray:
+    height, width = image.shape[:2]
+    box = detection.box
+    padding = max(
+        _MIN_PADDING, min(_MAX_PADDING, math.ceil(0.1 * (box.y2 - box.y1)))
+    )
+    top = max(0, math.floor(box.y1) - padding)
+    bottom = min(height, math.ceil(box.y2) + padding)
+    left, right = _title_strip_bounds(detection, neighbors, width)
+    return image[top:bottom, left:right].copy()
+
+
 def _grayscale(image: np.ndarray) -> np.ndarray:
     if image.ndim == 2:
         return image.copy()
@@ -78,9 +128,12 @@ def _orientations(crop: np.ndarray, detection: Detection) -> tuple[np.ndarray, .
 
 
 def _recognition_candidates(
-    image: np.ndarray, detection: Detection
+    image: np.ndarray, detection: Detection, neighbors: Sequence[Detection] = ()
 ) -> tuple[np.ndarray, ...]:
-    crop = _crop_with_padding(image, detection)
+    if _TITLE_FULL_WIDTH_STRIP and detection.role == _TITLE_ROLE:
+        crop = _title_strip(image, detection, neighbors)
+    else:
+        crop = _crop_with_padding(image, detection)
     candidates = []
     for oriented in _orientations(crop, detection):
         gray = _grayscale(oriented)
@@ -165,11 +218,12 @@ class TesseractBackend:
         detection: Detection,
         *,
         language: str,
+        neighbors: Sequence[Detection] = (),
     ) -> OCRBackendResult | None:
         pytesseract = _load_pytesseract()
         self._validate_language(pytesseract, language)
         best = None
-        for candidate in _recognition_candidates(image, detection):
+        for candidate in _recognition_candidates(image, detection, neighbors):
             try:
                 data = pytesseract.image_to_data(
                     candidate,
@@ -216,7 +270,7 @@ class TesseractBackend:
         pages = []
         owners = []
         for detection_index, detection in enumerate(detections):
-            for candidate in _recognition_candidates(image, detection):
+            for candidate in _recognition_candidates(image, detection, detections):
                 pages.append(Image.fromarray(candidate))
                 owners.append(detection_index)
 

@@ -37,8 +37,8 @@ def empty_result():
     return {"text": [], "conf": []}
 
 
-def detection(box, role="chart_title"):
-    return Detection("text", role, Box(*box), 0.9)
+def detection(box, role="x_tick_label", id="text"):
+    return Detection(id, role, Box(*box), 0.9)
 
 
 class TesseractBackendTest(unittest.TestCase):
@@ -66,6 +66,49 @@ class TesseractBackendTest(unittest.TestCase):
                 "output_type": "dict-output", "timeout": 2.5,
             })
         self.assertTrue(np.array_equal(image, original))
+
+    def test_title_is_read_from_full_width_strip_and_other_roles_are_unchanged(self):
+        image = np.zeros((60, 200, 3), dtype=np.uint8)
+        title = detection((80, 10, 100, 26), "chart_title")  # narrower than the text
+        shapes = {}
+        for label, item in (("title", title), ("tick", detection((80, 10, 100, 26)))):
+            module = fake_pytesseract(results=(result(), empty_result()))
+            with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
+                TesseractBackend().recognize(image, item, language="eng")
+            shapes[label] = module.image_to_data.call_args_list[0].args[0].shape
+        # 16 px box + 2 px padding each side = 20 rows, doubled to reach 32+.
+        self.assertEqual(shapes["title"], (40, 400))
+        self.assertEqual(shapes["tick"], (40, 48))
+
+        with patch("src.tesseract_ocr._TITLE_FULL_WIDTH_STRIP", False):
+            module = fake_pytesseract(results=(result(), empty_result()))
+            with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
+                TesseractBackend().recognize(image, title, language="eng")
+        self.assertEqual(module.image_to_data.call_args_list[0].args[0].shape, (40, 48))
+
+    def test_title_strip_stops_at_other_text_in_its_band(self):
+        from src.tesseract_ocr import _title_strip_bounds
+
+        title = detection((80, 10, 100, 26), "chart_title", "title")
+        neighbors = (
+            title,
+            detection((5, 5, 20, 30), "y_axis_title", "ytitle"),
+            detection((25, 12, 40, 24), "y_tick_label", "ytick"),
+            detection((150, 8, 190, 28), "legend_label", "legend"),
+            detection((30, 100, 60, 120), "x_tick_label", "below"),  # other band
+            detection((90, 12, 95, 24), "legend_label", "inside"),  # inside title box
+        )
+        self.assertEqual(_title_strip_bounds(title, neighbors, 200), (42, 110))
+        self.assertEqual(_title_strip_bounds(title, (title,), 200), (0, 200))
+
+    def test_recognize_many_gives_title_its_neighbors(self):
+        from src.tesseract_ocr import _recognition_candidates
+
+        title = detection((80, 10, 100, 26), "chart_title", "title")
+        tick = detection((10, 12, 40, 24), "y_tick_label", "tick")
+        image = np.zeros((60, 200, 3), dtype=np.uint8)
+        (strip, _), = [_recognition_candidates(image, title, (title, tick))]
+        self.assertEqual(strip.shape, (40, 316))  # x from 42 to 200, doubled
 
     def test_tall_crop_tries_three_orientations_and_keeps_first_confidence_tie(self):
         responses = [
@@ -201,6 +244,22 @@ class TesseractBackendTest(unittest.TestCase):
         self.assertTrue(recognized.text)
         self.assertGreaterEqual(recognized.confidence, 0.0)
         self.assertLessEqual(recognized.confidence, 1.0)
+
+    @unittest.skipUnless(
+        shutil.which("tesseract") and importlib.util.find_spec("pytesseract"),
+        "Tesseract and pytesseract are not installed",
+    )
+    def test_installed_tesseract_reads_title_wider_than_its_box(self):
+        text = "Percentage of female workers employed in Agricultural sector"
+        image = np.full((50, 800, 3), 255, dtype=np.uint8)
+        cv2.putText(image, text, (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 1,
+                    cv2.LINE_AA)
+        narrow = Detection("title", "chart_title", Box(120, 10, 500, 42), 0.9)
+        recognized = TesseractBackend().recognize(image, narrow, language="eng")
+        self.assertEqual(recognized.text, text)
+        with patch("src.tesseract_ocr._TITLE_FULL_WIDTH_STRIP", False):
+            clipped = TesseractBackend().recognize(image, narrow, language="eng")
+        self.assertNotEqual(clipped.text, text)
 
 
 if __name__ == "__main__":
