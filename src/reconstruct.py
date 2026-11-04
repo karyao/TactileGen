@@ -28,9 +28,6 @@ from src.contracts import (
 MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
-# Correct x labels in 400 PlotQA charts all had OCR confidence >= 0.88; confidence
-# only separates empty reads, so this is a floor, not a filter for wrong text.
-MIN_CATEGORY_OCR_CONFIDENCE = 0.8
 UNREADABLE_CATEGORY_CONFIDENCE = 0.1
 RESCUE_CONFIDENCE = 0.2
 RESCUE_STRIP_FRACTION = 0.5   # central share of the bar width that is probed
@@ -253,9 +250,12 @@ def _legend_seeds(swatch_colors):
     return seeds, swatch_of_seed
 
 
-def _unreadable_category(text: str, ocr_confidence: float) -> bool:
-    """Empty, punctuation-only (including a lone symbol like ``|``) or low-confidence text."""
-    return not any(ch.isalnum() for ch in text) or ocr_confidence < MIN_CATEGORY_OCR_CONFIDENCE
+def _unreadable_category(text: str) -> bool:
+    """Empty or punctuation-only text, including a lone symbol like ``|``.
+
+    OCR confidence is not used: wrong reads and correct reads overlap (0.7-0.96).
+    """
+    return not any(ch.isalnum() for ch in text)
 
 
 # --- bar rescue ---------------------------------------------------------------
@@ -437,7 +437,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     label_confidence = []
     for j, d in enumerate(x_labels):
         text, ocr_conf = texts.get(d.id, ("", 0.0))
-        unreadable = _unreadable_category(text, ocr_conf) if category_guard else not text
+        unreadable = _unreadable_category(text) if category_guard else not text
         label_confidence.append(
             UNREADABLE_CATEGORY_CONFIDENCE if unreadable else d.confidence * ocr_conf)
         if unreadable:

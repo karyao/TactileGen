@@ -376,9 +376,9 @@ def test_empty_or_symbol_only_category_is_unreadable(text):
     assert spec.confidence["categories"] < 0.9 * 0.95 * 0.9  # pulled down by the bad label
 
 
-def test_low_confidence_category_is_unreadable():
+def test_low_ocr_confidence_alone_does_not_flag_a_category():
     spec = chart_with_label("Iran", ocr_conf=0.5).run()
-    assert "category_unreadable" in spec.flags
+    assert "category_unreadable" not in spec.flags
 
 
 @pytest.mark.parametrize("text", ["Iran", "1999", "a", "3", "US$", "Latin America(developing only)"])
@@ -394,5 +394,4 @@ def test_guard_off_only_flags_empty_text():
         return reconstruct_vbar(chart.frame(), chart.texts, chart.image, category_guard=False)
 
     assert "category_unreadable" not in off("|", 0.95).flags
-    assert "category_unreadable" not in off("Iran", 0.5).flags
     assert "category_unreadable" in off("", 0.0).flags

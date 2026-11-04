@@ -83,7 +83,7 @@ Flags (each is "could not resolve this", not "wrong"):
 | `baseline_outside_plot`, `bar_baseline_offset` | The calibrated zero line is outside the plot, or bar bases sit far from it. |
 | `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. |
 | `category_count_mismatch`, `category_ambiguous` | Bars and x labels disagree in number, or two bars of a series map to one label. |
-| `category_unreadable` | An x label is empty, symbol-only, or has OCR confidence below 0.8; that category's confidence is set to 0.1 (`confidence["category[j]"]`). |
+| `category_unreadable` | An x label is empty or has no letter or digit (e.g. a lone `|`); OCR confidence is not used. That category's confidence is set to 0.1 (`confidence["category[j]"]`). |
 | `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one. |
 | `plot_area_missing` | No plot area detected; position filters were skipped. |
 | `bars_rescued:N` | N values had no detected bar and were measured from pixels (`SeriesSpec.value_rescued`, low `value_confidence`). |
