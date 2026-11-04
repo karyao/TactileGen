@@ -60,3 +60,21 @@ fixture or optional interchange file is loaded. In-process stages use the
 typed objects directly and should not serialize whole datasets or write a
 file per image by default. Representative throughput and memory measurements
 belong to the model and end-to-end pipeline tasks.
+
+## VerticalBarSpec (schema 0.2)
+
+`src/reconstruct.py` turns a `DetectionFrame`, OCR text and the image into a
+`VerticalBarSpec` with `reconstruct_vbar(frame, ocr_texts, image)`. Unlike
+`VerticalBarChart`, titles may be `None`, series values may be `None`, and
+anything the interpreter could not resolve is listed in `flags` instead of
+raising. `ChartInterpretationError` is raised only when there are no bars, no
+x tick labels, or fewer than two consistent y ticks. `y_axis.min/max` span the
+tick values and the calibrated plot edges; K/M/B tick suffixes are expanded
+into the numbers and only `%` is kept as `unit`.
+
+Flags: `title_missing`, `x_axis_title_missing`, `y_axis_title_missing`,
+`title_touches_right_edge`, `y_ticks_dropped:N`, `y_ticks_not_arithmetic`,
+`y_calibration_ambiguous`, `baseline_outside_plot`, `bar_baseline_offset`,
+`value_clipped_at_axis`, `category_count_mismatch`, `category_ambiguous`,
+`category_unreadable`, `series_ambiguous`, `plot_area_missing`.
+`python -m scripts.eval_reconstruct` measures the stage on PlotQA test charts.
