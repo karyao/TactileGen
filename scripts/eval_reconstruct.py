@@ -85,6 +85,7 @@ def _relative_errors(spec, record):
 def _rescued_values(spec, record):
     """Details of rescued values that line up with the ground truth."""
     details = []
+    axis_min = min(float(t) for t in record["general_figure_info"]["y_axis"]["major_ticks"]["values"])
     for index, j, predicted, truth, scale in _aligned_values(spec, record):
         if not spec.series[index].value_rescued[j]:
             continue
@@ -92,6 +93,7 @@ def _rescued_values(spec, record):
             "zero": predicted == 0.0, "truth": truth, "predicted": predicted,
             "relative": None if truth == 0 else abs(predicted - truth) / abs(truth),
             "scaled": abs(predicted - truth) / scale,
+            "hidden": truth < 0 <= axis_min,  # negative value on an axis that starts at 0
             "truth_below_5pct": abs(truth) < 0.05 * scale,
             "truth_below_1pct": abs(truth) < 0.01 * scale,
         })
@@ -307,6 +309,22 @@ def print_rescue_comparison(rows):
               f"{sum(not d['truth_below_1pct'] for d in zeros)} (GT >= 1% of chart max)")
         print("  GT values behind inferred zeros:",
               sorted((round(d["truth"], 4) for d in zeros), key=abs)[-5:], "(largest 5)")
+        def line(label, items):
+            if not items:
+                return
+            rel_items = [d["relative"] for d in items if d["relative"] is not None]
+            scaled_items = [d["scaled"] for d in items]
+            print(f"  {label:<34} n={len(items):>3} | relative median "
+                  f"{statistics.median(rel_items):.3f} p90 {_percentile(rel_items, 0.9):.3f} | "
+                  f"|err|/chart max median {statistics.median(scaled_items):.4f} "
+                  f"p90 {_percentile(scaled_items, 0.9):.4f} | within 5% rel "
+                  f"{sum(e <= 0.05 for e in rel_items) / len(rel_items):.0%}")
+
+        print("  breakdown of rescued values that line up with GT:")
+        line("measured from pixels", [d for d in aligned if not d["zero"]])
+        line("inferred zero, visible axis", [d for d in aligned if d["zero"] and not d["hidden"]])
+        line("inferred zero, GT negative/not drawn", [d for d in aligned if d["zero"] and d["hidden"]])
+        line("all except not-drawn negatives", [d for d in aligned if not d["hidden"]])
         worst = sorted(aligned, key=lambda d: -d["scaled"])[:5]
         print("  worst rescued (predicted, truth):",
               [(round(d["predicted"], 4), round(d["truth"], 4)) for d in worst])
