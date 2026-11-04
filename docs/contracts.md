@@ -72,9 +72,23 @@ x tick labels, or fewer than two consistent y ticks. `y_axis.min/max` span the
 tick values and the calibrated plot edges; K/M/B tick suffixes are expanded
 into the numbers and only `%` is kept as `unit`.
 
-Flags: `title_missing`, `x_axis_title_missing`, `y_axis_title_missing`,
-`title_touches_right_edge`, `y_ticks_dropped:N`, `y_ticks_not_arithmetic`,
-`y_calibration_ambiguous`, `baseline_outside_plot`, `bar_baseline_offset`,
-`value_clipped_at_axis`, `category_count_mismatch`, `category_ambiguous`,
-`category_unreadable`, `series_ambiguous`, `plot_area_missing`.
+Flags (each is "could not resolve this", not "wrong"):
+
+| Flag | Meaning |
+| --- | --- |
+| `title_missing`, `x_axis_title_missing`, `y_axis_title_missing` | No title box detected, or its text was empty. The field is `None`. |
+| `title_touches_right_edge` | The title box reaches the right image edge; the text may be clipped. |
+| `y_ticks_dropped:N` | N y tick labels were unreadable or inconsistent with the fitted line. |
+| `y_ticks_not_arithmetic`, `y_calibration_ambiguous` | Surviving ticks are not evenly spaced, or two tick subsets fit equally well. |
+| `baseline_outside_plot`, `bar_baseline_offset` | The calibrated zero line is outside the plot, or bar bases sit far from it. |
+| `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. |
+| `category_count_mismatch`, `category_ambiguous` | Bars and x labels disagree in number, or two bars of a series map to one label. |
+| `category_unreadable` | An x label is empty, symbol-only, or has OCR confidence below 0.8; that category's confidence is set to 0.1 (`confidence["category[j]"]`). |
+| `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one. |
+| `plot_area_missing` | No plot area detected; position filters were skipped. |
+| `bars_rescued:N` | N values had no detected bar and were measured from pixels (`SeriesSpec.value_rescued`, low `value_confidence`). |
+| `value_inferred_zero` | At least one rescued value found no bar pixels and was set to 0.0. |
+
+Series colours are seeded from the legend swatches, so near-identical series colours stay separate when a legend is detected. Bar rescue and the category guard can be switched off with `rescue_bars=False` and `category_guard=False`.
+
 `python -m scripts.eval_reconstruct` measures the stage on PlotQA test charts.
