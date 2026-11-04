@@ -241,3 +241,111 @@ def test_similar_colours_without_legend_fall_back_to_one_cluster():
     spec = _grouped(SIMILAR, legend=False).run()
     assert len(spec.series) == 1
     assert {"category_count_mismatch", "category_ambiguous"} <= set(spec.flags)
+
+
+# --- bar rescue ----------------------------------------------------------------
+
+def _drop_detection(chart, index):
+    """Remove the index-th vertical_bar detection, leaving its pixels on the image."""
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    chart.detections.remove(bars[index])
+
+
+def test_missing_near_zero_bar_is_rescued_in_single_series_chart():
+    chart = base_chart(values=(120, 60, 2))  # the 2-unit bar is 3 px tall
+    _drop_detection(chart, 2)
+    spec = chart.run()
+    assert_values(spec, [120, 60, 2])
+    assert spec.series[0].value_rescued == [False, False, True]
+    assert spec.series[0].value_confidence[2] < spec.series[0].value_confidence[0]
+    assert "bars_rescued:1" in spec.flags
+    assert "category_count_mismatch" not in spec.flags
+    assert "value_inferred_zero" not in spec.flags
+
+
+def test_rescue_with_no_bar_pixels_infers_zero():
+    chart = base_chart(values=(120, 60, 5))
+    _drop_detection(chart, 2)
+    chart.image[300:345, 400:580] = 255  # erase the third bar
+    spec = chart.run()
+    assert spec.series[0].values[2] == 0.0
+    assert spec.series[0].value_rescued[2] is True
+    assert "value_inferred_zero" in spec.flags and "bars_rescued:1" in spec.flags
+
+
+def test_rescue_off_keeps_mismatch():
+    chart = base_chart(values=(120, 60, 2))
+    _drop_detection(chart, 2)
+    spec = reconstruct_vbar(chart.frame(), chart.texts, chart.image, rescue_bars=False)
+    assert "category_count_mismatch" in spec.flags
+    assert spec.series[0].values[2] is None
+
+
+def grouped_chart(colours, groups, missing=(), width=30, shift=0.0):
+    """Adjacent bars of ``width`` px per group; ``shift`` moves a group off its tick."""
+    chart = Chart()
+    chart.add("plot_area", PLOT)
+    for tick in (0, 50, 100, 150, 200):
+        chart.add("y_tick_label", (40, y_of(tick) - 6, 75, y_of(tick) + 6), text=str(tick))
+    slot = (PLOT[2] - PLOT[0]) / len(groups)
+    count = len(colours)
+    for g, values in enumerate(groups):
+        cx = PLOT[0] + slot * (g + 0.5)
+        chart.add("x_tick_label", (cx - 20, 345, cx + 20, 360), text=f"G{g}")
+        for s, (value, colour) in enumerate(zip(values, colours)):
+            bx = cx + shift + (s - (count - 1) / 2) * width
+            box = (bx - width / 2, y_of(value), bx + width / 2, ZERO_Y)
+            chart.paint(box, colour)
+            if (g, s) not in missing:
+                chart.add("vertical_bar", box)
+    for row, colour in enumerate(colours):
+        y = 362 + 12 * row
+        chart.add("legend_swatch", (100, y, 114, y + 10))
+        chart.paint((100, y, 114, y + 10), colour)
+        chart.add("legend_label", (120, y, 180, y + 10), text=f"S{row}")
+    return chart
+
+
+RED, GREEN, BLUE = (30, 40, 200), (60, 180, 60), (200, 100, 30)
+
+
+def test_missing_near_zero_bar_is_rescued_in_grouped_chart():
+    chart = grouped_chart((RED, GREEN), [(100, 50), (150, 2), (40, 120)], missing={(1, 1)})
+    spec = chart.run()
+    assert_values(spec, [100, 150, 40], series=0)
+    assert_values(spec, [50, 2, 120], series=1)
+    assert spec.series[1].value_rescued == [False, True, False]
+    assert spec.series[0].value_rescued == [False, False, False]
+    assert "bars_rescued:1" in spec.flags
+    assert "category_count_mismatch" not in spec.flags
+
+
+def test_rescue_follows_group_offset_for_three_series():
+    # PlotQA places groups of 3+ bars half a bar left of the tick, so slot
+    # positions must come from the detected bars, not a centred formula.
+    chart = grouped_chart((RED, GREEN, BLUE), [(100, 50, 80), (150, 60, 2), (40, 120, 90)],
+                          missing={(1, 2)}, shift=-15.0)
+    spec = chart.run()
+    assert_values(spec, [80, 2, 90], series=2)
+    assert spec.series[2].value_rescued == [False, True, False]
+    assert "category_count_mismatch" not in spec.flags
+
+
+def test_unrescuable_slot_keeps_mismatch():
+    # The axis starts at 100, so the zero line is below the plot and nothing can be measured.
+    def y_at(value):
+        return PLOT[3] - 1.5 * (value - 100)
+
+    chart = Chart()
+    chart.add("plot_area", PLOT)
+    for tick in (100, 150, 200):
+        chart.add("y_tick_label", (40, y_at(tick) - 6, 75, y_at(tick) + 6), text=str(tick))
+    for i, value in enumerate((150, 120)):
+        box = (100 + 200 * i, y_at(value), 160 + 200 * i, PLOT[3])
+        chart.add("vertical_bar", box)
+        chart.paint(box, (200, 100, 30))
+    for i in range(3):
+        chart.add("x_tick_label", (100 + 200 * i, 345, 160 + 200 * i, 360), text=f"C{i}")
+    spec = chart.run()
+    assert "baseline_outside_plot" in spec.flags
+    assert "category_count_mismatch" in spec.flags

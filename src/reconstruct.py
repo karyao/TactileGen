@@ -28,6 +28,10 @@ from src.contracts import (
 MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
+RESCUE_CONFIDENCE = 0.2
+RESCUE_STRIP_FRACTION = 0.5   # central share of the bar width that is probed
+RESCUE_ROW_FRACTION = 0.6     # share of strip pixels that must match for a row to count
+RESCUE_AXIS_ROWS = 2          # non-matching rows tolerated at the zero line (axis stroke)
 SEED_MERGE_DISTANCE = 10.0  # swatches this close are one legend entry (duplicate detections)
 DARK_LUMINANCE = 60.0
 TITLE_EDGE_PX = 2
@@ -243,6 +247,47 @@ def _legend_seeds(swatch_colors):
     return seeds, swatch_of_seed
 
 
+# --- bar rescue ---------------------------------------------------------------
+
+def _run_length(rgb: np.ndarray, left: int, right: int, start: int, step: int,
+                color: tuple[float, ...]) -> int:
+    """Contiguous rows of ``color`` from ``start`` in direction ``step`` (+1 down, -1 up).
+
+    A few non-matching rows right at the zero line are skipped so an axis
+    stroke does not hide a short bar.
+    """
+    height = rgb.shape[0]
+    run = skipped = 0
+    y = start
+    while 0 <= y < height:
+        pixels = rgb[y, left:right].astype(float)
+        match = np.mean(np.linalg.norm(pixels - np.array(color), axis=1) <= COLOR_DISTANCE)
+        if match >= RESCUE_ROW_FRACTION:
+            run += 1
+        elif run == 0 and skipped < RESCUE_AXIS_ROWS:
+            skipped += 1
+        else:
+            break
+        y += step
+    return run
+
+
+def _rescue_value(rgb: np.ndarray, centre_x: float, width: float, baseline: float,
+                  slope: float, color: tuple[float, ...]) -> float:
+    """Value of the bar at ``centre_x`` measured from pixels, 0.0 if none are found."""
+    half = RESCUE_STRIP_FRACTION * width / 2
+    left = max(0, int(round(centre_x - half)))
+    right = min(rgb.shape[1], max(left + 1, int(round(centre_x + half))))
+    if left >= right:
+        return 0.0
+    up = _run_length(rgb, left, right, int(round(baseline)) - 1, -1, color)
+    down = _run_length(rgb, left, right, int(round(baseline)), 1, color)
+    if max(up, down) < 1:
+        return 0.0
+    # value = slope * y + intercept with zero at the baseline: y moves by the run.
+    return -slope * up if up >= down else slope * down
+
+
 # --- legend --------------------------------------------------------------------
 
 def _pair_legend(swatches: list[Detection], labels: list[Detection]):
@@ -275,7 +320,8 @@ def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: s
 
 
 def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
-                     min_confidence: float = MIN_CONFIDENCE) -> VerticalBarSpec:
+                     min_confidence: float = MIN_CONFIDENCE,
+                     rescue_bars: bool = True) -> VerticalBarSpec:
     """Turn detections plus OCR into a ``VerticalBarSpec``.
 
     Raises ``ChartInterpretationError`` when there are no bars, no x tick
@@ -420,10 +466,14 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     if any(bar_colors[members[0]] is None for members in clusters):
         ambiguous_series = True
 
+    bar_width = statistics.median(d.box.x2 - d.box.x1 for d in bars)
+    can_rescue = rescue_bars and baseline_inside
     series = []
     count_mismatch = category_ambiguous = False
+    rescued_total = rescued_zero = 0
     for c, members in enumerate(clusters):
         row: list[float | None] = [None] * len(categories)
+        kept: dict[int, int] = {}
         best_gap: dict[int, float] = {}
         for k in members:
             slot = bar_label[k]
@@ -433,13 +483,36 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                 if gap >= best_gap[slot]:
                     continue
             best_gap[slot] = gap
+            kept[slot] = k
             row[slot] = values[k]
-        if len(members) != len(categories):
+        rescued = [False] * len(categories)
+        value_conf: list[float | None] = [
+            bars[kept[j]].confidence if j in kept else None for j in range(len(categories))]
+        centre = cluster_centre[c]
+        n_rescued = 0
+        if can_rescue and centre is not None and kept:
+            # Groups sit at a fixed offset from the tick that depends on the
+            # series count, so measure it from this series' detected bars.
+            offset = statistics.median(_centre(bars[k])[0] - label_x[j] for j, k in kept.items())
+            for j in range(len(categories)):
+                if row[j] is not None:
+                    continue
+                row[j] = _rescue_value(rgb, label_x[j] + offset, bar_width, baseline, a, centre)
+                rescued[j] = True
+                value_conf[j] = RESCUE_CONFIDENCE
+                n_rescued += 1
+                rescued_zero += row[j] == 0.0
+        rescued_total += n_rescued
+        if len(members) + n_rescued != len(categories):
             count_mismatch = True
         name = swatch_name.get(matches[c]) if c in matches else None
-        centre = cluster_centre[c]
         series.append(SeriesSpec(
-            name, _hex(None if centre is None else tuple(int(v) for v in centre)), row))
+            name, _hex(None if centre is None else tuple(int(v) for v in centre)), row,
+            value_rescued=rescued, value_confidence=value_conf))
+    if rescued_total:
+        flags.append(f"bars_rescued:{rescued_total}")
+    if rescued_zero:
+        flags.append("value_inferred_zero")
     if count_mismatch:
         flags.append("category_count_mismatch")
     if category_ambiguous:

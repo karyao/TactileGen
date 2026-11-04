@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 # Keep this order aligned with existing YOLO class IDs and classes.txt files.
@@ -215,11 +215,19 @@ class YAxisSpec:
 
 @dataclass(frozen=True)
 class SeriesSpec:
-    """One bar series; ``values`` align with ``VerticalBarSpec.categories``."""
+    """One bar series; ``values`` align with ``VerticalBarSpec.categories``.
+
+    ``value_rescued[i]`` is True when ``values[i]`` was measured from pixels
+    because no bar was detected (a rescued 0.0 means no bar pixels were found).
+    ``value_confidence[i]`` is the detector confidence, or a low fixed value
+    for rescued values. Both are empty when not provided.
+    """
 
     name: str | None
     source_color: str | None
     values: list[float | None]
+    value_rescued: list[bool] = field(default_factory=list)
+    value_confidence: list[float | None] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -265,5 +273,8 @@ class VerticalBarSpec:
                 raise ValueError("series values must match category count")
             if any(v is not None and not math.isfinite(v) for v in item.values):
                 raise ValueError("series values must be finite or None")
+            for extra in (item.value_rescued, item.value_confidence):
+                if extra and len(extra) != len(item.values):
+                    raise ValueError("per-value lists must match series values")
         for value in self.confidence.values():
             _confidence(value)
