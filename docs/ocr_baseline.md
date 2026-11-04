@@ -2,8 +2,8 @@
 
 ## Result summary
 
-Tesseract was evaluated on all 11,242 images in the PlotQA vertical-bar test
-split. There are two primary evaluation modes:
+Tesseract was evaluated on all 11,242 images in the leakage-cleaned PlotQA
+vertical-bar test split. There are two primary evaluation modes:
 
 | Evaluation | Input to Tesseract | Normalized exact accuracy | Character error rate | Word error rate |
 | --- | --- | ---: | ---: | ---: |
@@ -63,7 +63,7 @@ this; see [Chart title clipping](#chart-title-clipping).
 ## Dataset and scoring details
 
 - Source annotations: `data/annotations_test.json`
-- Selected images: `dataset_yolo_vbars/images/test`
+- Selected images: `dataset_yolo_vbars_clean/images/test`
 - Model: `models/yolo_vbars/best.pt`
 - Detector confidence: 0.25
 - Detector NMS IoU: 0.70
@@ -72,8 +72,11 @@ this; see [Chart title clipping](#chart-title-clipping).
 - Unique scored regions: 180,731
 - Duplicate PlotQA annotations removed: 117,573
 - Wholly off-image annotations excluded: 1
-- These results use `dataset_yolo_vbars` built with `prepare_plotqa.py`, not
-  the leakage-cleaned folder.
+
+These results were reproduced on a test split rebuilt from the raw PlotQA
+annotations with `prepare_plotqa.py` (`dataset_yolo_vbars`). The leakage cleaner
+keeps every test image, so the image and region counts are identical (11,242
+images, 180,731 unique regions).
 
 Normalized exact matching applies Unicode NFKC normalization, case folding,
 trimming, and whitespace collapsing. Punctuation, decimal points, percent
@@ -156,7 +159,7 @@ Run the full evaluation from the repository root:
 ```bash
 OMP_THREAD_LIMIT=1 .venv/bin/python -m src.baseline.ocr evaluate \
   --annotations data/annotations_test.json \
-  --data-root dataset_yolo_vbars \
+  --data-root dataset_yolo_vbars_clean \
   --weights models/yolo_vbars/best.pt \
   --workers 8 \
   --batch 16 \
