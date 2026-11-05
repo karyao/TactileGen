@@ -31,15 +31,10 @@ test split. Boxes were matched at IoU 0.5; YOLO used a confidence threshold of
 | YOLO, no mosaic | **0.9924** | **0.9431** | **0.9671** | **0.7941** |
 | YOLO, no HSV | 0.9898 | 0.9421 | 0.9653 | 0.7903 |
 
-Tesseract achieved **99.25%** normalized exact accuracy with authoritative
-PlotQA boxes and **98.68%** through the end-to-end YOLO and OCR pipeline. See
-the [OCR baseline report](docs/ocr_baseline.md) for the full results.
-
-RapidOCR with PP-OCRv6-small achieved **99.21%** normalized exact accuracy
-with authoritative boxes and **99.04%** end to end. See the
-[RapidOCR baseline report](docs/rapidocr_baseline.md) for results and
-reproduction details. The [OCR comparison](docs/ocr_comparison.md) shows both
-engines side by side and quantifies the effect of the shared title fix.
+On the cleaned PlotQA test split, Tesseract achieved **99.25%** oracle and
+**98.68%** end-to-end accuracy; RapidOCR with PP-OCRv6-small achieved
+**99.21%** and **99.04%**, respectively. See the
+[OCR comparison](docs/ocr_comparison.md) for details.
 
 Boxes were also matched at IoU 0.75 and 0.90 where no-mosaic model still scored highly at scores of 0.9595 and 0.9329 respectively. Refer to [experiment guide](docs/experiments.md) for full results.
 
@@ -100,12 +95,9 @@ YOLO's detection JSON remains the sole source of roles and box coordinates.
 
 ## Try PP-OCRv6 with RapidOCR
 
-RapidOCR provides a local ONNX Runtime build of PP-OCRv6. The integration uses
-only its recognition and orientation stages: YOLO remains the sole source of
-text boxes. Like Tesseract, it expands `chart_title` boxes into the shared,
-neighbor-aware title strip before recognition, while all other roles retain
-their padded YOLO crops. Install the optional backend and select it on the same
-OCR command:
+RapidOCR runs the pre-trained PP-OCRv6-small recognition model locally through
+ONNX Runtime. YOLO supplies the text boxes, and RapidOCR recognizes the cropped
+text. Install the optional backend and select it on the same OCR command:
 
 ```bash
 python3.12 -m pip install -r requirements-rapidocr.txt
@@ -116,10 +108,8 @@ python3.12 -m src.ocr \
   --output output/demo/chart_rapidocr.json
 ```
 
-The backend uses the multilingual PP-OCRv6-small recognition model. The
-`--language` option remains accepted because it is part of the shared OCR
-interface, but PP-OCRv6 does not use Tesseract language-pack codes. Tesseract
-remains the default engine, and the Gradio application continues to use it.
+Tesseract remains the default and is still used by the Gradio application. The
+multilingual PP-OCRv6 model ignores the shared `--language` option.
 
 ## Contributing and documentation
 
