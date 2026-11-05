@@ -77,6 +77,8 @@ class RapidOCRBackend:
                 "Rec.engine_type": rapidocr.EngineType.ONNXRUNTIME,
                 "Rec.model_type": rapidocr.ModelType.SMALL,
                 "Rec.ocr_version": rapidocr.OCRVersion.PPOCRV6,
+                "EngineConfig.onnxruntime.intra_op_num_threads": 1,
+                "EngineConfig.onnxruntime.inter_op_num_threads": 1,
             })
         except ImportError as exc:
             raise RuntimeError(

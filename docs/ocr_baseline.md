@@ -10,6 +10,9 @@ vertical-bar test split. There are two primary evaluation modes:
 | Oracle OCR | Authoritative PlotQA text boxes | **99.25%** | **0.48%** | **0.56%** |
 | End-to-end | Text boxes predicted by YOLO | **98.68%** | **1.02%** | **1.51%** |
 
+See the [OCR comparison](ocr_comparison.md) for a side-by-side view of these
+published results and the RapidOCR PP-OCRv6 baseline.
+
 The **end-to-end result represents the frontend pipeline**:
 
 ```text

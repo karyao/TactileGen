@@ -78,6 +78,8 @@ class RapidOCRBackendTest(unittest.TestCase):
             "Rec.engine_type": "onnxruntime",
             "Rec.model_type": "small",
             "Rec.ocr_version": "PP-OCRv6",
+            "EngineConfig.onnxruntime.intra_op_num_threads": 1,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
         }}])
         crop, options = engine.calls[0]
         self.assertEqual(crop.shape, (9, 11, 3))

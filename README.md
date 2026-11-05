@@ -35,6 +35,12 @@ Tesseract achieved **99.25%** normalized exact accuracy with authoritative
 PlotQA boxes and **98.68%** through the end-to-end YOLO and OCR pipeline. See
 the [OCR baseline report](docs/ocr_baseline.md) for the full results.
 
+RapidOCR with PP-OCRv6-small achieved **99.21%** normalized exact accuracy
+with authoritative boxes and **99.04%** end to end. See the
+[RapidOCR baseline report](docs/rapidocr_baseline.md) for results and
+reproduction details. The [OCR comparison](docs/ocr_comparison.md) shows both
+engines side by side and quantifies the effect of the shared title fix.
+
 Boxes were also matched at IoU 0.75 and 0.90 where no-mosaic model still scored highly at scores of 0.9595 and 0.9329 respectively. Refer to [experiment guide](docs/experiments.md) for full results.
 
 The YOLO checkpoints used the same model and training settings except for the
@@ -120,9 +126,11 @@ remains the default engine, and the Gradio application continues to use it.
 The [experiment guide](docs/experiments.md) covers data preparation, model
 evaluation, and the OpenCV benchmarks. The
 [OCR baseline report](docs/ocr_baseline.md) records the Tesseract accuracy
-results. The [stage contracts](docs/contracts.md) describe how detection, OCR,
-interpretation, and rendering exchange data. The original PlotQA dataset must
-be obtained separately from its
+results, and the [RapidOCR baseline report](docs/rapidocr_baseline.md) records
+the PP-OCRv6 results. The [OCR comparison](docs/ocr_comparison.md) summarizes
+their differences. The [stage contracts](docs/contracts.md) describe how
+detection, OCR, interpretation, and rendering exchange data. The original
+PlotQA dataset must be obtained separately from its
 [project page](https://github.com/NiteshMethani/PlotQA/blob/master/PlotQA_Dataset.md).
 
 ## Real-chart data 
