@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "chart_type": "vbar_categorical",
+  "source_key": "demo/crowded.png",
+  "title": "Visitors per Month",
+  "x_axis_title": "Month",
+  "y_axis_title": "Visitors (thousands)",
+  "categories": ["January", "February", "March", "April", "May", "June",
+                 "July", "August", "September", "October", "November", "December"],
+  "series": [
+    {"name": "Museum", "values": [4.2, 3.9, 5.1, 6.0, 6.8, 8.2, 9.5, 9.1, 7.0, 5.6, 4.4, 4.9]},
+    {"name": "Zoo", "values": [2.1, 2.4, 4.0, 5.5, 7.2, 9.0, 10.4, 10.1, 6.3, 4.2, 2.6, 2.2]},
+    {"name": "Aquarium", "values": [3.0, 3.2, 3.6, 3.9, 4.1, 4.8, 5.2, 5.0, 4.0, 3.7, 3.3, 3.5]}
+  ]
+}

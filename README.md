@@ -111,6 +111,20 @@ python3.12 -m src.ocr \
 Tesseract remains the default and is still used by the Gradio application. The
 multilingual PP-OCRv6 model ignores the shared `--language` option.
 
+## Make a tactile graphic
+
+`src/tactile` lays out a vertical bar chart as a tactile page (braille labels,
+textured bars, grid), checks it against BANA tactile-graphics rules, and
+writes an SVG. It needs no extra dependencies:
+
+```bash
+python3.12 -m src.tactile --chart tests/fixtures/tactile/books_by_grade.json \
+  --output output/tactile/books_by_grade.svg --show-print
+```
+
+See the [tactile output guide](docs/tactile.md) for the rules, sources and
+limits.
+
 ## Contributing and documentation
 
 The [experiment guide](docs/experiments.md) covers data preparation, model
