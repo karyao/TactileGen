@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "chart_type": "vbar_categorical",
+  "source_key": "demo/rainfall.png",
+  "title": "Average Monthly Rainfall",
+  "x_axis_title": "Month",
+  "y_axis_title": "Rainfall (mm)",
+  "categories": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
+  "series": [
+    {"name": null, "values": [78, 61, 55, 47, 52, 40]}
+  ]
+}
