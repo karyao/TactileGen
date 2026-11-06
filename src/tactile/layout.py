@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 
 from src.contracts import VerticalBarChart
 from src.tactile.braille import Cell, to_braille
+from src.tactile.keys import abbreviation_keys, numeric_keys
 from src.tactile.constants import (  # noqa: F401  (re-exported for callers and tests)
     AXIS_STRENGTH,
     AXIS_WIDTH,
@@ -41,6 +42,7 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     LABEL_HEIGHT,
     LABEL_MAX_GAP,
     LABEL_MIN_GAP,
+    LETTER_KEY_RUNOVER_CELL,
     LINE_PITCH,
     LINES_PER_PAGE,
     MAX_AREA_TEXTURES,
@@ -171,8 +173,14 @@ class TactileLayout:
     key_samples: tuple[KeySample, ...]
     category_count: int
     series_textures: tuple[str, ...]
-    categories_keyed: bool
+    x_label_mode: str   # one of X_LABEL_MODES
     notes: tuple[str, ...] = field(default_factory=tuple)
+    # Reasons a person must review the page before it is produced.
+    needs_review: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def categories_keyed(self) -> bool:
+        return self.x_label_mode != "full"
 
     def elements(self):
         yield from self.lines
@@ -252,28 +260,45 @@ def _label(label_id, role, text, x, y, **extra) -> BrailleLabel:
     return BrailleLabel(label_id, role, text, to_braille(text), x, y, **extra)
 
 
+# Overflow order for category (x) labels, tried in turn:
+#   full         - the category names under their bars
+#   abbreviation - BANA §5.8.1 alphabetic keys under the bars, names in the key
+#   number       - BANA §5.8.1.6 numeric keys under the bars, names in the key
+# If none fits, the last layout that could be built is returned with
+# ``needs_review`` set.
+X_LABEL_MODES = ("full", "abbreviation", "number")
+
+
 def layout_vertical_bar_chart(chart: VerticalBarChart, *,
-                              key_categories: bool | None = None) -> TactileLayout:
+                              x_labels: str = "auto") -> TactileLayout:
     """Build a one-page tactile layout for ``chart``.
 
-    The layout does its best and never silently drops content: if the chart
-    does not fit the BANA limits (for example bars narrower than 3/8 inch),
-    the layout is still produced and the rule checker reports the problem.
-    ``key_categories`` forces (True) or forbids (False) a letter key for
-    category labels; by default the key is used only when labels do not fit.
+    The layout never silently drops content: if the chart breaks a BANA
+    limit (for example bars narrower than 3/8 inch), the page is still
+    produced and the rule checker reports the problem. ``x_labels`` is
+    ``"auto"`` (follow the overflow order) or one mode from ``X_LABEL_MODES``.
     """
-    if key_categories is None:
-        layout = _layout(chart, keyed=False)
+    if x_labels != "auto":
+        if x_labels not in X_LABEL_MODES:
+            raise ValueError(f"x_labels must be 'auto' or one of {X_LABEL_MODES}")
+        return _layout(chart, x_labels)
+
+    built: TactileLayout | None = None
+    tried: list[str] = []
+    for mode in X_LABEL_MODES:
+        try:
+            layout = _layout(chart, mode)
+        except ValueError as exc:
+            tried.append(f"{mode}: {exc}")
+            continue
         if _categories_fit(layout):
             return layout
-        try:
-            return _layout(chart, keyed=True)
-        except ValueError as exc:
-            # The key itself does not fit; keep the unkeyed layout so the
-            # rule checker reports the overlapping labels instead.
-            note = f"a category key would not fit on one page ({exc})"
-            return replace(layout, notes=layout.notes + (note,))
-    return _layout(chart, keyed=key_categories)
+        tried.append(f"{mode}: labels do not fit under their bars")
+        built = layout
+    if built is None:
+        raise ValueError("no x-label mode could be laid out: " + "; ".join(tried))
+    reason = "x labels do not fit in any overflow mode (" + "; ".join(tried) + ")"
+    return replace(built, needs_review=built.needs_review + (reason,))
 
 
 def _categories_fit(layout: TactileLayout) -> bool:
@@ -283,7 +308,37 @@ def _categories_fit(layout: TactileLayout) -> bool:
     return all(b.bounds.x1 - a.bounds.x2 >= LABEL_MIN_GAP for a, b in zip(labels, labels[1:]))
 
 
-def _layout(chart: VerticalBarChart, keyed: bool) -> TactileLayout:
+def _category_texts(names: tuple[str, ...], mode: str) -> list[str]:
+    if mode == "full":
+        return list(names)
+    if mode == "abbreviation":
+        return abbreviation_keys(names)
+    return numeric_keys(len(names))
+
+
+def _key_entry_lines(symbol: str, name: str) -> list[tuple[str, int]]:
+    """Lines of one letter/number key entry as ``(text, start cell)``.
+
+    The symbol starts in cell 1 followed by one blank cell, so the
+    explanation starts in cell 3, 4 or 5 for a 1-, 2- or 3-cell symbol;
+    runovers start in cell 3 (§5.8.4.5).
+    """
+    first_cells = CELLS_PER_LINE
+    words = name.split()
+    first = symbol
+    while words and len(to_braille(f"{first} {words[0]}")) <= first_cells:
+        first = f"{first} {words.pop(0)}"
+    lines = [(first, 1)]
+    if words:
+        runover_cells = CELLS_PER_LINE - LETTER_KEY_RUNOVER_CELL + 1
+        lines += [(text, LETTER_KEY_RUNOVER_CELL)
+                  for text in wrap_cells(" ".join(words), runover_cells)]
+    return lines
+
+
+def _layout(chart: VerticalBarChart, mode: str) -> TactileLayout:
+    keyed = mode != "full"
+    category_texts = _category_texts(chart.categories, mode)
     values = [v for series in chart.series for v in series.values]
     if any(v < 0 for v in values):
         raise ValueError("negative bar values are not supported yet")
@@ -331,15 +386,12 @@ def _layout(chart: VerticalBarChart, keyed: bool) -> TactileLayout:
                                      owner_id=sample.id))
             # A sample needs two braille lines (§5.9.1.2); long names need more.
             y += max(KEY_SAMPLE_LINES, len(name_lines) + 1) * LINE_PITCH
-    letters = "abcdefghijklmnopqrstuvwxyz"
     if keyed:
-        if n_cat > len(letters):
-            raise ValueError("too many categories to key with letters")
-        for j, name in enumerate(chart.categories):
-            for k, text in enumerate(wrap_cells(f"{letters[j]} {name}", CELLS_PER_LINE)):
-                # Runover lines are indented two cells.
-                labels.append(_label(f"key-category-{j}" + (f"-{k}" if k else ""), "key", text,
-                                     usable.x1 + (2 * CELL_PITCH if k else 0), y,
+        # Keyed labels in the order they appear, left to right (§5.7.3).
+        for j, (symbol, name) in enumerate(zip(category_texts, chart.categories)):
+            for k, (text, cell) in enumerate(_key_entry_lines(symbol, name)):
+                labels.append(_label(f"key-category-{j}" + (f"-{k}" if k else ""), "key",
+                                     text, usable.x1 + (cell - 1) * CELL_PITCH, y,
                                      category_index=j))
                 y += LINE_PITCH
     if n_series > 1 or keyed:
@@ -415,7 +467,7 @@ def _layout(chart: VerticalBarChart, keyed: bool) -> TactileLayout:
                      + s * (bar_width + BAR_OUTLINE_WIDTH + BAR_GAP))
             bars.append(Bar(f"bar-{s}-{j}", bar_x, top, bar_width,
                             axis_y - AXIS_WIDTH / 2 - top, textures[s], s, j, value))
-        text = letters[j] if keyed else name
+        text = category_texts[j]
         width = label_width(len(to_braille(text)))
         # Centred with the set of bars (§6.6.6.6).
         x = group_x + (group_width - width) / 2
@@ -439,11 +491,11 @@ def _layout(chart: VerticalBarChart, keyed: bool) -> TactileLayout:
     if any(b.height <= 0 for b in bars):
         notes.append("zero-height bars have no raised area; consider a transcriber's note")
     if keyed:
-        notes.append("category labels did not fit under their bars and are keyed a, b, c")
+        notes.append(f"category labels are keyed ({mode} keys, BANA §5.8)")
     return TactileLayout(
         source_key=chart.source_key, page_width=PAGE_WIDTH, page_height=PAGE_HEIGHT,
         usable=usable, plot=Rect(axis_x, plot_top, plot_right, axis_y),
         lines=tuple(lines), bars=tuple(bars), labels=tuple(labels),
         key_samples=tuple(samples), category_count=n_cat,
-        series_textures=textures, categories_keyed=keyed, notes=tuple(notes),
+        series_textures=textures, x_label_mode=mode, notes=tuple(notes),
     )
