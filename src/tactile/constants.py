@@ -27,11 +27,14 @@ LABEL_GAP = LABEL_MIN_GAP
 # after the heading.
 Y_HEADING_CLEARANCE = LABEL_MIN_GAP
 # Gaps between bars in a set and between sets (and before the first set),
-# measured between the bars' raised outer edges. §6.6.6.7 gives no number
-# ("separated enough to be able to read the background grid, yet close enough
-# to readily compare"); by project decision the §3.4.3.12 1/8 inch component
-# spacing is reused for both.
-BAR_GAP = LABEL_MIN_GAP
+# measured between the bars' raised outer edges.
+# Bars in a set are joined: §6.6.6.7 says bars are "separated or joined in
+# braille as they are in print", and grouped bars are joined in print charts
+# such as PlotQA's. This also keeps sets distinguishable from each other.
+BAR_GAP = 0.0
+# Between sets §6.6.6.7 gives no number ("separated enough to be able to read
+# the background grid"); by project decision the §3.4.3.12 1/8 inch
+# component spacing is reused. Must stay larger than BAR_GAP.
 GROUP_GAP = LABEL_MIN_GAP
 
 # --- Bars, grid and lines ----------------------------------------------------------

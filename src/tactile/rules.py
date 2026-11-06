@@ -54,7 +54,8 @@ class Violation:
 RULES = {rule.id: rule for rule in (
     Rule("bar_width", "§6.6.6.7", "Bars are 3/8 inch to 1 inch wide."),
     Rule("bar_spacing", "§6.6.6.7 (gap value from §3.4.3.12)",
-         "Bars in a set, and neighbouring sets, are separated by at least 1/8 inch."),
+         "Bars in a set are joined without overlapping; neighbouring sets are separated "
+         "by at least 1/8 inch."),
     Rule("label_clearance", "§3.4.3.12, §6.6.6.6",
          "Labels are at least 1/8 inch (3 mm) from every other component."),
     Rule("label_owner_distance", "§3.4.3.12, §5.10.5",
