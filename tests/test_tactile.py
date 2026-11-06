@@ -449,6 +449,41 @@ class ConstantsTest(unittest.TestCase):
         self.assertAlmostEqual(axis.y1, top_grid)
 
 
+def all_label_texts() -> list[str]:
+    """Every label text the layout produces for the demo and overflow charts."""
+    layouts = [layout_vertical_bar_chart(load(name))
+               for name in ("rainfall", "books_by_grade", "crowded")]
+    layouts.append(layout_vertical_bar_chart(one_series(
+        ["Northern Territory", "South Australia", "Western Australia"])))
+    layouts.append(layout_vertical_bar_chart(one_series(["Abaca baba", "Cafe dad", "Bead cage"])))
+    return sorted({label.text for layout in layouts for label in layout.labels})
+
+
+class LiblouisRoundTripTest(unittest.TestCase):
+    """Fix 5: back-translating each label's braille with liblouis gives the label.
+
+    Uses the UEB grade 1 table (en-ueb-g1.ctb) with Unicode braille input.
+    Skipped when the liblouis Python bindings (``louis``) are not installed.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import louis
+        except ImportError:
+            raise unittest.SkipTest("liblouis Python bindings (louis) are not installed")
+        cls.louis = louis
+
+    def test_every_label_round_trips(self):
+        texts = all_label_texts()
+        self.assertGreater(len(texts), 50)
+        for text in texts:
+            with self.subTest(text=text):
+                braille = to_unicode(to_braille(text)).replace("⠀", " ")
+                back = self.louis.backTranslateString(["unicode.dis", "en-ueb-g1.ctb"], braille)
+                self.assertEqual(" ".join(back.split()), text)
+
+
 class SvgTest(unittest.TestCase):
     def test_svg_draws_every_braille_dot(self):
         layout = layout_vertical_bar_chart(load("books_by_grade"))
