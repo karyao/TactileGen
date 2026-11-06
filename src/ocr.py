@@ -33,7 +33,12 @@ class OCRBackendResult:
 
 
 class OCRBackend(Protocol):
-    """Recognition boundary implemented by concrete OCR engines."""
+    """Recognition boundary implemented by concrete OCR engines.
+
+    Backends receive the validated source image without engine-specific color
+    conversion. Each adapter is responsible for converting crops into the
+    channel layout and memory representation required by its OCR engine.
+    """
 
     def recognize(
         self,

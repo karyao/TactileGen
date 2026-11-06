@@ -15,6 +15,9 @@ from src.ocr_crop import crop_text_region
 
 
 _TALL_ASPECT_RATIO = 1.5
+_SUPPORTED_IMAGE_ERROR = (
+    "RapidOCR backend supports grayscale, BGR, or BGRA images"
+)
 
 
 def _load_rapidocr():
@@ -28,12 +31,28 @@ def _load_rapidocr():
     return rapidocr
 
 
+def _as_bgr(image: np.ndarray) -> np.ndarray:
+    """Return a contiguous three-channel BGR image without changing its dtype."""
+    if image.ndim == 2:
+        return np.repeat(image[:, :, None], 3, axis=2)
+    if image.ndim != 3:
+        raise ValueError(_SUPPORTED_IMAGE_ERROR)
+    channels = image.shape[2]
+    if channels == 1:
+        return np.repeat(image, 3, axis=2)
+    if channels == 3:
+        return np.ascontiguousarray(image)
+    if channels == 4:
+        return np.ascontiguousarray(image[:, :, :3])
+    raise ValueError(_SUPPORTED_IMAGE_ERROR)
+
+
 def _recognition_candidates(
     image: np.ndarray,
     detection: Detection,
     neighbors: Sequence[Detection] = (),
 ) -> tuple[np.ndarray, ...]:
-    crop = crop_text_region(image, detection, neighbors)
+    crop = _as_bgr(crop_text_region(image, detection, neighbors))
     box = detection.box
     if box.y2 - box.y1 <= _TALL_ASPECT_RATIO * (box.x2 - box.x1):
         return (crop,)

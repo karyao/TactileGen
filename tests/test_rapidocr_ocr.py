@@ -134,9 +134,85 @@ class RapidOCRBackendTest(unittest.TestCase):
 
         self.assertEqual(recognized, OCRBackendResult("clockwise", 0.95))
         self.assertEqual([call[0].shape for call in engine.calls], [
-            (20, 8, 4), (8, 20, 4), (8, 20, 4),
+            (20, 8, 3), (8, 20, 3), (8, 20, 3),
         ])
         self.assertTrue(np.array_equal(image, original))
+
+    def test_recognize_normalizes_supported_images_to_contiguous_bgr(self):
+        gray = np.arange(8 * 8, dtype=np.uint16).reshape((8, 8))
+        cases = (
+            ("grayscale", gray, np.repeat(gray[:, :, None], 3, axis=2)),
+            (
+                "single-channel",
+                gray[:, :, None],
+                np.repeat(gray[:, :, None], 3, axis=2),
+            ),
+            (
+                "bgr",
+                np.dstack((gray, gray + 100, gray + 200))[:, ::-1],
+                np.dstack((gray, gray + 100, gray + 200))[:, ::-1],
+            ),
+            (
+                "bgra",
+                np.dstack((gray, gray + 100, gray + 200, gray + 300)),
+                np.dstack((gray, gray + 100, gray + 200)),
+            ),
+        )
+        for label, image, expected in cases:
+            with self.subTest(label=label):
+                module, engine, _ = fake_rapidocr([output()])
+                with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
+                    backend = RapidOCRBackend()
+
+                backend.recognize(
+                    image, detection((2, 2, 6, 6)), language="eng"
+                )
+
+                candidate = engine.calls[0][0]
+                self.assertEqual(candidate.shape, (8, 8, 3))
+                self.assertEqual(candidate.dtype, image.dtype)
+                self.assertTrue(candidate.flags.c_contiguous)
+                self.assertTrue(np.array_equal(candidate, expected))
+
+    def test_recognize_many_normalizes_candidates_and_rejects_bad_channels(self):
+        module, engine, _ = fake_rapidocr([output()])
+        with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
+            backend = RapidOCRBackend()
+        bgra = np.zeros((8, 8, 4), dtype=np.uint8)
+        bgra[:, :, 0] = 10
+        bgra[:, :, 1] = 20
+        bgra[:, :, 2] = 30
+        bgra[:, :, 3] = 255
+
+        backend.recognize_many(
+            bgra, (detection((2, 2, 6, 6)),), language="eng"
+        )
+
+        candidate = engine.cls_calls[0][0]
+        self.assertEqual(candidate.shape, (8, 8, 3))
+        self.assertTrue(candidate.flags.c_contiguous)
+        self.assertTrue(np.all(candidate == np.array([10, 20, 30])))
+
+        with self.assertRaisesRegex(ValueError, "grayscale, BGR, or BGRA"):
+            backend.recognize_many(
+                np.zeros((8, 8, 2), dtype=np.uint8),
+                (detection((2, 2, 6, 6)),),
+                language="eng",
+            )
+
+    def test_recognize_many_empty_batch_does_not_call_engine(self):
+        module, engine, _ = fake_rapidocr([])
+        with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
+            backend = RapidOCRBackend()
+
+        self.assertEqual(
+            backend.recognize_many(
+                np.zeros((8, 8, 2), dtype=np.uint8), (), language="eng"
+            ),
+            (),
+        )
+        self.assertEqual(engine.cls_calls, [])
+        self.assertEqual(engine.rec_calls, [])
 
     def test_blank_is_unreadable_and_bad_output_fails(self):
         module, _, _ = fake_rapidocr([output("  ", 0.9)])
