@@ -10,7 +10,7 @@ from pathlib import Path
 
 from src.contract_io import load_vertical_bar_chart
 from src.contracts import BarSeries, VerticalBarChart
-from src.tactile import check_layout, layout_vertical_bar_chart, render_svg
+from src.tactile import check_layout, constants, layout_vertical_bar_chart, render_svg
 from src.tactile.__main__ import main
 from src.tactile.braille import to_braille, to_unicode
 from src.tactile.layout import (
@@ -227,6 +227,33 @@ class RuleTest(unittest.TestCase):
     def test_label_gap_constants_match_bana(self):
         self.assertAlmostEqual(LABEL_MIN_GAP, 3.175)
         self.assertAlmostEqual(LABEL_MAX_GAP, 6.35)
+
+
+class ConstantsTest(unittest.TestCase):
+    """Spacing constants equal the inch values BANA states."""
+
+    def test_bana_measurements(self):
+        inch = 25.4
+        expected = {
+            "LABEL_MIN_GAP": inch / 8, "LABEL_MAX_GAP": inch / 4,
+            "BAR_MIN_WIDTH": inch * 3 / 8, "BAR_MAX_WIDTH": inch,
+            "GRID_MIN_SPACING": inch * 3 / 8, "PRIMARY_LINE_MIN_LENGTH": inch / 2,
+            "TICK_HALF_LENGTH": inch / 4, "KEY_SAMPLE_WIDTH": inch,
+            "KEY_SAMPLE_HEIGHT": inch / 2, "PAGE_WIDTH": inch * 11.5, "PAGE_HEIGHT": inch * 11,
+        }
+        for name, value in expected.items():
+            with self.subTest(name=name):
+                self.assertAlmostEqual(getattr(constants, name), value)
+        self.assertEqual((constants.CELLS_PER_LINE, constants.LINES_PER_PAGE), (40, 25))
+
+    def test_labels_are_placed_at_the_bana_minimum(self):
+        self.assertEqual(constants.LABEL_GAP, constants.LABEL_MIN_GAP)
+
+    def test_y_axis_ends_at_the_top_grid_line(self):
+        layout = layout_vertical_bar_chart(load("rainfall"))
+        axis = next(l for l in layout.lines if l.id == "axis-y")
+        top_grid = min(l.y1 for l in layout.lines if l.kind == "grid")
+        self.assertAlmostEqual(axis.y1, top_grid)
 
 
 class SvgTest(unittest.TestCase):

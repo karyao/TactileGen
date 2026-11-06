@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from html import escape
 
-from src.tactile.layout import DOT_DIAMETER, TactileLayout
+from src.tactile.constants import DOT_DIAMETER
+from src.tactile.layout import TactileLayout
 from src.tactile.rules import Violation
 
 _PATTERNS = {

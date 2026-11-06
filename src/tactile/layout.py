@@ -5,8 +5,8 @@ list of elements (lines, bars, braille labels, key samples) that the SVG
 writer draws and the rule checker inspects; neither needs the source chart.
 
 Placement follows BANA *Guidelines and Standards for Tactile Graphics, 2022*
-(section numbers in comments). Braille cell sizes follow the Library of
-Congress Specification 800 nominal values for paper braille.
+(section numbers in comments). Every measurement lives in
+``src/tactile/constants.py`` with its source.
 """
 
 from __future__ import annotations
@@ -16,47 +16,39 @@ from dataclasses import dataclass, field, replace
 
 from src.contracts import VerticalBarChart
 from src.tactile.braille import Cell, to_braille
-
-# --- Physical constants -----------------------------------------------------------
-
-MM_PER_INCH = 25.4
-# 11.5 x 11 inch braille graphics paper (BANA §3.4.2).
-PAGE_WIDTH = 11.5 * MM_PER_INCH
-PAGE_HEIGHT = 11.0 * MM_PER_INCH
-CELLS_PER_LINE = 40   # BANA §3.4.2.1
-LINES_PER_PAGE = 25   # BANA §3.4.2.2
-
-# Library of Congress Specification 800, nominal paper braille.
-DOT_DIAMETER = 0.057 * MM_PER_INCH   # 1.45 mm
-DOT_PITCH = 0.092 * MM_PER_INCH      # 2.34 mm between dots in a cell
-CELL_PITCH = 0.245 * MM_PER_INCH     # 6.22 mm between cells
-LINE_PITCH = 0.400 * MM_PER_INCH     # 10.16 mm between braille lines
-LABEL_HEIGHT = 2 * DOT_PITCH + DOT_DIAMETER
-
-# BANA measurements used for placement.
-LABEL_MIN_GAP = 1 / 8 * MM_PER_INCH  # 3 mm, §3.4.3.12 and §6.6.6.6
-LABEL_MAX_GAP = 1 / 4 * MM_PER_INCH  # 6 mm, §3.4.3.12 and §5.10.5
-LABEL_GAP = 4.0                      # chosen inside the 3-6 mm window
-BAR_MIN_WIDTH = 3 / 8 * MM_PER_INCH  # 9.5 mm ("3/8 inch (1 centimeter)"), §6.6.6.7
-BAR_MAX_WIDTH = 1.0 * MM_PER_INCH    # 25.4 mm, §6.6.6.7
-GRID_MIN_SPACING = 3 / 8 * MM_PER_INCH  # §3.4.3.9 and §6.6.1.1
-KEY_SAMPLE_WIDTH = 1.0 * MM_PER_INCH    # §3.4.3.14
-KEY_SAMPLE_HEIGHT = 0.5 * MM_PER_INCH   # §3.4.3.14
-Y_HEADING_MAX_CELLS = 20                # §6.6.6.6
-GROUP_GAP = 8.0   # space between sets of bars; BANA gives no number (§6.6.6.7)
-MAX_GRID_INTERVALS = 8   # design choice to keep the grid sparse; not a BANA number
-
-# Line strengths: higher is more tactually distinct. Grid lines are the
-# least distinct and axis lines stronger than grid lines (§6.6.6.5).
-GRID_STRENGTH, LEAD_STRENGTH, BAR_STRENGTH, AXIS_STRENGTH = 1, 1, 2, 3
-GRID_WIDTH, BAR_OUTLINE_WIDTH, AXIS_WIDTH = 0.5, 1.0, 1.5
-
-# At most five area textures in one graphic (BANA §3.2.2). "dots" uses dots
-# smaller than braille dots so the fill is not mistaken for braille (§6.8.3.3).
-TEXTURES = ("diagonal", "dots", "horizontal", "crosshatch", "vertical")
-MAX_AREA_TEXTURES = 5
-# Key explanations start in cell 6, runovers in cell 8 (§5.8.4.3).
-KEY_TEXT_CELL, KEY_RUNOVER_CELL = 6, 8
+from src.tactile.constants import (  # noqa: F401  (re-exported for callers and tests)
+    AXIS_STRENGTH,
+    AXIS_WIDTH,
+    BAR_MAX_WIDTH,
+    BAR_MIN_WIDTH,
+    BAR_OUTLINE_WIDTH,
+    BAR_STRENGTH,
+    CELL_PITCH,
+    CELLS_PER_LINE,
+    DOT_DIAMETER,
+    DOT_PITCH,
+    GRID_MIN_SPACING,
+    GRID_STRENGTH,
+    GRID_WIDTH,
+    GROUP_GAP,
+    KEY_RUNOVER_CELL,
+    KEY_SAMPLE_HEIGHT,
+    KEY_SAMPLE_LINES,
+    KEY_SAMPLE_WIDTH,
+    KEY_TEXT_CELL,
+    LABEL_GAP,
+    LABEL_HEIGHT,
+    LABEL_MAX_GAP,
+    LABEL_MIN_GAP,
+    LINE_PITCH,
+    LINES_PER_PAGE,
+    MAX_AREA_TEXTURES,
+    MAX_GRID_INTERVALS,
+    PAGE_HEIGHT,
+    PAGE_WIDTH,
+    TEXTURES,
+    Y_HEADING_MAX_CELLS,
+)
 
 
 @dataclass(frozen=True)
@@ -319,7 +311,7 @@ def _layout(chart: VerticalBarChart, keyed: bool) -> TactileLayout:
                                      runover_x if k else label_x, y + k * LINE_PITCH,
                                      owner_id=sample.id))
             # A sample needs two braille lines (§5.9.1.2); long names need more.
-            y += max(2, len(name_lines) + 1) * LINE_PITCH
+            y += max(KEY_SAMPLE_LINES, len(name_lines) + 1) * LINE_PITCH
     letters = "abcdefghijklmnopqrstuvwxyz"
     if keyed:
         if n_cat > len(letters):
@@ -368,7 +360,7 @@ def _layout(chart: VerticalBarChart, keyed: bool) -> TactileLayout:
     plot_right = axis_x + AXIS_WIDTH / 2 + GROUP_GAP + n_cat * (group_width + GROUP_GAP)
 
     axis_id = "axis-x"
-    lines.append(Line("axis-y", "axis", axis_x, plot_top - 2, axis_x, axis_y,
+    lines.append(Line("axis-y", "axis", axis_x, plot_top, axis_x, axis_y,
                       AXIS_WIDTH, AXIS_STRENGTH))
     lines.append(Line(axis_id, "axis", axis_x, axis_y, plot_right, axis_y,
                       AXIS_WIDTH, AXIS_STRENGTH))
