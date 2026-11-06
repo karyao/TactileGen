@@ -32,15 +32,19 @@ Page and braille sizes:
 
 - 11.5 x 11 inch graphics paper; content limited to 40 cells by 25 lines
   (BANA §3.4.2).
-- Braille is drawn as dots at Library of Congress Specification 800 nominal
-  sizes: 1.45 mm dots, 2.34 mm between dots, 6.22 mm between cells, 10.16 mm
-  between lines. No braille font is needed.
+- Braille is drawn as dots at the paper-braille sizes on BANA's "Size and
+  Spacing of Braille Characters" page (Library of Congress Specification 800):
+  1.45 mm dots, 2.34 mm between dots, 6.22 mm between cells, 10.16 mm between
+  lines. No braille font is needed.
+- Line widths and texture sizes are not from BANA: its line styles and texture
+  palettes (Appendices E, F, H, I) are picture samples without measurements.
+  They are marked for review in `src/tactile/constants.py`.
 
 Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 
 | Element | Placement | BANA |
 | --- | --- | --- |
-| Title | Centred heading at the top, then a blank line | design choice; not yet checked against BANA |
+| Title | Centred heading at the top, then a blank line | §5.3.1 |
 | Key | Before the graph, in left-to-right bar order; 1 x 1/2 inch texture samples from cell 1; explanation in cell 6 level with the sample top, runovers in cell 8 | §6.6.6.4, §3.4.3.14, §5.8.4.3-4 |
 | Textures | At most five area textures; the dot fill uses 0.8 mm dots, smaller than braille dots | §3.2.2, §6.8.3.3 |
 | Vertical values | Right-justified, numeric indicator, dots 2-5 level with the grid line, 4 mm from the axis | §6.6.6.2, §6.6.6.6 |
@@ -123,4 +127,5 @@ on the development machine.
 
 - BANA, *Guidelines and Standards for Tactile Graphics, 2022*:
   <https://www.brailleauthority.org/guidelines-and-standards-tactile-graphics>
-- Library of Congress, Specification 800 (braille dot and cell dimensions).
+- BANA, Size and Spacing of Braille Characters (quoting Library of Congress
+  Specification 800): <https://www.brailleauthority.org/node/63>
