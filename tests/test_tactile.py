@@ -136,6 +136,63 @@ class LayoutTest(unittest.TestCase):
             layout_vertical_bar_chart(chart)
 
 
+class BarSpacingTest(unittest.TestCase):
+    """Fix 1: bar width depends on the series count, with gaps between bars and sets."""
+
+    def chart(self, n_categories, n_series):
+        return VerticalBarChart(
+            "demo/spacing.png", "Spacing", "X", "Y",
+            tuple(f"c{j}" for j in range(n_categories)),
+            tuple(BarSeries(f"s{s}", tuple(float(j + s + 1) for j in range(n_categories)))
+                  for s in range(n_series)))
+
+    def gaps(self, layout):
+        bars = sorted(layout.bars, key=lambda b: b.x)
+        return [(a.category_index == b.category_index, b.bounds.x1 - a.bounds.x2)
+                for a, b in zip(bars, bars[1:])]
+
+    def test_gaps_between_bars_and_sets_use_the_constants(self):
+        layout = layout_vertical_bar_chart(self.chart(4, 3))
+        for same_set, gap in self.gaps(layout):
+            expected = constants.BAR_GAP if same_set else constants.GROUP_GAP
+            self.assertAlmostEqual(gap, expected, places=6)
+        first = min(layout.bars, key=lambda b: b.x)
+        axis = next(l for l in layout.lines if l.id == "axis-y")
+        self.assertAlmostEqual(first.bounds.x1 - axis.bounds.x2, constants.GROUP_GAP, places=6)
+
+    def test_width_shrinks_as_series_are_added(self):
+        widths = [layout_vertical_bar_chart(self.chart(6, n)).bars[0].width for n in (1, 2, 3)]
+        self.assertEqual(widths, sorted(widths, reverse=True))
+        self.assertLess(widths[2], widths[1])
+
+    def test_width_fills_the_plot_when_not_capped(self):
+        layout = layout_vertical_bar_chart(self.chart(6, 2))
+        width = layout.bars[0].width
+        self.assertLess(width, constants.BAR_MAX_WIDTH)
+        right = max(b.bounds.x2 for b in layout.bars)
+        axis = next(l for l in layout.lines if l.id == "axis-x")
+        self.assertAlmostEqual(axis.bounds.x2, layout.usable.x2, places=6)
+        self.assertAlmostEqual(axis.x2 - right, constants.GROUP_GAP, places=6)
+
+    def test_width_formula(self):
+        from src.tactile.layout import bar_width_for, set_width
+        width = bar_width_for(200.0, 4, 3)
+        total = 4 * set_width(width, 3) + 5 * constants.GROUP_GAP
+        self.assertAlmostEqual(total, 200.0)
+
+    def test_width_is_capped_at_the_bana_maximum(self):
+        layout = layout_vertical_bar_chart(self.chart(2, 1))
+        self.assertAlmostEqual(layout.bars[0].width, constants.BAR_MAX_WIDTH)
+
+    def test_touching_bars_are_reported(self):
+        layout = layout_vertical_bar_chart(self.chart(3, 2))
+        first, second = sorted((b for b in layout.bars if b.category_index == 0),
+                               key=lambda b: b.x)
+        moved = replace(second, x=first.x + first.width)
+        bars = tuple(moved if b.id == second.id else b for b in layout.bars)
+        self.assertIn("bar_spacing", rule_ids(replace(layout, bars=bars)))
+
+
 class RuleTest(unittest.TestCase):
     """Each rule fires on a deliberately broken copy of a passing layout."""
 

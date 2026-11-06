@@ -14,10 +14,12 @@ from itertools import combinations
 
 from src.tactile.braille import has_numeric_indicator
 from src.tactile.constants import (
+    BAR_GAP,
     BAR_MAX_WIDTH,
     BAR_MIN_WIDTH,
     CELL_PITCH,
     GRID_MIN_SPACING,
+    GROUP_GAP,
     KEY_SAMPLE_HEIGHT,
     KEY_SAMPLE_WIDTH,
     KEY_TEXT_CELL,
@@ -50,6 +52,8 @@ class Violation:
 
 RULES = {rule.id: rule for rule in (
     Rule("bar_width", "§6.6.6.7", "Bars are 3/8 inch to 1 inch wide."),
+    Rule("bar_spacing", "§6.6.6.7 (gap value from §3.4.3.12)",
+         "Bars in a set, and neighbouring sets, are separated by at least 1/8 inch."),
     Rule("label_clearance", "§3.4.3.12, §6.6.6.6",
          "Labels are at least 1/8 inch (3 mm) from every other component."),
     Rule("label_owner_distance", "§3.4.3.12, §5.10.5",
@@ -81,6 +85,7 @@ def _violation(rule_id: str, message: str, *ids: str) -> Violation:
 def check_layout(layout: TactileLayout) -> list[Violation]:
     found: list[Violation] = []
     found += _bar_width(layout)
+    found += _bar_spacing(layout)
     found += _label_clearance(layout)
     found += _label_owner_distance(layout)
     found += _fits_page(layout)
@@ -122,6 +127,18 @@ def _bar_width(layout):
         if not BAR_MIN_WIDTH - TOLERANCE <= bar.width <= BAR_MAX_WIDTH + TOLERANCE:
             yield _violation("bar_width", f"{bar.id} is {bar.width:.1f} mm wide "
                              f"(allowed {BAR_MIN_WIDTH:.1f}-{BAR_MAX_WIDTH:.1f} mm)", bar.id)
+
+
+def _bar_spacing(layout):
+    bars = sorted(layout.bars, key=lambda b: b.x)
+    for left, right in zip(bars, bars[1:]):
+        same_set = left.category_index == right.category_index
+        minimum = BAR_GAP if same_set else GROUP_GAP
+        gap = right.bounds.x1 - left.bounds.x2
+        if gap < minimum - TOLERANCE:
+            kind = "bars in a set" if same_set else "sets of bars"
+            yield _violation("bar_spacing", f"{left.id} and {right.id} ({kind}) are "
+                             f"{gap:.1f} mm apart (min {minimum:.1f} mm)", left.id, right.id)
 
 
 def _label_clearance(layout):
