@@ -31,9 +31,10 @@ test split. Boxes were matched at IoU 0.5; YOLO used a confidence threshold of
 | YOLO, no mosaic | **0.9924** | **0.9431** | **0.9671** | **0.7941** |
 | YOLO, no HSV | 0.9898 | 0.9421 | 0.9653 | 0.7903 |
 
-Tesseract achieved **99.25%** normalized exact accuracy with authoritative
-PlotQA boxes and **98.68%** through the end-to-end YOLO and OCR pipeline. See
-the [OCR baseline report](docs/ocr_baseline.md) for the full results.
+On the cleaned PlotQA test split, Tesseract achieved **99.25%** oracle and
+**98.68%** end-to-end accuracy; RapidOCR with PP-OCRv6-small achieved
+**99.21%** and **99.04%**, respectively. See the
+[OCR comparison](docs/ocr_comparison.md) for details.
 
 Boxes were also matched at IoU 0.75 and 0.90 where no-mosaic model still scored highly at scores of 0.9595 and 0.9329 respectively. Refer to [experiment guide](docs/experiments.md) for full results.
 
@@ -92,14 +93,34 @@ python3.12 -m src.ocr \
 The OCR JSON stores recognized text and confidence linked by detection ID.
 YOLO's detection JSON remains the sole source of roles and box coordinates.
 
+## Try PP-OCRv6 with RapidOCR
+
+RapidOCR runs the pre-trained PP-OCRv6-small recognition model locally through
+ONNX Runtime. YOLO supplies the text boxes, and RapidOCR recognizes the cropped
+text. Install the optional backend and select it on the same OCR command:
+
+```bash
+python3.12 -m pip install -r requirements-ocr.txt
+python3.12 -m src.ocr \
+  --engine rapidocr \
+  --image path/to/chart.png \
+  --detections output/demo/chart_detections.json \
+  --output output/demo/chart_rapidocr.json
+```
+
+Tesseract remains the default and is still used by the Gradio application. The
+multilingual PP-OCRv6 model ignores the shared `--language` option.
+
 ## Contributing and documentation
 
 The [experiment guide](docs/experiments.md) covers data preparation, model
 evaluation, and the OpenCV benchmarks. The
 [OCR baseline report](docs/ocr_baseline.md) records the Tesseract accuracy
-results. The [stage contracts](docs/contracts.md) describe how detection, OCR,
-interpretation, and rendering exchange data. The original PlotQA dataset must
-be obtained separately from its
+results, and the [RapidOCR baseline report](docs/rapidocr_baseline.md) records
+the PP-OCRv6 results. The [OCR comparison](docs/ocr_comparison.md) summarizes
+their differences. The [stage contracts](docs/contracts.md) describe how
+detection, OCR, interpretation, and rendering exchange data. The original
+PlotQA dataset must be obtained separately from its
 [project page](https://github.com/NiteshMethani/PlotQA/blob/master/PlotQA_Dataset.md).
 
 ## Real-chart data 

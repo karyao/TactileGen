@@ -80,14 +80,14 @@ class TesseractBackendTest(unittest.TestCase):
         self.assertEqual(shapes["title"], (40, 400))
         self.assertEqual(shapes["tick"], (40, 48))
 
-        with patch("src.tesseract_ocr._TITLE_FULL_WIDTH_STRIP", False):
+        with patch("src.ocr_crop._TITLE_FULL_WIDTH_STRIP", False):
             module = fake_pytesseract(results=(result(), empty_result()))
             with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
                 TesseractBackend().recognize(image, title, language="eng")
         self.assertEqual(module.image_to_data.call_args_list[0].args[0].shape, (40, 48))
 
     def test_title_strip_stops_at_other_text_in_its_band(self):
-        from src.tesseract_ocr import _title_strip_bounds
+        from src.ocr_crop import _title_strip_bounds
 
         title = detection((80, 10, 100, 26), "chart_title", "title")
         neighbors = (
@@ -257,7 +257,7 @@ class TesseractBackendTest(unittest.TestCase):
         narrow = Detection("title", "chart_title", Box(120, 10, 500, 42), 0.9)
         recognized = TesseractBackend().recognize(image, narrow, language="eng")
         self.assertEqual(recognized.text, text)
-        with patch("src.tesseract_ocr._TITLE_FULL_WIDTH_STRIP", False):
+        with patch("src.ocr_crop._TITLE_FULL_WIDTH_STRIP", False):
             clipped = TesseractBackend().recognize(image, narrow, language="eng")
         self.assertNotEqual(clipped.text, text)
 

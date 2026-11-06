@@ -268,6 +268,25 @@ class OCRCommandTest(unittest.TestCase):
         for region in serialized["regions"]:
             self.assertEqual(set(region), {"detection_id", "text", "confidence"})
 
+    def test_command_dispatches_rapidocr_backend(self):
+        fixture_root = Path(__file__).parent / "fixtures/contracts"
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "ocr.json"
+            args = Namespace(
+                engine="rapidocr",
+                image=fixture_root / "val/example.png",
+                detections=fixture_root / "detections.json",
+                output=output,
+                language="eng",
+            )
+            backend = RecordingBackend()
+            with patch(
+                "src.rapidocr_ocr.RapidOCRBackend", return_value=backend
+            ) as constructor:
+                result = _run_command(args)
+        constructor.assert_called_once_with()
+        self.assertEqual(len(result.regions), len(backend.calls))
+
     def test_dimension_mismatch_fails_without_creating_output(self):
         fixture_root = Path(__file__).parent / "fixtures/contracts"
         with tempfile.TemporaryDirectory() as directory:

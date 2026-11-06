@@ -117,6 +117,9 @@ not measure OCR, chart interpretation, or tactile rendering.
 The measured full-test results and interpretation are recorded in the
 [Tesseract OCR baseline report](ocr_baseline.md).
 
+The [OCR comparison](ocr_comparison.md) places the published Tesseract and
+RapidOCR results side by side and summarizes the title-fix improvements.
+
 The OCR evaluator reports two complementary tracks. The oracle track crops the
 authoritative PlotQA text boxes and isolates recognition quality. The
 end-to-end track runs the trained detector first, matches predicted text boxes
@@ -149,6 +152,37 @@ The scoring core accepts any implementation of the shared `OCRBackend`
 protocol. Register another backend factory with
 `src.baseline.ocr.register_engine()` to compare it using the same extraction,
 matching, normalization, and report schema.
+
+To compare the PP-OCRv6-small recognition model through RapidOCR's ONNX
+Runtime backend, install its optional dependencies and select the registered
+engine. RapidOCR text detection is disabled; both evaluator tracks continue to
+use the PlotQA or YOLO boxes described above. The measured full-test results
+are recorded in the [RapidOCR baseline report](rapidocr_baseline.md).
+
+The final engine and title-fix deltas are summarized in the
+[OCR comparison](ocr_comparison.md).
+
+```bash
+python3.12 -m pip install -r requirements-model.txt -r requirements-ocr.txt
+python3.12 -m src.baseline.ocr evaluate \
+  --engine rapidocr \
+  --annotations data/annotations_test.json \
+  --data-root dataset_yolo_vbars_clean \
+  --weights models/yolo_vbars/best.pt \
+  --limit 10 \
+  --workers 1 \
+  --output-dir output/rapidocr_test_smoke
+```
+
+The first recognition call initializes the ONNX model. Start with one worker;
+each additional evaluator worker creates and retains its own backend instance.
+The shared `--language` value is recorded in the report but does not select a
+different PP-OCRv6 model because this model is multilingual.
+
+Remove `--limit` and use `--workers 8` for the published 11,242-image run. It
+achieved **99.21%** normalized exact accuracy on authoritative boxes and
+**99.04%** through the end-to-end YOLO and OCR pipeline. The command writes its
+artifacts to `output/rapidocr_test`.
 
 Standard Ultralytics validation on the same test split gave overall box
 mAP50 **0.8325** and mAP50–95 **0.8141** across the roles present in these

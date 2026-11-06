@@ -10,6 +10,9 @@ vertical-bar test split. There are two primary evaluation modes:
 | Oracle OCR | Authoritative PlotQA text boxes | **99.25%** | **0.48%** | **0.56%** |
 | End-to-end | Text boxes predicted by YOLO | **98.68%** | **1.02%** | **1.51%** |
 
+See the [OCR comparison](ocr_comparison.md) for a side-by-side view of these
+published results and the RapidOCR PP-OCRv6 baseline.
+
 The **end-to-end result represents the frontend pipeline**:
 
 ```text
@@ -99,16 +102,17 @@ oracle track was clipped too, so this is not a YOLO or Tesseract fault alone.
 YOLO was trained on those boxes and inherits the short ones; end-to-end also
 clipped the left end ("Amount spent" read as "unt spent").
 
-**Fix.** For `chart_title` only, `src/tesseract_ocr.py` OCRs a full-width strip:
-x from 0 to the image width, y from the box top to the box bottom plus vertical
-padding. Text detected in the same vertical band is skipped: the strip starts
-after text to the left of the title (y tick labels, the rotated y-axis title)
-and stops before text to the right (a legend at the top right). Text
-overlapping the title box itself is ignored. Upscaling, grayscale/Otsu
-candidates and `--psm 7` are unchanged, and all other roles crop as before.
-`_TITLE_FULL_WIDTH_STRIP` turns the behavior off. The 40 px margin kept clear
-of legend labels (to avoid the legend swatch and frame) was derived from three
-charts' annotations and is unverified on others.
+**Fix.** For `chart_title` only, the shared helper in `src/ocr_crop.py` returns
+a full-width strip: x from 0 to the image width, y from the box top to the box
+bottom plus vertical padding. Text detected in the same vertical band is
+skipped: the strip starts after text to the left of the title (y tick labels,
+the rotated y-axis title) and stops before text to the right (a legend at the
+top right). Text overlapping the title box itself is ignored. Tesseract and
+RapidOCR both use this crop; their engine-specific recognition and
+preprocessing remain unchanged, and all other roles crop as before. The
+helper's title-strip switch turns the behavior off for tests and diagnostics.
+The 40 px margin kept clear of legend labels (to avoid the legend swatch and
+frame) was derived from three charts' annotations and is unverified on others.
 
 **Full-split results** (11,242 images; before -> after):
 
