@@ -22,6 +22,10 @@ LABEL_MIN_GAP = 1 / 8 * MM_PER_INCH   # labels to any component, minimum, §3.4.
 LABEL_MAX_GAP = 1 / 4 * MM_PER_INCH   # label to its own component, maximum, §3.4.3.12, §5.10.5
 # Labels are placed at the minimum distance; anything between the two is allowed.
 LABEL_GAP = LABEL_MIN_GAP
+# Clearance between the vertical heading and the top value label: the 1/8
+# inch label-to-component minimum (§3.4.3.12). §6.6.6.6 needs no blank line
+# after the heading.
+Y_HEADING_CLEARANCE = LABEL_MIN_GAP
 # Gaps between bars in a set and between sets (and before the first set),
 # measured between the bars' raised outer edges. §6.6.6.7 gives no number
 # ("separated enough to be able to read the background grid, yet close enough

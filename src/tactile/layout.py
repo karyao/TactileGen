@@ -50,6 +50,7 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     PAGE_HEIGHT,
     PAGE_WIDTH,
     TEXTURES,
+    Y_HEADING_CLEARANCE,
     Y_HEADING_MAX_CELLS,
 )
 
@@ -405,8 +406,12 @@ def _layout(chart: VerticalBarChart, mode: str) -> TactileLayout:
     # Vertical heading lines (at most 20 cells each, §6.6.6.6); placed below.
     y_heading = wrap_cells(chart.y_axis_title, Y_HEADING_MAX_CELLS)
     heading_y = y
-    y += LINE_PITCH * len(y_heading)
-    plot_top = y + DOT_DIAMETER / 2 + DOT_PITCH   # top value label starts at ``y``
+    heading_bottom = heading_y + (len(y_heading) - 1) * LINE_PITCH + LABEL_HEIGHT
+    # The top value label starts on the next braille line, and never closer
+    # than Y_HEADING_CLEARANCE below the heading.
+    top_label_y = max(y + LINE_PITCH * len(y_heading), heading_bottom + Y_HEADING_CLEARANCE)
+    # Its dots 2-5 sit on the top grid line (§6.6.6.6).
+    plot_top = top_label_y + DOT_DIAMETER / 2 + DOT_PITCH
 
     plot_height = axis_y - plot_top
     max_intervals = min(MAX_GRID_INTERVALS, int(plot_height // GRID_MIN_SPACING))

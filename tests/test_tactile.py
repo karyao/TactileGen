@@ -7,6 +7,7 @@ from contextlib import redirect_stdout
 import xml.etree.ElementTree as ElementTree
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from src.contract_io import load_vertical_bar_chart
 from src.contracts import BarSeries, VerticalBarChart
@@ -302,6 +303,30 @@ class HeadingPlacementTest(unittest.TestCase):
         violations = [v for v in check_layout(replace(layout, labels=labels))
                       if v.rule.id == "heading_placement"]
         self.assertEqual(len(violations), 2)
+
+
+class YHeadingClearanceTest(unittest.TestCase):
+    """Fix 4: the vertical heading clears the top value label by Y_HEADING_CLEARANCE."""
+
+    def gap(self, layout):
+        heading = max((l for l in layout.labels if l.role == "y_heading"), key=lambda l: l.y)
+        top = min((l for l in layout.labels if l.role == "y_value"), key=lambda l: l.y)
+        return top.bounds.y1 - heading.bounds.y2
+
+    def test_clearance_for_one_and_two_line_headings(self):
+        for name in ("rainfall", "crowded"):   # crowded has a two-line heading
+            with self.subTest(name=name):
+                layout = layout_vertical_bar_chart(load(name))
+                self.assertGreaterEqual(self.gap(layout), constants.Y_HEADING_CLEARANCE - 1e-9)
+
+    def test_clearance_constant_is_applied(self):
+        larger = constants.LINE_PITCH
+        with patch("src.tactile.layout.Y_HEADING_CLEARANCE", larger):
+            layout = layout_vertical_bar_chart(load("rainfall"))
+        self.assertAlmostEqual(self.gap(layout), larger)
+
+    def test_clearance_is_the_bana_minimum(self):
+        self.assertEqual(constants.Y_HEADING_CLEARANCE, constants.LABEL_MIN_GAP)
 
 
 class RuleTest(unittest.TestCase):
