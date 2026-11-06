@@ -79,6 +79,7 @@ also works on layouts built another way.
 | `texture_count` | At most five area textures | §3.2.2 |
 | `key_symbols` | Valid, distinct alphabetic or numeric keys | §5.8.1.1-3, §5.8.1.6 |
 | `x_label_overflow` | Reports pages whose labels fit in no overflow mode | §6.6.6.6, §5.8 |
+| `heading_placement` | Horizontal heading left-justified with the first value; vertical heading aligned with the first cell of the values (not centred on the plot) | §6.6.6.6 |
 | `key_format` | Key explanation in cell 6, level with its sample | §5.8.4.3, §5.8.4.4 |
 
 Passing every rule means these checks passed, not that the page is fully
