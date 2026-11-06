@@ -56,7 +56,9 @@ def main(argv: list[str] | None = None) -> int:
             layout, show_print=args.show_print,
             violations=violations if args.show_violations else None), encoding="utf-8")
         heading = f"Wrote {path}"
-        if layout.section:
+        if layout.page_kind == "key":
+            heading += " (key page)"
+        elif layout.section:
             heading += f" (part {layout.section[0]} of {layout.section[1]})"
         print(heading)
         for note in layout.notes:

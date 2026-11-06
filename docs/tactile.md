@@ -61,13 +61,18 @@ rule checker reports every problem.
 
 `layout_vertical_bar_chart_pages` (and the CLI, unless `--one-page` is given)
 divides the categories into the fewest consecutive sections whose pages pass
-every rule (BANA §3.9). Each section uses the same value scale. The first page
-keeps the title (§5.3.3) and has a transcriber's note giving the division and
-number of parts (§3.9.2); each page has a section title such as "Part 2 of 3:
-May to August." in transcriber's note indicators (§3.9.4; notes start in cell
-7 with runovers in cell 5, §5.6.2; indicators from UEB Rule 3.27). Keys are
-chosen across the whole graph so they match between pages. The CLI writes
-`name-1.svg`, `name-2.svg` and so on. §3.9.1 calls for an overview of the
+every rule (BANA §3.9). Each section uses the same value scale. With several
+series, a key page comes first (§6.6.6.4: the key goes before the graphic page
+when it cannot share it) holding the title, a transcriber's note giving the
+division and number of parts (§3.9.2), and the series key; the graph pages then
+keep their height for the plot. With one series, the first graph page holds
+the title and that note instead. The title is not repeated (§5.3.3). Each
+graph page has a section title such as "Part 2 of 2: July to December." in
+transcriber's note indicators (§3.9.4; notes start in cell 7 with runovers in
+cell 5, §5.6.2; indicators from UEB Rule 3.27) and its own category key. Keys
+are chosen across the whole graph so they match between pages. The CLI writes
+`name-1.svg`, `name-2.svg` and so on; `crowded.json` gives a key page and two
+graph pages of six months each. §3.9.1 calls for an overview of the
 whole graph first; none is generated, so part 1 reports `overview_first`.
 
 ## Rule checker
@@ -125,10 +130,9 @@ on the development machine.
 - Embosser formats (BRF, or a graphics embosser's own format) and PDF. The SVG
   can be printed on swell paper or imported into embosser software.
 - An overview page before a divided graph (§3.9.1); divided graphs are flagged
-  for review instead. Divided graphs can also end up with very short plots
-  (one grid interval for `crowded.json`), because BANA sets no minimum plot
-  height; a key page before the graph (§6.6.6.4) or a two-column key
-  (§5.8.4.9) would free space.
+  for review instead.
+- A two-column key (§5.8.4.9). BANA sets no minimum plot height, so a page can
+  still pass every rule with a short plot.
 - The "Key:" heading and transcriber's note indicators around a
   transcriber-made key (§5.8.4.2).
 - Texture designs from BANA's texture palettes (Appendices E and H), and a

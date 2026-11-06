@@ -470,11 +470,17 @@ class ConstantsTest(unittest.TestCase):
 
 
 class SectionTest(unittest.TestCase):
-    """Item 4: graphs too dense for one page are divided into sections (§3.9)."""
+    """Item 4: graphs too dense for one page are divided into sections (§3.9),
+    with the series key on a key page before the graph pages (§6.6.6.4)."""
 
     @classmethod
     def setUpClass(cls):
         cls.pages = layout_vertical_bar_chart_pages(load("crowded"))
+        cls.key = cls.pages[0]
+        cls.graphs = [p for p in cls.pages if p.page_kind == "graph"]
+
+    def labels(self, page, role):
+        return sorted((l for l in page.labels if l.role == role), key=lambda l: (l.y, l.x))
 
     def test_charts_that_fit_stay_on_one_page(self):
         for name in ("rainfall", "books_by_grade"):
@@ -483,56 +489,79 @@ class SectionTest(unittest.TestCase):
                 self.assertEqual(len(pages), 1)
                 self.assertIsNone(pages[0].section)
 
+    def test_key_page_comes_first(self):
+        self.assertEqual(self.key.page_kind, "key")
+        self.assertEqual([s.series_index for s in self.key.key_samples], [0, 1, 2])
+        self.assertTrue(self.labels(self.key, "title"))
+        self.assertEqual(check_layout(self.key), [])
+        notes = " ".join(l.text for l in self.labels(self.key, "note"))
+        self.assertIn(f"divided by category into {len(self.graphs)} parts", notes)
+
+    def test_graph_pages_have_no_series_key_or_title(self):
+        for page in self.graphs:
+            self.assertEqual(page.key_samples, ())
+            self.assertTrue(page.series_key_elsewhere)
+            self.assertEqual(self.labels(page, "title"), [])   # §5.3.3
+
     def test_crowded_chart_is_divided_and_every_bar_kept(self):
-        self.assertGreater(len(self.pages), 1)
-        self.assertEqual([p.section for p in self.pages],
-                         [(k, len(self.pages)) for k in range(1, len(self.pages) + 1)])
-        self.assertEqual(sum(len(p.bars) for p in self.pages), 36)
-        self.assertEqual(sum(p.category_count for p in self.pages), 12)
+        self.assertGreater(len(self.graphs), 1)
+        self.assertEqual([p.section for p in self.graphs],
+                         [(k, len(self.graphs)) for k in range(1, len(self.graphs) + 1)])
+        self.assertEqual(sum(len(p.bars) for p in self.graphs), 36)
+        self.assertEqual(sum(p.category_count for p in self.graphs), 12)
 
     def test_only_the_missing_overview_is_reported(self):
-        self.assertEqual({v.rule.id for v in check_layout(self.pages[0])}, {"overview_first"})
-        for page in self.pages[1:]:
+        self.assertEqual({v.rule.id for v in check_layout(self.graphs[0])}, {"overview_first"})
+        for page in self.graphs[1:]:
             self.assertEqual(check_layout(page), [])
+
+    def test_plots_keep_their_height(self):
+        """With the key moved off, each plot has several grid intervals, not one."""
+        for page in self.graphs:
+            self.assertGreaterEqual(len([l for l in page.lines if l.kind == "grid"]), 4)
 
     def test_every_section_has_the_same_scale(self):
         def scale(page):
-            values = sorted((l for l in page.labels if l.role == "y_value"), key=lambda l: l.y)
+            values = self.labels(page, "y_value")
             return page.plot.y1, page.plot.y2, [(l.text, round(l.y, 6)) for l in values]
-        first = scale(self.pages[0])
-        for page in self.pages[1:]:
+        first = scale(self.graphs[0])
+        for page in self.graphs[1:]:
             self.assertEqual(scale(page), first)
 
-    def test_title_only_on_the_first_page_and_notes_on_every_page(self):
-        def roles(page, role):
-            return [l for l in page.labels if l.role == role]
-        self.assertTrue(roles(self.pages[0], "title"))
-        for k, page in enumerate(self.pages, 1):
-            notes = " ".join(l.text for l in roles(page, "note"))
-            self.assertIn(f"Part {k} of {len(self.pages)}:", notes)
-            if k > 1:
-                self.assertEqual(roles(page, "title"), [])
-        self.assertIn(f"divided by category into {len(self.pages)} parts",
-                      " ".join(l.text for l in roles(self.pages[0], "note")))
+    def test_section_titles_on_every_graph_page(self):
+        for k, page in enumerate(self.graphs, 1):
+            notes = " ".join(l.text for l in self.labels(page, "note"))
+            self.assertIn(f"Part {k} of {len(self.graphs)}:", notes)
 
     def test_notes_use_transcriber_note_indicators_and_cells(self):
-        page = self.pages[1]
-        note = sorted((l for l in page.labels if l.role == "note"), key=lambda l: l.y)
+        page = self.key
+        note = self.labels(page, "note")
         self.assertEqual(note[0].cells[:3], TN_OPEN)
         self.assertEqual(note[-1].cells[-3:], TN_CLOSE)
         cell = constants.CELL_PITCH
         self.assertAlmostEqual(note[0].x, page.usable.x1 + 6 * cell)   # cell 7, §5.6.2
+        self.assertGreater(len(note), 1)
         for runover in note[1:]:
             self.assertAlmostEqual(runover.x, page.usable.x1 + 4 * cell)   # cell 5
 
     def test_keys_are_consistent_across_sections(self):
-        symbols = [l.text for p in self.pages for l in sorted(
+        symbols = [l.text for p in self.graphs for l in sorted(
             (l for l in p.labels if l.role == "category"), key=lambda l: l.x)]
         months = load("crowded").categories
-        mode = self.pages[0].x_label_mode
+        mode = self.graphs[0].x_label_mode
         expected = (list(months) if mode == "full" else
                     abbreviation_keys(months) if mode == "abbreviation" else numeric_keys(12))
         self.assertEqual(symbols, expected)
+
+    def test_single_series_split_has_no_key_page(self):
+        names = tuple(f"Item {k}" for k in range(1, 25))
+        chart = VerticalBarChart("demo/many.png", "Many Items", "Item", "Count", names,
+                                 (BarSeries(None, tuple(float(k) for k in range(1, 25))),))
+        pages = layout_vertical_bar_chart_pages(chart)
+        self.assertGreater(len(pages), 1)
+        self.assertTrue(all(p.page_kind == "graph" for p in pages))
+        self.assertTrue(self.labels(pages[0], "title"))
+        self.assertIn("divided by category", " ".join(l.text for l in self.labels(pages[0], "note")))
 
     def test_one_page_is_kept_when_no_split_works(self):
         # Make every layout break a rule that splitting cannot fix.
@@ -602,7 +631,7 @@ class SvgTest(unittest.TestCase):
             parts = Path(tmp) / "parts.svg"
             main(["--chart", str(FIXTURES / "crowded.json"), "--output", str(parts)])
             written = sorted(p.name for p in Path(tmp).glob("parts-*.svg"))
-            self.assertEqual(written, ["parts-1.svg", "parts-2.svg", "parts-3.svg"])
+            self.assertEqual(written, ["parts-1.svg", "parts-2.svg", "parts-3.svg"])  # key page + 2 parts
 
 
 if __name__ == "__main__":
