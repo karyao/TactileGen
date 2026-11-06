@@ -11,9 +11,17 @@ from unittest.mock import patch
 
 from src.contract_io import load_vertical_bar_chart
 from src.contracts import BarSeries, VerticalBarChart
-from src.tactile import check_layout, constants, layout_vertical_bar_chart, render_svg
+from src.tactile import (
+    RULES,
+    Violation,
+    check_layout,
+    constants,
+    layout_vertical_bar_chart,
+    layout_vertical_bar_chart_pages,
+    render_svg,
+)
 from src.tactile.__main__ import main
-from src.tactile.braille import NUMERIC_INDICATOR, to_braille, to_unicode
+from src.tactile.braille import NUMERIC_INDICATOR, TN_CLOSE, TN_OPEN, to_braille, to_unicode
 from src.tactile.keys import abbreviation_keys, is_valid_abbreviation_key, numeric_keys
 from src.tactile.layout import (
     BAR_MAX_WIDTH,
@@ -461,6 +469,80 @@ class ConstantsTest(unittest.TestCase):
         self.assertAlmostEqual(axis.y1, top_grid)
 
 
+class SectionTest(unittest.TestCase):
+    """Item 4: graphs too dense for one page are divided into sections (§3.9)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pages = layout_vertical_bar_chart_pages(load("crowded"))
+
+    def test_charts_that_fit_stay_on_one_page(self):
+        for name in ("rainfall", "books_by_grade"):
+            with self.subTest(name=name):
+                pages = layout_vertical_bar_chart_pages(load(name))
+                self.assertEqual(len(pages), 1)
+                self.assertIsNone(pages[0].section)
+
+    def test_crowded_chart_is_divided_and_every_bar_kept(self):
+        self.assertGreater(len(self.pages), 1)
+        self.assertEqual([p.section for p in self.pages],
+                         [(k, len(self.pages)) for k in range(1, len(self.pages) + 1)])
+        self.assertEqual(sum(len(p.bars) for p in self.pages), 36)
+        self.assertEqual(sum(p.category_count for p in self.pages), 12)
+
+    def test_only_the_missing_overview_is_reported(self):
+        self.assertEqual({v.rule.id for v in check_layout(self.pages[0])}, {"overview_first"})
+        for page in self.pages[1:]:
+            self.assertEqual(check_layout(page), [])
+
+    def test_every_section_has_the_same_scale(self):
+        def scale(page):
+            values = sorted((l for l in page.labels if l.role == "y_value"), key=lambda l: l.y)
+            return page.plot.y1, page.plot.y2, [(l.text, round(l.y, 6)) for l in values]
+        first = scale(self.pages[0])
+        for page in self.pages[1:]:
+            self.assertEqual(scale(page), first)
+
+    def test_title_only_on_the_first_page_and_notes_on_every_page(self):
+        def roles(page, role):
+            return [l for l in page.labels if l.role == role]
+        self.assertTrue(roles(self.pages[0], "title"))
+        for k, page in enumerate(self.pages, 1):
+            notes = " ".join(l.text for l in roles(page, "note"))
+            self.assertIn(f"Part {k} of {len(self.pages)}:", notes)
+            if k > 1:
+                self.assertEqual(roles(page, "title"), [])
+        self.assertIn(f"divided by category into {len(self.pages)} parts",
+                      " ".join(l.text for l in roles(self.pages[0], "note")))
+
+    def test_notes_use_transcriber_note_indicators_and_cells(self):
+        page = self.pages[1]
+        note = sorted((l for l in page.labels if l.role == "note"), key=lambda l: l.y)
+        self.assertEqual(note[0].cells[:3], TN_OPEN)
+        self.assertEqual(note[-1].cells[-3:], TN_CLOSE)
+        cell = constants.CELL_PITCH
+        self.assertAlmostEqual(note[0].x, page.usable.x1 + 6 * cell)   # cell 7, §5.6.2
+        for runover in note[1:]:
+            self.assertAlmostEqual(runover.x, page.usable.x1 + 4 * cell)   # cell 5
+
+    def test_keys_are_consistent_across_sections(self):
+        symbols = [l.text for p in self.pages for l in sorted(
+            (l for l in p.labels if l.role == "category"), key=lambda l: l.x)]
+        months = load("crowded").categories
+        mode = self.pages[0].x_label_mode
+        expected = (list(months) if mode == "full" else
+                    abbreviation_keys(months) if mode == "abbreviation" else numeric_keys(12))
+        self.assertEqual(symbols, expected)
+
+    def test_one_page_is_kept_when_no_split_works(self):
+        # Make every layout break a rule that splitting cannot fix.
+        broken = [Violation(RULES["bar_width"], "forced", ())]
+        with patch("src.tactile.rules.check_layout", return_value=broken):
+            pages = layout_vertical_bar_chart_pages(load("books_by_grade"))
+        self.assertEqual(len(pages), 1)
+        self.assertIsNone(pages[0].section)
+
+
 def all_label_texts() -> list[str]:
     """Every label text the layout produces for the demo and overflow charts."""
     layouts = [layout_vertical_bar_chart(load(name))
@@ -514,8 +596,13 @@ class SvgTest(unittest.TestCase):
             self.assertIn("<svg", out.read_text(encoding="utf-8"))
             crowded = Path(tmp) / "crowded.svg"
             self.assertEqual(main(["--chart", str(FIXTURES / "crowded.json"), "--output",
-                                   str(crowded), "--show-violations", "--strict"]), 1)
+                                   str(crowded), "--one-page", "--show-violations",
+                                   "--strict"]), 1)
             self.assertIn('id="violations"', crowded.read_text(encoding="utf-8"))
+            parts = Path(tmp) / "parts.svg"
+            main(["--chart", str(FIXTURES / "crowded.json"), "--output", str(parts)])
+            written = sorted(p.name for p in Path(tmp).glob("parts-*.svg"))
+            self.assertEqual(written, ["parts-1.svg", "parts-2.svg", "parts-3.svg"])
 
 
 if __name__ == "__main__":

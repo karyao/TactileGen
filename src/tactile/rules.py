@@ -82,6 +82,8 @@ RULES = {rule.id: rule for rule in (
     Rule("key_symbols", "§5.8.1.1-3, §5.8.1.6",
          "Alphabetic keys are 2-3 letters with a dot 3 or 6 letter and not aa/ac/cc/ca; "
          "numeric keys are numbers without a period; keys are distinct."),
+    Rule("overview_first", "§3.9.1",
+         "A graph divided into sections is preceded by an overview of the whole graph."),
     Rule("x_label_overflow", "§6.6.6.6, §5.8",
          "Category labels fit under their bars in some overflow mode, or need review."),
     Rule("key_format", "§5.8.4.3, §5.8.4.4",
@@ -113,6 +115,12 @@ def check_layout(layout: TactileLayout) -> list[Violation]:
     found += _key_format(layout)
     found += _key_symbols(layout)
     found += [_violation("x_label_overflow", reason) for reason in layout.needs_review]
+    if layout.section is not None and layout.section[0] == 1:
+        # No overview is generated: the whole graph cannot meet the BANA limits
+        # on one page, which is why it was divided. A person must decide what
+        # overview to show.
+        found.append(_violation("overview_first", f"part 1 of {layout.section[1]} has no "
+                                "overview of the whole graph before it"))
     return found
 
 

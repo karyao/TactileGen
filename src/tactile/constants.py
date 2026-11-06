@@ -67,6 +67,8 @@ MAX_AREA_TEXTURES = 5                   # §3.2.2
 
 # --- Labels --------------------------------------------------------------------------
 Y_HEADING_MAX_CELLS = 20                # §6.6.6.6
+TN_FIRST_CELL = 7                       # transcriber's note starts in cell 7, §5.6.2
+TN_RUNOVER_CELL = 5                     # and runs over in cell 5, §5.6.2
 
 # --- Not from BANA (review these) ----------------------------------------------------
 # BANA gives no numbers for these. Its line styles (Appendices F and I) and
