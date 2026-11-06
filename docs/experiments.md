@@ -163,7 +163,7 @@ The final engine and title-fix deltas are summarized in the
 [OCR comparison](ocr_comparison.md).
 
 ```bash
-python3.12 -m pip install -r requirements-model.txt -r requirements-rapidocr.txt
+python3.12 -m pip install -r requirements-model.txt -r requirements-ocr.txt
 python3.12 -m src.baseline.ocr evaluate \
   --engine rapidocr \
   --annotations data/annotations_test.json \

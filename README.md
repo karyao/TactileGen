@@ -100,7 +100,7 @@ ONNX Runtime. YOLO supplies the text boxes, and RapidOCR recognizes the cropped
 text. Install the optional backend and select it on the same OCR command:
 
 ```bash
-python3.12 -m pip install -r requirements-rapidocr.txt
+python3.12 -m pip install -r requirements-ocr.txt
 python3.12 -m src.ocr \
   --engine rapidocr \
   --image path/to/chart.png \

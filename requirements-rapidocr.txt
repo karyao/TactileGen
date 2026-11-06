@@ -1,4 +1,0 @@
--r requirements.txt
-
-rapidocr>=3.10,<4
-onnxruntime>=1.20,<2

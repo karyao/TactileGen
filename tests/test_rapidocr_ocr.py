@@ -277,7 +277,7 @@ class RapidOCRBackendTest(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=blocked_import):
-            with self.assertRaisesRegex(RuntimeError, "requirements-rapidocr.txt"):
+            with self.assertRaisesRegex(RuntimeError, "requirements-ocr.txt"):
                 _load_rapidocr()
 
 

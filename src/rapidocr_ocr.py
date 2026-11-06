@@ -26,7 +26,7 @@ def _load_rapidocr():
     except ImportError as exc:
         raise RuntimeError(
             "Install the RapidOCR dependencies: "
-            "python -m pip install -r requirements-rapidocr.txt"
+            "python -m pip install -r requirements-ocr.txt"
         ) from exc
     return rapidocr
 
@@ -102,7 +102,7 @@ class RapidOCRBackend:
         except ImportError as exc:
             raise RuntimeError(
                 "Install the RapidOCR dependencies: "
-                "python -m pip install -r requirements-rapidocr.txt"
+                "python -m pip install -r requirements-ocr.txt"
             ) from exc
 
     def recognize(
