@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from itertools import combinations
 
 from src.tactile.braille import has_numeric_indicator
-from src.tactile.layout import (
+from src.tactile.constants import (
     BAR_MAX_WIDTH,
     BAR_MIN_WIDTH,
     CELL_PITCH,
@@ -24,13 +24,14 @@ from src.tactile.layout import (
     LABEL_MAX_GAP,
     LABEL_MIN_GAP,
     MAX_AREA_TEXTURES,
+    PRIMARY_LINE_MIN_LENGTH,
+    TICK_HALF_LENGTH,
     Y_HEADING_MAX_CELLS,
-    TactileLayout,
 )
+from src.tactile.layout import TactileLayout
 
-TOLERANCE = 0.05  # mm, for floating-point placement
-PRIMARY_LINE_MIN_LENGTH = 12.7  # 1/2 inch, §3.4.3.2
-TICK_HALF_LENGTH = 6.35         # 1/4 inch each side, §6.6.6.5
+# Floating-point slack when comparing placed geometry; not a spacing value.
+TOLERANCE = 0.05
 
 
 @dataclass(frozen=True)
