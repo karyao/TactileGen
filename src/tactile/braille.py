@@ -23,6 +23,9 @@ _LETTER_DOTS = {
 }
 _DIGIT_LETTER = dict(zip("1234567890", "abcdefghij"))
 
+# Transcriber's note indicators, UEB Rule 3.27: dots 4, 46, 126 and 4, 46, 345.
+TN_OPEN = (Cell({4}), Cell({4, 6}), Cell({1, 2, 6}))
+TN_CLOSE = (Cell({4}), Cell({4, 6}), Cell({3, 4, 5}))
 NUMERIC_INDICATOR = Cell({3, 4, 5, 6})
 CAPITAL_LETTER = Cell({6})
 GRADE1_SYMBOL = Cell({5, 6})

@@ -57,6 +57,19 @@ The layout never drops content to make a chart fit. If a chart breaks a
 limit (for example 36 bars on one page), the page is still produced and the
 rule checker reports every problem.
 
+## Graphs too dense for one page
+
+`layout_vertical_bar_chart_pages` (and the CLI, unless `--one-page` is given)
+divides the categories into the fewest consecutive sections whose pages pass
+every rule (BANA §3.9). Each section uses the same value scale. The first page
+keeps the title (§5.3.3) and has a transcriber's note giving the division and
+number of parts (§3.9.2); each page has a section title such as "Part 2 of 3:
+May to August." in transcriber's note indicators (§3.9.4; notes start in cell
+7 with runovers in cell 5, §5.6.2; indicators from UEB Rule 3.27). Keys are
+chosen across the whole graph so they match between pages. The CLI writes
+`name-1.svg`, `name-2.svg` and so on. §3.9.1 calls for an overview of the
+whole graph first; none is generated, so part 1 reports `overview_first`.
+
 ## Rule checker
 
 `src.tactile.check_layout(layout)` returns a list of violations, each with the
@@ -83,6 +96,7 @@ also works on layouts built another way.
 | `texture_count` | At most five area textures | §3.2.2 |
 | `key_symbols` | Valid, distinct alphabetic or numeric keys | §5.8.1.1-3, §5.8.1.6 |
 | `x_label_overflow` | Reports pages whose labels fit in no overflow mode | §6.6.6.6, §5.8 |
+| `overview_first` | A divided graph needs an overview first (always reported on part 1; not generated) | §3.9.1 |
 | `heading_placement` | Horizontal heading left-justified with the first value; vertical heading aligned with the first cell of the values (not centred on the plot) | §6.6.6.6 |
 | `key_format` | Key explanation in cell 6, level with its sample | §5.8.4.3, §5.8.4.4 |
 
@@ -110,10 +124,11 @@ on the development machine.
 - Full braille translation (contracted UEB, Nemeth) through liblouis.
 - Embosser formats (BRF, or a graphics embosser's own format) and PDF. The SVG
   can be printed on swell paper or imported into embosser software.
-- Charts too dense for one page (see `crowded.json`). BANA options to build:
-  a two-column key (§5.8.4.9), the key on the preceding page (§6.6.6.4),
-  the horizontal-value hierarchy (§6.6.1.4), or changing bar orientation with
-  a transcriber's note (§6.6.6.1).
+- An overview page before a divided graph (§3.9.1); divided graphs are flagged
+  for review instead. Divided graphs can also end up with very short plots
+  (one grid interval for `crowded.json`), because BANA sets no minimum plot
+  height; a key page before the graph (§6.6.6.4) or a two-column key
+  (§5.8.4.9) would free space.
 - The "Key:" heading and transcriber's note indicators around a
   transcriber-made key (§5.8.4.2).
 - Texture designs from BANA's texture palettes (Appendices E and H), and a

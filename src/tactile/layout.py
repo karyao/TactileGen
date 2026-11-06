@@ -14,8 +14,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
-from src.contracts import VerticalBarChart
-from src.tactile.braille import Cell, to_braille
+from src.contracts import BarSeries, VerticalBarChart
+from src.tactile.braille import BLANK, TN_CLOSE, TN_OPEN, Cell, to_braille
 from src.tactile.keys import abbreviation_keys, numeric_keys
 from src.tactile.constants import (  # noqa: F401  (re-exported for callers and tests)
     AXIS_STRENGTH,
@@ -50,6 +50,8 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     PAGE_HEIGHT,
     PAGE_WIDTH,
     TEXTURES,
+    TN_FIRST_CELL,
+    TN_RUNOVER_CELL,
     Y_HEADING_CLEARANCE,
     Y_HEADING_MAX_CELLS,
 )
@@ -178,6 +180,8 @@ class TactileLayout:
     notes: tuple[str, ...] = field(default_factory=tuple)
     # Reasons a person must review the page before it is produced.
     needs_review: tuple[str, ...] = field(default_factory=tuple)
+    # (part, of) when the graph is split into sections (BANA §3.9), else None.
+    section: tuple[int, int] | None = None
 
     @property
     def categories_keyed(self) -> bool:
@@ -302,6 +306,82 @@ def layout_vertical_bar_chart(chart: VerticalBarChart, *,
     return replace(built, needs_review=built.needs_review + (reason,))
 
 
+def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
+                                    x_labels: str = "auto") -> list[TactileLayout]:
+    """One page when it passes every rule; otherwise sections (BANA §3.9).
+
+    The categories are divided into the fewest consecutive sections whose
+    pages each pass every rule except ``overview_first``, trying the x-label
+    modes in overflow order for each section count. Every section uses the
+    same value maximum and vertical layout, so bars are on the same scale.
+    The first page keeps the title (§5.3.3) and has a transcriber's note
+    giving the type of division and the number of parts (§3.9.2); each page
+    has a section title in transcriber's note indicators (§3.9.4). Keys are
+    chosen across the whole graph so they stay consistent between pages.
+    If no split passes, the one-page layout is returned with its problems.
+    """
+    from src.tactile.rules import check_layout   # rules imports this module
+
+    single = layout_vertical_bar_chart(chart, x_labels=x_labels)
+    if not check_layout(single):
+        return [single]
+    modes = X_LABEL_MODES if x_labels == "auto" else (x_labels,)
+    n_cat = len(chart.categories)
+    value_max = max(v for series in chart.series for v in series.values)
+    for parts in range(2, n_cat + 1):
+        chunks = _split(n_cat, parts)
+        for mode in modes:
+            try:
+                texts = _category_texts(chart.categories, mode)
+                pages = _sections(chart, mode, texts, chunks, value_max)
+            except ValueError:
+                continue
+            if all(v.rule.id == "overview_first" for page in pages for v in check_layout(page)):
+                return pages
+    return [single]
+
+
+def _split(count: int, parts: int) -> list[range]:
+    """``parts`` consecutive ranges of near-equal size covering ``count`` items."""
+    base, extra = divmod(count, parts)
+    ranges, start = [], 0
+    for k in range(parts):
+        size = base + (1 if k < extra else 0)
+        ranges.append(range(start, start + size))
+        start += size
+    return ranges
+
+
+def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
+              chunks: list[range], value_max: float) -> list[TactileLayout]:
+    n = len(chunks)
+    names = chart.categories
+
+    def section_chart(r: range) -> VerticalBarChart:
+        return VerticalBarChart(
+            chart.source_key, chart.title, chart.x_axis_title, chart.y_axis_title,
+            tuple(names[i] for i in r),
+            tuple(BarSeries(s.name, tuple(s.values[i] for i in r)) for s in chart.series))
+
+    def notes(k: int, r: range) -> tuple[str, ...]:
+        span = names[r[0]] if len(r) == 1 else f"{names[r[0]]} to {names[r[-1]]}"
+        part = f"Part {k} of {n}: {span}."
+        if k == 1:
+            return (f"This graph is divided by category into {n} parts with the same "
+                    "scale on each part.", part)
+        return (part,)
+
+    def build(heading_y_min):
+        return [_layout(section_chart(r), mode, category_texts=[texts[i] for i in r],
+                        show_title=k == 1, transcriber_notes=notes(k, r),
+                        heading_y_min=heading_y_min, value_max=value_max)
+                for k, r in enumerate(chunks, 1)]
+
+    first = build(None)
+    heading_y = max(min(l.y for l in page.labels if l.role == "y_heading") for page in first)
+    return [replace(page, section=(k, n)) for k, page in enumerate(build(heading_y), 1)]
+
+
 def _categories_fit(layout: TactileLayout) -> bool:
     labels = sorted((l for l in layout.labels if l.role == "category"), key=lambda l: l.x)
     if any(l.bounds.x1 < layout.usable.x1 or l.bounds.x2 > layout.usable.x2 for l in labels):
@@ -337,9 +417,45 @@ def _key_entry_lines(symbol: str, name: str) -> list[tuple[str, int]]:
     return lines
 
 
-def _layout(chart: VerticalBarChart, mode: str) -> TactileLayout:
+def _note_labels(note_id: str, text: str, x0: float, y: float) -> list[BrailleLabel]:
+    """A transcriber's note: opening indicator in cell 7, runovers in cell 5,
+    closing indicator after the last word (§5.6.2; indicators UEB Rule 3.27)."""
+    words = text.split()
+    tokens = [to_braille(word) for word in words]
+    tokens[0] = TN_OPEN + tokens[0]
+    tokens[-1] = tokens[-1] + TN_CLOSE
+    out: list[BrailleLabel] = []
+    start_cell, line_cells, line_words = TN_FIRST_CELL, [], []
+    for word, cells in zip(words, tokens):
+        capacity = CELLS_PER_LINE - start_cell + 1
+        extra = len(cells) + (1 if line_cells else 0)
+        if line_cells and len(line_cells) + extra > capacity:
+            out.append(BrailleLabel(f"{note_id}-{len(out)}", "note", " ".join(line_words),
+                                    tuple(line_cells), x0 + (start_cell - 1) * CELL_PITCH,
+                                    y + len(out) * LINE_PITCH))
+            start_cell, line_cells, line_words = TN_RUNOVER_CELL, [], []
+        if len(cells) > CELLS_PER_LINE - start_cell + 1:
+            raise ValueError(f"word too long for a transcriber's note line: {word!r}")
+        line_cells += ([BLANK] if line_cells else []) + list(cells)
+        line_words.append(word)
+    out.append(BrailleLabel(f"{note_id}-{len(out)}", "note", " ".join(line_words),
+                            tuple(line_cells), x0 + (start_cell - 1) * CELL_PITCH,
+                            y + len(out) * LINE_PITCH))
+    return out
+
+
+def _layout(chart: VerticalBarChart, mode: str, *,
+            category_texts: list[str] | None = None,
+            show_title: bool = True,
+            transcriber_notes: tuple[str, ...] = (),
+            heading_y_min: float | None = None,
+            value_max: float | None = None) -> TactileLayout:
+    """One page. The keyword arguments are used for sections of a split graph:
+    keys chosen across the whole graph, notes, and a shared vertical layout
+    and value maximum so every section has the same scale."""
     keyed = mode != "full"
-    category_texts = _category_texts(chart.categories, mode)
+    if category_texts is None:
+        category_texts = _category_texts(chart.categories, mode)
     values = [v for series in chart.series for v in series.values]
     if any(v < 0 for v in values):
         raise ValueError("negative bar values are not supported yet")
@@ -359,13 +475,23 @@ def _layout(chart: VerticalBarChart, mode: str) -> TactileLayout:
     notes: list[str] = []
     y = usable.y1
 
-    # Title: centred heading lines, then a blank line.
-    for k, text in enumerate(wrap_cells(chart.title, CELLS_PER_LINE)):
-        width = label_width(len(to_braille(text)))
-        labels.append(_label(f"title-{k}", "title", text,
-                             (usable.x1 + usable.x2 - width) / 2, y))
+    # Title: centred heading lines, then a blank line (§5.3.1). A split
+    # graph shows it on the first section only (§5.3.3).
+    if show_title:
+        for k, text in enumerate(wrap_cells(chart.title, CELLS_PER_LINE)):
+            width = label_width(len(to_braille(text)))
+            labels.append(_label(f"title-{k}", "title", text,
+                                 (usable.x1 + usable.x2 - width) / 2, y))
+            y += LINE_PITCH
         y += LINE_PITCH
-    y += LINE_PITCH
+
+    # Transcriber's notes come before the key (§5.6.1), then a blank line.
+    for n, text in enumerate(transcriber_notes):
+        note = _note_labels(f"note-{n}", text, usable.x1, y)
+        labels.extend(note)
+        y += LINE_PITCH * len(note)
+    if transcriber_notes:
+        y += LINE_PITCH
 
     # Key before the graph (§6.6.6.4), in left-to-right bar order.
     if n_series > 1:
@@ -405,6 +531,8 @@ def _layout(chart: VerticalBarChart, mode: str) -> TactileLayout:
 
     # Vertical heading lines (at most 20 cells each, §6.6.6.6); placed below.
     y_heading = wrap_cells(chart.y_axis_title, Y_HEADING_MAX_CELLS)
+    if heading_y_min is not None:
+        y = max(y, heading_y_min)
     heading_y = y
     heading_bottom = heading_y + (len(y_heading) - 1) * LINE_PITCH + LABEL_HEIGHT
     # The top value label starts on the next braille line, and never closer
@@ -415,7 +543,8 @@ def _layout(chart: VerticalBarChart, mode: str) -> TactileLayout:
 
     plot_height = axis_y - plot_top
     max_intervals = min(MAX_GRID_INTERVALS, int(plot_height // GRID_MIN_SPACING))
-    step, intervals = _nice_step(max(values), max_intervals)
+    step, intervals = _nice_step(max(values) if value_max is None else value_max,
+                                 max_intervals)
     top_value = step * intervals
     spacing = plot_height / intervals
 
