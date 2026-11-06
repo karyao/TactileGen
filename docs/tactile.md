@@ -93,9 +93,13 @@ capitals (single and word), digits with the numeric indicator, decimal point
 and numeric comma, the grade 1 indicator after a digit, minus sign and common
 punctuation. Anything else raises `ValueError` rather than guessing.
 
-`tests/test_tactile.py` cross-checks every demo label against liblouis
-(`en-ueb-g1.ctb`) when the `louis` Python bindings are installed, and skips
-otherwise. This check has not yet been run on a machine with liblouis.
+Two liblouis checks in `tests/test_tactile.py` use the UEB grade 1 table
+(`en-ueb-g1.ctb`): a forward check that liblouis produces the same braille
+for the demo labels, and a round-trip check that back-translating the braille
+of every label (demos plus abbreviation- and number-keyed layouts, about 70
+labels) gives the original text. Both skip when the `louis` Python bindings
+are not installed. **Neither has been run yet**: liblouis was not available
+on the development machine.
 
 ## Not done yet
 
