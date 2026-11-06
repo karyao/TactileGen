@@ -152,6 +152,15 @@ class BarSpacingTest(unittest.TestCase):
         axis = next(l for l in layout.lines if l.id == "axis-y")
         self.assertAlmostEqual(first.bounds.x1 - axis.bounds.x2, constants.GROUP_GAP, places=6)
 
+    def test_sets_are_distinguishable(self):
+        """Bars in a set are joined (§6.6.6.7); sets are separated by a larger gap."""
+        self.assertEqual(constants.BAR_GAP, 0.0)
+        self.assertGreater(constants.GROUP_GAP, constants.BAR_GAP)
+        layout = layout_vertical_bar_chart(load("books_by_grade"))
+        inside = [gap for same, gap in self.gaps(layout) if same]
+        between = [gap for same, gap in self.gaps(layout) if not same]
+        self.assertGreater(min(between), max(inside))
+
     def test_width_shrinks_as_series_are_added(self):
         widths = [layout_vertical_bar_chart(self.chart(6, n)).bars[0].width for n in (1, 2, 3)]
         self.assertEqual(widths, sorted(widths, reverse=True))
