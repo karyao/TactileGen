@@ -442,6 +442,9 @@ class ConstantsTest(unittest.TestCase):
             "GRID_MIN_SPACING": inch * 3 / 8, "PRIMARY_LINE_MIN_LENGTH": inch / 2,
             "TICK_HALF_LENGTH": inch / 4, "KEY_SAMPLE_WIDTH": inch,
             "KEY_SAMPLE_HEIGHT": inch / 2, "PAGE_WIDTH": inch * 11.5, "PAGE_HEIGHT": inch * 11,
+            # BANA "Size and Spacing of Braille Characters" (Spec 800 §3.2).
+            "DOT_DIAMETER": inch * 0.057, "DOT_PITCH": inch * 0.092,
+            "CELL_PITCH": inch * 0.245, "LINE_PITCH": inch * 0.400,
         }
         for name, value in expected.items():
             with self.subTest(name=name):

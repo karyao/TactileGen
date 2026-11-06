@@ -11,18 +11,30 @@ from __future__ import annotations
 
 from html import escape
 
-from src.tactile.constants import DOT_DIAMETER
+from src.tactile.constants import (
+    DOT_DIAMETER,
+    DOT_TEXTURE_DIAMETER,
+    DOT_TEXTURE_TILE,
+    TEXTURE_LINE_WIDTH,
+    TEXTURE_TILE,
+)
 from src.tactile.layout import TactileLayout
 from src.tactile.rules import Violation
 
-_PATTERNS = {
-    "diagonal": '<path d="M0,4 L4,0" stroke="#000" stroke-width="0.6"/>',
-    # 0.8 mm dots, smaller than 1.45 mm braille dots (BANA §6.8.3.3).
-    "dots": '<circle cx="1.5" cy="1.5" r="0.4" fill="#000"/>',
-    "horizontal": '<path d="M0,2 L4,2" stroke="#000" stroke-width="0.6"/>',
-    "vertical": '<path d="M2,0 L2,4" stroke="#000" stroke-width="0.6"/>',
-    "crosshatch": '<path d="M0,4 L4,0 M0,0 L4,4" stroke="#000" stroke-width="0.5"/>',
-}
+
+def _patterns() -> dict[str, tuple[float, str]]:
+    """Texture name -> (tile size, SVG body), from the constants file."""
+    t, half, stroke = TEXTURE_TILE, TEXTURE_TILE / 2, f'stroke="#000" stroke-width="{TEXTURE_LINE_WIDTH}"'
+    d = DOT_TEXTURE_TILE / 2
+    return {
+        "diagonal": (t, f'<path d="M0,{t} L{t},0" {stroke}/>'),
+        # Dots smaller than braille dots (BANA §6.8.3.3).
+        "dots": (DOT_TEXTURE_TILE,
+                 f'<circle cx="{d}" cy="{d}" r="{DOT_TEXTURE_DIAMETER / 2}" fill="#000"/>'),
+        "horizontal": (t, f'<path d="M0,{half} L{t},{half}" {stroke}/>'),
+        "vertical": (t, f'<path d="M{half},0 L{half},{t}" {stroke}/>'),
+        "crosshatch": (t, f'<path d="M0,{t} L{t},0 M0,0 L{t},{t}" {stroke}/>'),
+    }
 
 
 def _fill(texture: str) -> str:
@@ -39,8 +51,7 @@ def render_svg(layout: TactileLayout, *, show_print: bool = False,
         f"<title>Tactile graphic: {escape(layout.source_key)}</title>",
         "<defs>",
     ]
-    for name, body in _PATTERNS.items():
-        size = 3 if name == "dots" else 4
+    for name, (size, body) in _patterns().items():
         out.append(f'<pattern id="tex-{name}" width="{size}" height="{size}" '
                    f'patternUnits="userSpaceOnUse">{body}</pattern>')
     out += ["</defs>", f'<rect width="{w:.2f}" height="{h:.2f}" fill="#fff"/>']
