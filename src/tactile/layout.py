@@ -21,6 +21,7 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     AXIS_WIDTH,
     BAR_MAX_WIDTH,
     BAR_MIN_WIDTH,
+    BAR_GAP,
     BAR_OUTLINE_WIDTH,
     BAR_STRENGTH,
     CELL_PITCH,
@@ -207,6 +208,24 @@ def wrap_cells(text: str, max_cells: int) -> list[str]:
     return lines
 
 
+def set_width(bar_width: float, n_series: int) -> float:
+    """Raised width of one set of bars, outer edge to outer edge."""
+    return n_series * (bar_width + BAR_OUTLINE_WIDTH) + (n_series - 1) * BAR_GAP
+
+
+def bar_width_for(available: float, n_categories: int, n_series: int) -> float:
+    """Bar width (inside the outline) that fills ``available`` millimetres.
+
+    ``available`` holds ``n_categories`` sets of ``n_series`` bars with
+    BAR_GAP between bars in a set and GROUP_GAP before, between and after the
+    sets. The result is capped at the BANA maximum; it can fall below the
+    minimum, which the rule checker then reports.
+    """
+    per_set = (available - (n_categories + 1) * GROUP_GAP) / n_categories
+    width = (per_set - (n_series - 1) * BAR_GAP) / n_series - BAR_OUTLINE_WIDTH
+    return min(BAR_MAX_WIDTH, width)
+
+
 def _nice_step(maximum: float, max_intervals: int) -> tuple[float, int]:
     """Smallest 1/2/5 x 10^k step covering ``maximum`` in at most ``max_intervals``."""
     if max_intervals < 1:
@@ -350,14 +369,16 @@ def _layout(chart: VerticalBarChart, keyed: bool) -> TactileLayout:
     value_width = max(label_width(len(to_braille(t))) for t in tick_texts)
     axis_x = usable.x1 + value_width + LABEL_GAP + AXIS_WIDTH / 2
 
-    # Bars: sets of bars joined within a category, separated between categories.
-    # Leave room for both half-widths of the horizontal axis line.
-    available = usable.x2 - axis_x - AXIS_WIDTH
-    bar_width = min(BAR_MAX_WIDTH, (available - (n_cat + 1) * GROUP_GAP) / (n_cat * n_series))
+    # Bars: ``n_series`` bars per set with BAR_GAP between them, GROUP_GAP
+    # before, between and after the sets. Gaps are between raised outer edges
+    # (outline included). Leave room for both half-widths of the axis line.
+    plot_left = axis_x + AXIS_WIDTH / 2
+    available = usable.x2 - AXIS_WIDTH / 2 - plot_left
+    bar_width = bar_width_for(available, n_cat, n_series)
     if bar_width <= 0:
         raise ValueError("too many bars to draw on one page")
-    group_width = bar_width * n_series
-    plot_right = axis_x + AXIS_WIDTH / 2 + GROUP_GAP + n_cat * (group_width + GROUP_GAP)
+    group_width = set_width(bar_width, n_series)
+    plot_right = plot_left + GROUP_GAP + n_cat * (group_width + GROUP_GAP)
 
     axis_id = "axis-x"
     lines.append(Line("axis-y", "axis", axis_x, plot_top, axis_x, axis_y,
@@ -386,11 +407,13 @@ def _layout(chart: VerticalBarChart, keyed: bool) -> TactileLayout:
     category_y = axis_y + AXIS_WIDTH / 2 + LABEL_GAP
     first_category_x = None
     for j, name in enumerate(chart.categories):
-        group_x = axis_x + AXIS_WIDTH / 2 + GROUP_GAP + j * (group_width + GROUP_GAP)
+        group_x = plot_left + GROUP_GAP + j * (group_width + GROUP_GAP)
         for s, series in enumerate(chart.series):
             value = float(series.values[j])
             top = value_y(value)
-            bars.append(Bar(f"bar-{s}-{j}", group_x + s * bar_width, top, bar_width,
+            bar_x = (group_x + BAR_OUTLINE_WIDTH / 2
+                     + s * (bar_width + BAR_OUTLINE_WIDTH + BAR_GAP))
+            bars.append(Bar(f"bar-{s}-{j}", bar_x, top, bar_width,
                             axis_y - AXIS_WIDTH / 2 - top, textures[s], s, j, value))
         text = letters[j] if keyed else name
         width = label_width(len(to_braille(text)))

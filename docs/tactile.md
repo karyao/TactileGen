@@ -45,7 +45,7 @@ Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 | Textures | At most five area textures; the dot fill uses 0.8 mm dots, smaller than braille dots | §3.2.2, §6.8.3.3 |
 | Vertical values | Right-justified, numeric indicator, dots 2-5 level with the grid line, 4 mm from the axis | §6.6.6.2, §6.6.6.6 |
 | Grid | Horizontal grid lines (least distinct, dashed) instead of tick marks; at least 3/8 inch apart | §6.6.6.3, §6.6.6.5, §3.4.3.9 |
-| Bars | 3/8 to 1 inch wide, joined within a category, distinct textures per series | §6.6.6.7 |
+| Bars | 3/8 to 1 inch wide, sized from the number of categories and series; 1/8 inch between bars in a set and between sets (BANA gives no number for these gaps, so the §3.4.3.12 spacing is reused); distinct textures per series | §6.6.6.7, §3.4.3.12 |
 | Category labels | Centred under each set of bars; keyed with letters a, b, c when they do not fit | §6.6.6.6, §6.6.1.4 |
 | Headings | Vertical heading above the values (≤ 20 cells per line); horizontal heading below the values, left-justified with the first one | §6.6.6.6 |
 
@@ -62,6 +62,7 @@ also works on layouts built another way.
 | Rule | Checks | BANA |
 | --- | --- | --- |
 | `bar_width` | Bars 3/8 to 1 inch wide | §6.6.6.7 |
+| `bar_spacing` | At least 1/8 inch between bars and between sets | §6.6.6.7, §3.4.3.12 |
 | `label_clearance` | Labels at least 1/8 inch (3 mm) from every other component | §3.4.3.12, §6.6.6.6 |
 | `label_owner_distance` | A label at most 1/4 inch (6 mm) from its component | §3.4.3.12, §5.10.5 |
 | `fits_page` | Everything inside 40 cells x 25 lines | §3.4.2 |

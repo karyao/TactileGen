@@ -22,6 +22,13 @@ LABEL_MIN_GAP = 1 / 8 * MM_PER_INCH   # labels to any component, minimum, §3.4.
 LABEL_MAX_GAP = 1 / 4 * MM_PER_INCH   # label to its own component, maximum, §3.4.3.12, §5.10.5
 # Labels are placed at the minimum distance; anything between the two is allowed.
 LABEL_GAP = LABEL_MIN_GAP
+# Gaps between bars in a set and between sets (and before the first set),
+# measured between the bars' raised outer edges. §6.6.6.7 gives no number
+# ("separated enough to be able to read the background grid, yet close enough
+# to readily compare"); by project decision the §3.4.3.12 1/8 inch component
+# spacing is reused for both.
+BAR_GAP = LABEL_MIN_GAP
+GROUP_GAP = LABEL_MIN_GAP
 
 # --- Bars, grid and lines ----------------------------------------------------------
 BAR_MIN_WIDTH = 3 / 8 * MM_PER_INCH     # §6.6.6.7 ("3/8 inch (1 centimeter)")
@@ -58,8 +65,5 @@ GRID_WIDTH, BAR_OUTLINE_WIDTH, AXIS_WIDTH = 0.5, 1.0, 1.5
 # Upper limit on grid intervals, to keep the grid sparse. A count, not a
 # spacing; BANA only says some grid lines may be omitted (§6.6.1.1).
 MAX_GRID_INTERVALS = 8
-# Space between sets of bars. Invented; replaced by a sourced value in the
-# bar-spacing fix.
-GROUP_GAP = 8.0
 
 TEXTURES = ("diagonal", "dots", "horizontal", "crosshatch", "vertical")
