@@ -278,6 +278,32 @@ class OverflowOrderTest(unittest.TestCase):
         self.assertIn("key_symbols", rule_ids(replace(layout, labels=labels)))
 
 
+class HeadingPlacementTest(unittest.TestCase):
+    """Fix 3: headings stay in their BANA §6.6.6.6 positions, not centred."""
+
+    def heading(self, layout, role):
+        return min((l for l in layout.labels if l.role == role), key=lambda l: l.y)
+
+    def test_demo_headings_follow_bana(self):
+        for name in ("rainfall", "books_by_grade", "crowded"):
+            with self.subTest(name=name):
+                layout = layout_vertical_bar_chart(load(name))
+                first_value = min(l.x for l in layout.labels if l.role == "category")
+                self.assertAlmostEqual(self.heading(layout, "x_heading").x, first_value)
+                first_cell = min(l.x for l in layout.labels if l.role == "y_value")
+                self.assertAlmostEqual(self.heading(layout, "y_heading").x, first_cell)
+                self.assertNotIn("heading_placement", rule_ids(layout))
+
+    def test_centred_headings_are_reported(self):
+        layout = layout_vertical_bar_chart(load("rainfall"))
+        plot_centre = (layout.plot.x1 + layout.plot.x2) / 2
+        labels = tuple(replace(l, x=plot_centre - l.width / 2)
+                       if l.role in ("x_heading", "y_heading") else l for l in layout.labels)
+        violations = [v for v in check_layout(replace(layout, labels=labels))
+                      if v.rule.id == "heading_placement"]
+        self.assertEqual(len(violations), 2)
+
+
 class RuleTest(unittest.TestCase):
     """Each rule fires on a deliberately broken copy of a passing layout."""
 

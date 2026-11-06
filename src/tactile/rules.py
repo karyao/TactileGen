@@ -73,6 +73,10 @@ RULES = {rule.id: rule for rule in (
          "Each set of bars has a distinct texture that matches its key sample."),
     Rule("key_sample_size", "§3.4.3.14", "Key texture samples are 1/2 inch high and 1 inch wide."),
     Rule("y_heading_length", "§6.6.6.6", "Each line of the vertical heading has at most 20 cells."),
+    Rule("heading_placement", "§6.6.6.6",
+         "The horizontal heading is left-justified with the first horizontal value, below "
+         "the values; the vertical heading is aligned with the first cell of the vertical "
+         "values. Headings are not centred on the plot."),
     Rule("texture_count", "§3.2.2", "A graphic uses at most five different area textures."),
     Rule("key_symbols", "§5.8.1.1-3, §5.8.1.6",
          "Alphabetic keys are 2-3 letters with a dot 3 or 6 letter and not aa/ac/cc/ca; "
@@ -103,6 +107,7 @@ def check_layout(layout: TactileLayout) -> list[Violation]:
     found += _all_bars_labeled(layout)
     found += _key_rules(layout)
     found += _y_heading_length(layout)
+    found += _heading_placement(layout)
     found += _texture_count(layout)
     found += _key_format(layout)
     found += _key_symbols(layout)
@@ -125,6 +130,30 @@ def _key_symbols(layout):
                              f"{layout.x_label_mode} key rules", label.id)
         if texts.count(label.text) > 1:
             yield _violation("key_symbols", f"key {label.text!r} is used twice", label.id)
+
+
+def _heading_placement(layout):
+    by_role = {}
+    for label in layout.labels:
+        by_role.setdefault(label.role, []).append(label)
+    categories = sorted(by_role.get("category", []), key=lambda l: l.x)
+    x_heading = sorted(by_role.get("x_heading", []), key=lambda l: l.y)
+    if categories and x_heading:
+        first = categories[0]
+        if abs(x_heading[0].x - first.x) > TOLERANCE:
+            yield _violation("heading_placement", f"{x_heading[0].id} starts at "
+                             f"x={x_heading[0].x:.1f} mm, not with the first value at "
+                             f"x={first.x:.1f} mm", x_heading[0].id, first.id)
+        if x_heading[0].y <= first.y:
+            yield _violation("heading_placement", f"{x_heading[0].id} is not below the values",
+                             x_heading[0].id)
+    values = by_role.get("y_value", [])
+    if values:
+        first_cell = min(l.x for l in values)
+        for heading in by_role.get("y_heading", []):
+            if abs(heading.x - first_cell) > TOLERANCE:
+                yield _violation("heading_placement", f"{heading.id} is not aligned with the "
+                                 "first cell of the vertical values", heading.id)
 
 
 def _texture_count(layout):
