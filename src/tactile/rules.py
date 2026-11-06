@@ -30,6 +30,7 @@ from src.tactile.constants import (
     TICK_HALF_LENGTH,
     Y_HEADING_MAX_CELLS,
 )
+from src.tactile.keys import is_valid_abbreviation_key, is_valid_numeric_key
 from src.tactile.layout import TactileLayout
 
 # Floating-point slack when comparing placed geometry; not a spacing value.
@@ -73,6 +74,11 @@ RULES = {rule.id: rule for rule in (
     Rule("key_sample_size", "§3.4.3.14", "Key texture samples are 1/2 inch high and 1 inch wide."),
     Rule("y_heading_length", "§6.6.6.6", "Each line of the vertical heading has at most 20 cells."),
     Rule("texture_count", "§3.2.2", "A graphic uses at most five different area textures."),
+    Rule("key_symbols", "§5.8.1.1-3, §5.8.1.6",
+         "Alphabetic keys are 2-3 letters with a dot 3 or 6 letter and not aa/ac/cc/ca; "
+         "numeric keys are numbers without a period; keys are distinct."),
+    Rule("x_label_overflow", "§6.6.6.6, §5.8",
+         "Category labels fit under their bars in some overflow mode, or need review."),
     Rule("key_format", "§5.8.4.3, §5.8.4.4",
          "Key explanations start in cell 6, level with the top of their texture sample."),
 )}
@@ -99,7 +105,26 @@ def check_layout(layout: TactileLayout) -> list[Violation]:
     found += _y_heading_length(layout)
     found += _texture_count(layout)
     found += _key_format(layout)
+    found += _key_symbols(layout)
+    found += [_violation("x_label_overflow", reason) for reason in layout.needs_review]
     return found
+
+
+def _key_symbols(layout):
+    if not layout.categories_keyed:
+        return
+    symbols = [l for l in layout.labels if l.role == "category"]
+    texts = [l.text for l in symbols]
+    for label in symbols:
+        if layout.x_label_mode == "abbreviation":
+            valid = is_valid_abbreviation_key(label.text)
+        else:
+            valid = is_valid_numeric_key(label.text) and has_numeric_indicator(label.cells)
+        if not valid:
+            yield _violation("key_symbols", f"{label.id} key {label.text!r} breaks the "
+                             f"{layout.x_label_mode} key rules", label.id)
+        if texts.count(label.text) > 1:
+            yield _violation("key_symbols", f"key {label.text!r} is used twice", label.id)
 
 
 def _texture_count(layout):

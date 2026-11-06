@@ -43,6 +43,9 @@ KEY_SAMPLE_HEIGHT = 1 / 2 * MM_PER_INCH  # §3.4.3.14, §5.9.1.2
 KEY_SAMPLE_LINES = 2                    # a sample needs two braille lines, §5.9.1.2
 KEY_TEXT_CELL = 6                       # explanation after a texture, §5.8.4.3
 KEY_RUNOVER_CELL = 8                    # its runovers, §5.8.4.3
+LETTER_KEY_RUNOVER_CELL = 3             # runovers after a letter/number key, §5.8.4.5
+LETTER_KEY_MIN_CELLS = 2                # §5.8.1.1 (2-cell keys preferred)
+LETTER_KEY_MAX_CELLS = 3                # §5.8.1.1
 MAX_AREA_TEXTURES = 5                   # §3.2.2
 
 # --- Labels --------------------------------------------------------------------------

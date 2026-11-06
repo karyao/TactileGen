@@ -12,7 +12,8 @@ from src.contract_io import load_vertical_bar_chart
 from src.contracts import BarSeries, VerticalBarChart
 from src.tactile import check_layout, constants, layout_vertical_bar_chart, render_svg
 from src.tactile.__main__ import main
-from src.tactile.braille import to_braille, to_unicode
+from src.tactile.braille import NUMERIC_INDICATOR, to_braille, to_unicode
+from src.tactile.keys import abbreviation_keys, is_valid_abbreviation_key, numeric_keys
 from src.tactile.layout import (
     BAR_MAX_WIDTH,
     BAR_MIN_WIDTH,
@@ -115,16 +116,6 @@ class LayoutTest(unittest.TestCase):
         self.assertEqual([s.series_index for s in layout.key_samples], [0, 1])
         self.assertTrue(all(s.bounds.y2 < layout.plot.y1 for s in layout.key_samples))
 
-    def test_long_category_labels_are_keyed(self):
-        chart = VerticalBarChart(
-            "demo/long.png", "Long Names", "Region", "Count",
-            ("Northern Territory", "South Australia", "Western Australia"),
-            (BarSeries(None, (3, 5, 4)),))
-        layout = layout_vertical_bar_chart(chart)
-        self.assertTrue(layout.categories_keyed)
-        self.assertEqual([l.text for l in layout.labels if l.role == "category"], ["a", "b", "c"])
-        self.assertEqual(check_layout(layout), [])
-
     def test_crowded_chart_is_reported_not_dropped(self):
         layout = layout_vertical_bar_chart(load("crowded"))
         self.assertEqual(len(layout.bars), 36)
@@ -191,6 +182,100 @@ class BarSpacingTest(unittest.TestCase):
         moved = replace(second, x=first.x + first.width)
         bars = tuple(moved if b.id == second.id else b for b in layout.bars)
         self.assertIn("bar_spacing", rule_ids(replace(layout, bars=bars)))
+
+
+def one_series(names, title="Names"):
+    return VerticalBarChart("demo/names.png", title, "Thing", "Count", tuple(names),
+                            (BarSeries(None, tuple(float(k + 1) for k in range(len(names)))),))
+
+
+def categories(layout):
+    return [l.text for l in layout.labels if l.role == "category"]
+
+
+class KeySymbolTest(unittest.TestCase):
+    """BANA §5.8.1 alphabetic and numeric key symbols."""
+
+    def test_abbreviation_keys_follow_bana(self):
+        months = ["January", "February", "March", "April", "May", "June", "July",
+                  "August", "September", "October", "November", "December"]
+        keys = abbreviation_keys(months)
+        self.assertEqual(len(set(keys)), len(keys))
+        for key, month in zip(keys, months):
+            with self.subTest(month=month):
+                self.assertTrue(is_valid_abbreviation_key(key))
+                self.assertEqual(key[0], month[0].lower())   # §5.8.1.1 recommendation
+        self.assertEqual(keys[:3], ["jn", "fr", "ma"])
+
+    def test_invalid_keys(self):
+        for key in ("a", "aa", "ac", "cc", "ca", "abc", "ab", "abcd", "St", "st", "the", "s1"):
+            with self.subTest(key=key):
+                self.assertFalse(is_valid_abbreviation_key(key))
+        for key in ("no", "jn", "se", "wtr"):
+            with self.subTest(key=key):
+                self.assertTrue(is_valid_abbreviation_key(key))
+
+    def test_no_abbreviation_without_a_dot_3_or_6_letter(self):
+        with self.assertRaises(ValueError):
+            abbreviation_keys(["Abaca baba"])
+        with self.assertRaises(ValueError):
+            abbreviation_keys(["2019"])
+
+    def test_numeric_keys_have_indicator_and_no_period(self):
+        for key in numeric_keys(12):
+            cells = to_braille(key)
+            self.assertEqual(cells[0], NUMERIC_INDICATOR)
+            self.assertNotIn(".", key)
+
+
+class OverflowOrderTest(unittest.TestCase):
+    """Fix 2: full labels -> abbreviation keys -> numeric keys -> review."""
+
+    def test_labels_that_fit_stay_full(self):
+        layout = layout_vertical_bar_chart(one_series(["Jan", "Feb", "Mar"]))
+        self.assertEqual(layout.x_label_mode, "full")
+        self.assertEqual(categories(layout), ["Jan", "Feb", "Mar"])
+        self.assertEqual(layout.needs_review, ())
+
+    def test_long_labels_become_abbreviation_keys(self):
+        names = ["Northern Territory", "South Australia", "Western Australia"]
+        layout = layout_vertical_bar_chart(one_series(names))
+        self.assertEqual(layout.x_label_mode, "abbreviation")
+        self.assertEqual(categories(layout), ["no", "so", "we"])
+        key = [l.text for l in layout.labels if l.role == "key"]
+        self.assertEqual(key, ["no Northern Territory", "so South Australia", "we Western Australia"])
+        self.assertEqual(check_layout(layout), [])
+
+    def test_key_entry_format(self):
+        layout = layout_vertical_bar_chart(one_series(["Northern Territory", "South Australia",
+                                                       "Western Australia"]))
+        entry = next(l for l in layout.labels if l.id == "key-category-0")
+        self.assertAlmostEqual(entry.x, layout.usable.x1)   # symbol in cell 1, §5.8.4.5
+        self.assertEqual(entry.cells[2], frozenset())        # one blank cell after it
+
+    def test_unabbreviatable_labels_become_numbers(self):
+        layout = layout_vertical_bar_chart(one_series(["Abaca baba", "Cafe dad", "Bead cage"]))
+        self.assertEqual(layout.x_label_mode, "number")
+        self.assertEqual(categories(layout), ["1", "2", "3"])
+        self.assertEqual(check_layout(layout), [])
+
+    def test_nothing_fits_is_flagged_for_review(self):
+        layout = layout_vertical_bar_chart(load("crowded"))
+        self.assertTrue(layout.needs_review)
+        self.assertIn("x_label_overflow", rule_ids(layout))
+
+    def test_mode_can_be_forced(self):
+        layout = layout_vertical_bar_chart(one_series(["Jan", "Feb"]), x_labels="number")
+        self.assertEqual(categories(layout), ["1", "2"])
+        with self.assertRaises(ValueError):
+            layout_vertical_bar_chart(one_series(["Jan"]), x_labels="letters")
+
+    def test_single_letter_keys_are_reported(self):
+        layout = layout_vertical_bar_chart(one_series(["Northern Territory", "South Australia",
+                                                       "Western Australia"]))
+        labels = tuple(replace(l, text="a", cells=to_braille("a")) if l.id == "category-0" else l
+                       for l in layout.labels)
+        self.assertIn("key_symbols", rule_ids(replace(layout, labels=labels)))
 
 
 class RuleTest(unittest.TestCase):

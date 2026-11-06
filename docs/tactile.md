@@ -46,7 +46,7 @@ Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 | Vertical values | Right-justified, numeric indicator, dots 2-5 level with the grid line, 4 mm from the axis | §6.6.6.2, §6.6.6.6 |
 | Grid | Horizontal grid lines (least distinct, dashed) instead of tick marks; at least 3/8 inch apart | §6.6.6.3, §6.6.6.5, §3.4.3.9 |
 | Bars | 3/8 to 1 inch wide, sized from the number of categories and series; 1/8 inch between bars in a set and between sets (BANA gives no number for these gaps, so the §3.4.3.12 spacing is reused); distinct textures per series | §6.6.6.7, §3.4.3.12 |
-| Category labels | Centred under each set of bars; keyed with letters a, b, c when they do not fit | §6.6.6.6, §6.6.1.4 |
+| Category labels | Centred under each set of bars. Overflow order when they do not fit: (1) full names; (2) alphabetic keys of 2-3 letters from the name, with a dot 3 or 6 letter, never aa/ac/cc/ca; (3) numeric keys with the numeric indicator and no period; (4) flag the page for review. Keyed names are listed in the key in left-to-right order: symbol in cell 1, a blank cell, the name, runovers in cell 3 | §6.6.6.6, §5.8.1, §5.7.3, §5.8.4.5 |
 | Headings | Vertical heading above the values (≤ 20 cells per line); horizontal heading below the values, left-justified with the first one | §6.6.6.6 |
 
 The layout never drops content to make a chart fit. If a chart breaks a
@@ -77,6 +77,8 @@ also works on layouts built another way.
 | `key_sample_size` | Key samples 1 x 1/2 inch | §3.4.3.14 |
 | `y_heading_length` | Vertical heading lines at most 20 cells | §6.6.6.6 |
 | `texture_count` | At most five area textures | §3.2.2 |
+| `key_symbols` | Valid, distinct alphabetic or numeric keys | §5.8.1.1-3, §5.8.1.6 |
+| `x_label_overflow` | Reports pages whose labels fit in no overflow mode | §6.6.6.6, §5.8 |
 | `key_format` | Key explanation in cell 6, level with its sample | §5.8.4.3, §5.8.4.4 |
 
 Passing every rule means these checks passed, not that the page is fully
