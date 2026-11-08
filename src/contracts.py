@@ -8,7 +8,8 @@ edges. ``source_key`` is a split-qualified relative image name such as
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 
 
 # Keep this order aligned with existing YOLO class IDs and classes.txt files.
@@ -197,3 +198,83 @@ class VerticalBarChart:
 
 class ChartInterpretationError(ValueError):
     """A complete chart cannot be reconstructed from detections and OCR."""
+
+
+_HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+@dataclass(frozen=True)
+class YAxisSpec:
+    """Calibrated value axis. ``min``/``max`` span the surviving tick values."""
+
+    min: float
+    max: float
+    tick_values: list[float]
+    unit: str | None = None
+
+
+@dataclass(frozen=True)
+class SeriesSpec:
+    """One bar series; ``values`` align with ``VerticalBarSpec.categories``.
+
+    ``value_rescued[i]`` is True when ``values[i]`` was measured from pixels
+    because no bar was detected (a rescued 0.0 means no bar pixels were found).
+    ``value_confidence[i]`` is the detector confidence, or a low fixed value
+    for rescued values. Both are empty when not provided.
+    """
+
+    name: str | None
+    source_color: str | None
+    values: list[float | None]
+    value_rescued: list[bool] = field(default_factory=list)
+    value_confidence: list[float | None] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class VerticalBarSpec:
+    """Reconstructed vertical bar chart (schema 0.2).
+
+    Unlike ``VerticalBarChart`` it tolerates missing titles and values and
+    records what the interpreter could not resolve in ``flags``.
+    """
+
+    source_key: str
+    title: str | None
+    x_axis_title: str | None
+    y_axis_title: str | None
+    y_axis: YAxisSpec
+    categories: list[str]
+    series: list[SeriesSpec]
+    bars_adjacent: bool
+    flags: list[str]
+    confidence: dict[str, float]
+    chart_type: str = "bar"
+    orientation: str = "vertical"
+    schema_version: str = "0.2"
+
+    def __post_init__(self) -> None:
+        validate_source_key(self.source_key)
+        if self.schema_version != "0.2":
+            raise ValueError("VerticalBarSpec schema_version must be 0.2")
+        if self.chart_type != "bar" or self.orientation != "vertical":
+            raise ValueError("VerticalBarSpec is a vertical bar chart")
+        for label in (self.title, self.x_axis_title, self.y_axis_title):
+            if label is not None and not isinstance(label, str):
+                raise ValueError("titles must be strings or None")
+        if not all(math.isfinite(v) for v in (self.y_axis.min, self.y_axis.max,
+                                              *self.y_axis.tick_values)):
+            raise ValueError("y-axis values must be finite")
+        if not self.series:
+            raise ValueError("spec must contain at least one series")
+        for item in self.series:
+            if item.source_color is not None and not _HEX_COLOR.fullmatch(item.source_color):
+                raise ValueError("source_color must be #rrggbb or None")
+            if len(item.values) != len(self.categories):
+                raise ValueError("series values must match category count")
+            if any(v is not None and not math.isfinite(v) for v in item.values):
+                raise ValueError("series values must be finite or None")
+            for extra in (item.value_rescued, item.value_confidence):
+                if extra and len(extra) != len(item.values):
+                    raise ValueError("per-value lists must match series values")
+        for value in self.confidence.values():
+            _confidence(value)

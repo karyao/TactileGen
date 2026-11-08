@@ -60,3 +60,35 @@ fixture or optional interchange file is loaded. In-process stages use the
 typed objects directly and should not serialize whole datasets or write a
 file per image by default. Representative throughput and memory measurements
 belong to the model and end-to-end pipeline tasks.
+
+## VerticalBarSpec (schema 0.2)
+
+`src/reconstruct.py` turns a `DetectionFrame`, OCR text and the image into a
+`VerticalBarSpec` with `reconstruct_vbar(frame, ocr_texts, image)`. Unlike
+`VerticalBarChart`, titles may be `None`, series values may be `None`, and
+anything the interpreter could not resolve is listed in `flags` instead of
+raising. `ChartInterpretationError` is raised only when there are no bars, no
+x tick labels, or fewer than two consistent y ticks. `y_axis.min/max` span the
+tick values and the calibrated plot edges; K/M/B tick suffixes are expanded
+into the numbers and only `%` is kept as `unit`.
+
+Flags (each is "could not resolve this", not "wrong"):
+
+| Flag | Meaning |
+| --- | --- |
+| `title_missing`, `x_axis_title_missing`, `y_axis_title_missing` | No title box detected, or its text was empty. The field is `None`. |
+| `title_touches_right_edge` | The title box reaches the right image edge; the text may be clipped. |
+| `y_ticks_dropped:N` | N y tick labels were unreadable or inconsistent with the fitted line. |
+| `y_ticks_not_arithmetic`, `y_calibration_ambiguous` | Surviving ticks are not evenly spaced, or two tick subsets fit equally well. |
+| `baseline_outside_plot`, `bar_baseline_offset` | The calibrated zero line is outside the plot, or bar bases sit far from it. |
+| `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. |
+| `category_count_mismatch`, `category_ambiguous` | Bars and x labels disagree in number, or two bars of a series map to one label. |
+| `category_unreadable` | An x label is empty or has no letter or digit (e.g. a lone `|`); OCR confidence is not used. That category's confidence is set to 0.1 (`confidence["category[j]"]`). |
+| `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one. |
+| `plot_area_missing` | No plot area detected; position filters were skipped. |
+| `bars_rescued:N` | N values had no detected bar and were measured from pixels (`SeriesSpec.value_rescued`, low `value_confidence`). |
+| `value_inferred_zero` | At least one rescued value found no bar pixels and was set to 0.0. |
+
+Series colours are seeded from the legend swatches, so near-identical series colours stay separate when a legend is detected. Bar rescue and the category guard can be switched off with `rescue_bars=False` and `category_guard=False`.
+
+`python -m scripts.eval_reconstruct` measures the stage on PlotQA test charts.
