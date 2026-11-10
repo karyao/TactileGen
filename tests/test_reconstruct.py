@@ -95,6 +95,32 @@ def test_spurious_y_tick_is_dropped():
     assert 900 not in spec.y_axis.tick_values
 
 
+def labelled_chart(texts):
+    chart = base_chart(ticks=())
+    for tick, text in zip((0, 50, 100, 150, 200), texts):
+        chart.add("y_tick_label", (40, y_of(tick) - 6, 75, y_of(tick) + 6), text=text)
+    return chart
+
+
+def test_leading_zero_tick_label_is_flagged():
+    for texts in (("0", "050", "100", "150", "200"), ("0", "50", "100", "150", "0200")):
+        assert "y_tick_leading_zero" in labelled_chart(texts).run().flags
+
+
+def test_ordinary_tick_labels_are_not_flagged_as_leading_zero():
+    for texts in (("0", "50", "100", "150", "200"), ("0", "0.5", "1.0", "1.5", "2.0"),
+                  ("-0", "50", "100", "150", "200")):
+        assert "y_tick_leading_zero" not in labelled_chart(texts).run().flags
+
+
+def test_dropped_tick_with_leading_zero_does_not_flag():
+    chart = base_chart()
+    chart.add("y_tick_label", (40, y_of(75) - 6, 75, y_of(75) + 6), text="0900")
+    spec = chart.run()
+    assert "y_ticks_dropped:1" in spec.flags
+    assert "y_tick_leading_zero" not in spec.flags
+
+
 def test_missing_title_is_flagged_not_raised():
     spec = base_chart(titles=False).run()
     assert spec.title is None and spec.x_axis_title is None and spec.y_axis_title is None

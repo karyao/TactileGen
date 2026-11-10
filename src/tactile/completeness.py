@@ -41,8 +41,9 @@ BLOCKING_FLAGS = {
     "category_ambiguous": "Some bars could not be matched to a single category label.",
     # legend entries and bar colours do not pair up
     "series_ambiguous": "The legend entries could not be matched to the bar colours.",
-    # tick values are not evenly spaced, so the OCR probably misread one
-    "y_ticks_not_arithmetic": "The y-axis tick values are not evenly spaced, so one may be misread.",
+    # a surviving tick label like "04" has a leading zero, so a decimal point was probably lost
+    "y_tick_leading_zero": ("A y-axis tick label has a leading zero (like '04'), so a decimal "
+                            "point may have been lost and the axis scale could be wrong."),
     # two equally good scales fit the y ticks
     "y_calibration_ambiguous": "The y-axis scale could not be settled from the tick labels.",
     # the zero line is outside the plot, so heights do not map to values
@@ -55,7 +56,7 @@ BLOCKING_FLAGS = {
 # chart. ``--force`` may continue past these (the user is told loudly).
 FORCEABLE_FLAGS = frozenset({
     "category_count_mismatch", "category_ambiguous", "series_ambiguous",
-    "y_ticks_not_arithmetic", "y_calibration_ambiguous",
+    "y_calibration_ambiguous",
 })
 
 # Flags worth telling the user about that do not stop a build. Each is matched
@@ -66,6 +67,10 @@ NOTE_FLAGS = {
     # a rescue found no bar pixels; {n} counts those values, drawn as zero
     "value_inferred_zero": ("No bar was visible for {n} value(s), so they are drawn as 0. "
                             "The data may include values below the axis that are not drawn."),
+    # some tick labels were not read or were dropped, leaving gaps in the tick values
+    "y_ticks_not_arithmetic": ("The y-axis tick values are not evenly spaced, probably because some "
+                               "tick labels were missed. Bar values use the line through the ticks "
+                               "that were read."),
     # y tick labels that disagreed with the others were ignored
     "y_ticks_dropped": "{n} y-axis tick label(s) were ignored because they disagreed with the rest.",
     # the title box reaches the image edge, so the title text may be cut off

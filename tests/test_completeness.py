@@ -74,6 +74,24 @@ class Status(unittest.TestCase):
                 self.assertIn("rainfall.json", result.blockers[0])
                 self.assertEqual(result.forceable, flag in FORCEABLE_FLAGS)
 
+    def test_uneven_y_ticks_are_only_a_note(self):
+        result = check_completeness(make_spec(flags=["y_ticks_not_arithmetic", "y_ticks_dropped:2"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertTrue(any("not evenly spaced" in n for n in result.notes))
+        self.assertTrue(any("2 y-axis tick" in n for n in result.notes))
+
+    def test_leading_zero_tick_blocks_and_cannot_be_forced(self):
+        result = check_completeness(make_spec(flags=["y_tick_leading_zero"]))
+        self.assertEqual(result.status, CANNOT_BUILD)
+        self.assertIn("decimal point may have been lost", result.blockers[0])
+        self.assertIn("rainfall.json", result.blockers[0])
+        self.assertFalse(result.forceable)
+
+    def test_leading_zero_with_uneven_ticks_still_blocks(self):
+        result = check_completeness(make_spec(flags=["y_ticks_not_arithmetic", "y_tick_leading_zero"]))
+        self.assertEqual(result.status, CANNOT_BUILD)
+        self.assertEqual(len(result.blockers), 1)
+
     def test_none_value_blocks(self):
         spec = make_spec(series=[SeriesSpec("A", None, [1.0, None, 3.0])])
         result = check_completeness(spec)

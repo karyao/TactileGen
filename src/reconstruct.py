@@ -42,6 +42,7 @@ ADJACENT_GAP_RATIO = 0.10
 ARITHMETIC_TOLERANCE = 0.03
 
 _SUFFIX = {"K": 1e3, "M": 1e6, "B": 1e9}
+_LEADING_ZERO = re.compile(r"-?0\d")  # "04": the decimal point of "0.4" was probably lost
 _NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
@@ -388,6 +389,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         flags.append(f"y_ticks_dropped:{dropped}")
     if ambiguous:
         flags.append("y_calibration_ambiguous")
+    if any(_LEADING_ZERO.match(texts[d.id][0].strip()) for d, _, _ in good):
+        flags.append("y_tick_leading_zero")
     tick_values = [v for _, v, _ in sorted(good, key=lambda t: t[1])]
     if not _is_arithmetic(tick_values):
         flags.append("y_ticks_not_arithmetic")

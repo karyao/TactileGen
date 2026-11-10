@@ -160,6 +160,18 @@ class Pipeline(unittest.TestCase):
         code, _, _, written = self.go(spec, tty=True, answers=["Revenue", "y"])
         self.assertEqual((code, written), (0, True))
 
+    def test_uneven_y_ticks_build_with_a_note(self):
+        code, out, _, written = self.go(make_spec(flags=["y_ticks_not_arithmetic"]), argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("not evenly spaced", out)
+
+    def test_leading_zero_tick_exits_3_even_with_force(self):
+        spec = make_spec(flags=["y_tick_leading_zero"])
+        for extra in ([], ["--force"]):
+            code, out, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+            self.assertIn("decimal point may have been lost", out)
+
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
         self.assertEqual(code, 1)
