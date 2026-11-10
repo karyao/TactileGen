@@ -125,6 +125,20 @@ python3.12 -m src.tactile --chart tests/fixtures/tactile/books_by_grade.json \
 See the [tactile output guide](docs/tactile.md) for the rules, sources and
 limits.
 
+To go from a PlotQA vertical-bar chart image straight to a tactile SVG:
+
+```bash
+python3.12 -m src.tactile.pipeline --image data/png_test/png/31973.png \
+  --output output/tactile/31973.svg --yes
+```
+
+If the title, an axis title, a category or a series name could not be read,
+the command asks for it (or, without a terminal, lists the `--title`,
+`--x-title`, `--y-title`, `--category J=TEXT` and `--series I=NAME` flags to
+pass). Charts whose numbers cannot be trusted exit with status 3 and say what to
+try instead. Exit statuses: 0 written, 1 error, 2 text needed, 3 cannot build,
+4 not confirmed.
+
 ## Contributing and documentation
 
 The [experiment guide](docs/experiments.md) covers data preparation, model
