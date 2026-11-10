@@ -92,6 +92,16 @@ class Status(unittest.TestCase):
         self.assertIn("2 bar value", result.notes[0])
         self.assertIn("1 y-axis tick", result.notes[2])
 
+    def test_value_inferred_zero_note_counts_values_and_stays_a_note(self):
+        spec = make_spec(
+            series=[SeriesSpec(None, "#112233", [0.0, 5.0, 0.0], value_rescued=[True, False, True])],
+            flags=["bars_rescued:2", "value_inferred_zero"])
+        result = check_completeness(spec)
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        note, = [n for n in result.notes if "visible" in n]
+        self.assertIn("No bar was visible for 2 value(s)", note)
+        self.assertIn("below the axis that are not drawn", note)
+
     def test_blocker_beats_missing_text(self):
         spec = make_spec(title=None, flags=["title_missing", "series_ambiguous"])
         result = check_completeness(spec)

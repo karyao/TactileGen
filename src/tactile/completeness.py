@@ -59,8 +59,9 @@ FORCEABLE_FLAGS = frozenset({
 NOTE_FLAGS = {
     # values measured from pixels because no bar was detected
     "bars_rescued": "{n} bar value(s) were measured from pixels because YOLO did not detect the bar.",
-    # a rescue found no bar pixels, so the bar is drawn as zero
-    "value_inferred_zero": "At least one bar was drawn as zero because no bar pixels were found.",
+    # a rescue found no bar pixels; {n} counts those values, drawn as zero
+    "value_inferred_zero": ("No bar was visible for {n} value(s), so they are drawn as 0. "
+                            "The data may include values below the axis that are not drawn."),
     # y tick labels that disagreed with the others were ignored
     "y_ticks_dropped": "{n} y-axis tick label(s) were ignored because they disagreed with the rest.",
     # the title box reaches the image edge, so the title text may be cut off
@@ -147,6 +148,10 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
     notes = []
     for flag in spec.flags:
         name, _, count = flag.partition(":")
+        if name == "value_inferred_zero":
+            count = sum(1 for series in spec.series
+                        for value, rescued in zip(series.values, series.value_rescued)
+                        if rescued and value == 0.0)
         if name in NOTE_FLAGS:
             notes.append(NOTE_FLAGS[name].format(n=count))
 
