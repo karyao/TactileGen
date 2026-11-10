@@ -4,9 +4,11 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from src.contracts import ChartInterpretationError, SeriesSpec, VerticalBarSpec, YAxisSpec
 from src.tactile import pipeline
+from src.tactile.rules import RULES, Violation
 
 
 def make_spec(**changes):
@@ -103,6 +105,27 @@ class Pipeline(unittest.TestCase):
             make_spec(title=None, flags=["title_missing"]), tty=True, answers=["Bad]"])
         self.assertEqual((code, written), (2, False))
         self.assertIn("--title", out)
+
+    def many(self):
+        n = 30
+        return make_spec(categories=[f"Category number {i}" for i in range(n)],
+                         series=[SeriesSpec(None, "#112233", [float(i + 1) for i in range(n)])])
+
+    def test_overview_page_is_reported_for_a_transcriber_and_never_fails_strict(self):
+        code, out, err, _ = self.go(self.many(), argv=["--yes", "--strict"])
+        self.assertEqual(code, 0)  # divided into several files, so no single out.svg
+        self.assertEqual(out.count("Needs a transcriber: overview page (BANA 3.9.1) not generated"), 1)
+        self.assertNotIn("overview_first", out)
+
+    def test_strict_exits_1_on_a_real_violation_default_exits_0(self):
+        found = [Violation(RULES["bar_width"], "too narrow", ("bar-0-0",))]
+        with mock.patch.object(pipeline, "check_layout", return_value=found):
+            code, _, err, written = self.go(make_spec(), argv=["--yes", "--strict"])
+            self.assertEqual((code, written), (1, True))
+            self.assertIn("--strict: 1 BANA violation", err)
+            code, out, _, _ = self.go(make_spec(), argv=["--yes"])
+            self.assertEqual(code, 0)
+            self.assertIn("too narrow", out)
 
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])

@@ -24,6 +24,7 @@ from src.tactile.rules import check_layout, format_report
 from src.tactile.svg import render_svg
 
 DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
+OVERVIEW_RULE = "overview_first"
 EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 1, 2, 3, 4
 
 
@@ -199,10 +200,16 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
         print(f"The tactile layout rejected this chart: {exc}", file=err)
         return EXIT_ERROR
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    needs_transcriber = False
+    blocking: list = []
     for number, layout in enumerate(pages, 1):
         path = args.output if len(pages) == 1 else args.output.with_name(
             f"{args.output.stem}-{number}{args.output.suffix}")
-        violations = check_layout(layout)
+        found = check_layout(layout)
+        # The overview page is not generated yet, so a person has to add it.
+        needs_transcriber = needs_transcriber or any(v.rule.id == OVERVIEW_RULE for v in found)
+        violations = [v for v in found if v.rule.id != OVERVIEW_RULE]
+        blocking += violations
         path.write_text(render_svg(layout, show_print=args.show_print), encoding="utf-8")
         print(f"\nWrote {path}", file=out)
         for note in layout.notes:
@@ -211,12 +218,17 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
             print(f"NEEDS REVIEW: {reason}", file=out)
         print(format_report(violations), file=out)
 
+    if needs_transcriber:
+        print("\nNeeds a transcriber: overview page (BANA 3.9.1) not generated", file=out)
     for note in result.notes:
         print(f"Note: {note}", file=out)
     if forced:
         print("Built with --force past: " + ", ".join(forced), file=out)
     for note in provenance:
         print(f"Supplied by user: {note}", file=out)
+    if args.strict and blocking:
+        print(f"--strict: {len(blocking)} BANA violation(s) found.", file=err)
+        return EXIT_ERROR
     return EXIT_OK
 
 
@@ -240,6 +252,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--yes", action="store_true", help="skip the confirmation question")
     parser.add_argument("--force", action="store_true",
                         help="build despite ambiguity flags (never missing bars or ticks)")
+    parser.add_argument("--strict", action="store_true",
+                        help="exit 1 when any BANA rule fails (the missing overview page "
+                             "is reported separately and does not count)")
     parser.add_argument("--show-print", action="store_true",
                         help="add small print text under each braille label")
     parser.add_argument("--x-labels", choices=("auto", *X_LABEL_MODES), default="auto")
