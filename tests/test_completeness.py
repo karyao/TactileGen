@@ -9,6 +9,7 @@ from src.contracts import (
 from src.tactile.completeness import (
     BLOCKING_FLAGS, CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Overrides,
     apply_overrides, check_completeness, completeness_from_error, spec_to_chart,
+    spec_to_chart_with_notes,
 )
 
 
@@ -213,6 +214,20 @@ class Build(unittest.TestCase):
         chart = spec_to_chart(make_spec())
         self.assertEqual((chart.title, chart.categories), ("Sales", ("2001", "2002", "2003")))
         self.assertEqual(chart.series[0].values, (10.0, 20.0, 30.0))
+
+    def test_tiny_negative_noise_becomes_zero_with_a_note(self):
+        spec = make_spec(series=[SeriesSpec(None, "#112233", [-0.4, 100.0, -0.6])])
+        chart, notes = spec_to_chart_with_notes(spec)
+        self.assertEqual(chart.series[0].values, (0.0, 100.0, -0.6))
+        self.assertIn("1 value(s) slightly below zero", notes[0])
+
+    def test_larger_negatives_are_left_for_the_layout_to_reject(self):
+        spec = make_spec(series=[SeriesSpec(None, "#112233", [-5.0, 100.0, 20.0])])
+        chart, notes = spec_to_chart_with_notes(spec)
+        self.assertEqual((chart.series[0].values, notes), ((-5.0, 100.0, 20.0), []))
+
+    def test_no_adjustment_when_nothing_is_negative(self):
+        self.assertEqual(spec_to_chart_with_notes(make_spec())[1], [])
 
     def test_unready_spec_raises(self):
         for spec in (make_spec(title=None), make_spec(flags=["series_ambiguous"])):

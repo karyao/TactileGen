@@ -17,7 +17,7 @@ from pathlib import Path
 from src.contracts import ChartInterpretationError, VerticalBarSpec
 from src.tactile.completeness import (
     CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Completeness, Overrides,
-    apply_overrides, check_completeness, completeness_from_error, spec_to_chart,
+    apply_overrides, check_completeness, completeness_from_error, spec_to_chart_with_notes,
 )
 from src.tactile.layout import X_LABEL_MODES, layout_vertical_bar_chart_pages
 from src.tactile.rules import check_layout, format_report
@@ -195,7 +195,8 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
                   "(not a terminal and --yes not given).", file=err)
 
     try:
-        pages = layout_vertical_bar_chart_pages(spec_to_chart(spec), x_labels=args.x_labels)
+        chart, adapter_notes = spec_to_chart_with_notes(spec)
+        pages = layout_vertical_bar_chart_pages(chart, x_labels=args.x_labels)
     except ValueError as exc:
         print(f"The tactile layout rejected this chart: {exc}", file=err)
         return EXIT_ERROR
@@ -220,7 +221,7 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
 
     if needs_transcriber:
         print("\nNeeds a transcriber: overview page (BANA 3.9.1) not generated", file=out)
-    for note in result.notes:
+    for note in (*result.notes, *adapter_notes):
         print(f"Note: {note}", file=out)
     if forced:
         print("Built with --force past: " + ", ".join(forced), file=out)

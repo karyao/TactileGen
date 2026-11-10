@@ -127,6 +127,16 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("too narrow", out)
 
+    def test_tiny_negative_is_zeroed_with_a_note_but_a_real_one_is_rejected(self):
+        tiny = make_spec(series=[SeriesSpec(None, "#112233", [-0.1, 20.0, 30.0])])
+        code, out, _, written = self.go(tiny, argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("treated as 0", out)
+        real = make_spec(series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
+        code, _, err, written = self.go(real, argv=["--yes"])
+        self.assertEqual((code, written), (1, False))
+        self.assertIn("negative bar values are not supported", err)
+
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
         self.assertEqual(code, 1)
