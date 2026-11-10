@@ -184,7 +184,9 @@ def test_negative_bar_uses_far_edge_from_zero():
         chart.add("vertical_bar", box)
         chart.paint(box, (200, 100, 30))
         chart.add("x_tick_label", (box[0], 345, box[2], 360), text=f"C{i}")
-    assert_values(chart.run(), [100, -60])
+    spec = chart.run()
+    assert_values(spec, [100, -60])
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)  # negative bar skipped
 
 
 def test_adjacent_bars():
@@ -532,3 +534,54 @@ def test_short_bar_colour_does_not_create_an_extra_series():
     assert len(spec.series) == 2 and "series_ambiguous" not in spec.flags
     assert_values(spec, [100, 150, 40], series=0)
     assert "short_bars_remeasured:1" in spec.flags
+
+
+def _shift_top(chart, index, dy):
+    """Move the detector's top edge of one bar down by ``dy`` px; the painted bar stays put."""
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    old = bars[index]
+    chart.detections[chart.detections.index(old)] = Detection(
+        old.id, old.role, Box(old.box.x1, old.box.y1 + dy, old.box.x2, old.box.y2), old.confidence)
+
+
+def test_detector_top_edge_far_from_the_pixels_is_corrected():
+    chart = base_chart(values=(120, 60, 180))
+    _shift_top(chart, 1, 12)  # 12 px = 8 units too low
+    spec = chart.run()
+    assert_values(spec, [120, 60, 180])
+    assert "bar_edge_corrected:1" in spec.flags
+    assert spec.series[0].value_rescued == [False, False, False]
+
+
+def test_small_edge_differences_keep_the_detector_value():
+    chart = base_chart(values=(120, 60, 180))
+    _shift_top(chart, 1, 4)
+    spec = chart.run()
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)
+    assert spec.series[0].values[1] == pytest.approx(60 - 4 / 1.5, rel=0.01)
+
+
+def test_edge_check_is_off_without_rescue():
+    chart = base_chart(values=(120, 60, 180))
+    _shift_top(chart, 1, 12)
+    spec = reconstruct_vbar(chart.frame(), chart.texts, chart.image, rescue_bars=False)
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)
+    assert spec.series[0].values[1] == pytest.approx(52, rel=0.01)
+
+
+def test_edge_check_ignores_bars_when_the_zero_line_is_outside_the_plot():
+    def y_at(value):
+        return PLOT[3] - 1.5 * (value - 100)
+
+    chart = Chart()
+    chart.add("plot_area", PLOT)
+    for tick in (100, 150, 200):
+        chart.add("y_tick_label", (40, y_at(tick) - 6, 75, y_at(tick) + 6), text=str(tick))
+    for i, value in enumerate((150, 120)):
+        box = (100 + 200 * i, y_at(value), 160 + 200 * i, PLOT[3])
+        chart.add("vertical_bar", box)
+        chart.paint((box[0], box[1] - 20, box[2], box[3]), (200, 100, 30))
+        chart.add("x_tick_label", (box[0], 345, box[2], 360), text=f"C{i}")
+    spec = chart.run()
+    assert "baseline_outside_plot" in spec.flags
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)

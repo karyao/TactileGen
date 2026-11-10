@@ -72,6 +72,8 @@ NOTE_FLAGS = {
                            "their values were measured from pixels and are usually near zero."),
     # very short detected bars were re-measured from pixels
     "short_bars_remeasured": "{n} very short bar(s) were re-measured from pixels.",
+    # a bar's top edge was re-measured from pixels because the detector box disagreed
+    "bar_edge_corrected": "{n} bar(s) had their top edge corrected from the pixels.",
     # some tick labels were not read or were dropped, leaving gaps in the tick values
     "y_ticks_not_arithmetic": ("The y-axis tick values are not evenly spaced, probably because some "
                                "tick labels were missed. Bar values use the line through the ticks "

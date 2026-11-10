@@ -87,6 +87,7 @@ Flags (each is "could not resolve this", not "wrong"):
 | `category_unreadable` | An x label is empty or has no letter or digit (e.g. a lone `|`); OCR confidence is not used. That category's confidence is set to 0.1 (`confidence["category[j]"]`). |
 | `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one (a legend swatch with no bars of its colour becomes a series when it can be measured; see `series_from_swatch`). |
 | `short_bars_remeasured:N` | N detected bars shorter than max(6 px, 3% of the plot height) were left out of colour clustering and re-measured from pixels (`value_rescued` true), because their box is mostly outline and antialiasing. Only when the zero line is inside the plot and rescue is on. Note, not a blocker. |
+| `bar_edge_corrected:N` | N positive bars' top edge, measured from pixels with the rescue's run-length probe, differed from the detector box edge by 5 px or more; the pixel value was used. Only when the zero line is inside the plot and rescue is on. Note, not a blocker. |
 | `series_from_swatch:N` | N legend swatches matched no bar colour. Each became a series named by its legend label, with values measured from pixels at the slots implied by the detected series' spacing (`value_rescued` true). Note, not a blocker. |
 | `plot_area_missing` | No plot area detected; position filters were skipped. |
 | `bars_rescued:N` | N values (including those of swatch-built series) had no detected bar and were measured from pixels (`SeriesSpec.value_rescued`, low `value_confidence`). |

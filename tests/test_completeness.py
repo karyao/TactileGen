@@ -90,6 +90,11 @@ class Status(unittest.TestCase):
         self.assertEqual((result.status, result.blockers), (READY, []))
         self.assertTrue(any("3 very short bar(s)" in n for n in result.notes))
 
+    def test_bar_edge_corrected_is_a_note(self):
+        result = check_completeness(make_spec(flags=["bar_edge_corrected:2"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertTrue(any("2 bar(s) had their top edge corrected" in n for n in result.notes))
+
     def test_leading_zero_tick_blocks_and_cannot_be_forced(self):
         result = check_completeness(make_spec(flags=["y_tick_leading_zero"]))
         self.assertEqual(result.status, CANNOT_BUILD)

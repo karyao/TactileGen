@@ -29,6 +29,7 @@ MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
 UNREADABLE_CATEGORY_CONFIDENCE = 0.1
+BAR_EDGE_TOLERANCE_PX = 5     # a pixel-measured top edge this far from the box edge wins
 SHORT_BAR_MIN_PX = 6          # detected bars shorter than this are re-measured from pixels
 SHORT_BAR_PLOT_FRACTION = 0.03  # ... or shorter than this share of the plot height
 RESCUE_CONFIDENCE = 0.2
@@ -514,6 +515,24 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         ambiguous_series = True
 
     bar_width = statistics.median(d.box.x2 - d.box.x1 for d in bars)
+    # The detector sometimes puts a bar's top edge several pixels off while the
+    # box still overlaps the bar well. Check positive bars against the pixels.
+    edges_corrected = 0
+    if can_rescue:
+        for c, members in enumerate(clusters):
+            if cluster_centre[c] is None:
+                continue
+            for k in members:
+                box = bars[k].box
+                if abs(box.y2 - baseline) > abs(box.y1 - baseline):
+                    continue
+                half = RESCUE_STRIP_FRACTION * (box.x2 - box.x1) / 2
+                left = max(0, int(round(_centre(bars[k])[0] - half)))
+                right = min(rgb.shape[1], max(left + 1, int(round(_centre(bars[k])[0] + half))))
+                up = _run_length(rgb, left, right, int(round(baseline)) - 1, -1, cluster_centre[c])
+                if up >= 1 and abs(box.y1 - (round(baseline) - up)) >= BAR_EDGE_TOLERANCE_PX:
+                    values[k] = -a * up
+                    edges_corrected += 1
     series = []
     offsets_by_cluster: dict[int, float] = {}
     count_mismatch = category_ambiguous = False
@@ -590,6 +609,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         else:
             series += [s for _, s in added]
         flags.append(f"series_from_swatch:{len(added)}")
+    if edges_corrected:
+        flags.append(f"bar_edge_corrected:{edges_corrected}")
     if short_bars:
         flags.append(f"short_bars_remeasured:{short_bars}")
     if rescued_total:
