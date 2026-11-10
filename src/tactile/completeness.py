@@ -1,0 +1,256 @@
+"""Decide whether a reconstructed ``VerticalBarSpec`` can become a tactile chart.
+
+``check_completeness`` sorts a spec into one of three states:
+
+* ``ready``: every title, category and series name is present and nothing
+  suspicious was flagged; ``spec_to_chart`` can build a ``VerticalBarChart``.
+* ``needs_input``: only text is missing (titles, unreadable categories,
+  unnamed series). The user can supply it with ``apply_overrides``.
+* ``cannot_build``: the numbers or structure are not trustworthy. Overrides
+  cannot fix this; the user needs a clearer image or a hand-written chart.
+
+Nothing here invents text or numbers. Overrides supply text only.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field, replace
+
+from src.contracts import (
+    BarSeries,
+    DetectionFrame,
+    ChartInterpretationError,
+    VerticalBarChart,
+    VerticalBarSpec,
+)
+
+READY, NEEDS_INPUT, CANNOT_BUILD = "ready", "needs_input", "cannot_build"
+
+# Flags that mean the numbers or structure cannot be trusted. Any one of them
+# makes the spec ``cannot_build``.
+BLOCKING_FLAGS = {
+    # bars and category labels do not pair one to one
+    "category_count_mismatch": "The number of bars does not match the number of category labels.",
+    # two bars claimed the same category slot
+    "category_ambiguous": "Some bars could not be matched to a single category label.",
+    # legend entries and bar colours do not pair up
+    "series_ambiguous": "The legend entries could not be matched to the bar colours.",
+    # tick values are not evenly spaced, so the OCR probably misread one
+    "y_ticks_not_arithmetic": "The y-axis tick values are not evenly spaced, so one may be misread.",
+    # two equally good scales fit the y ticks
+    "y_calibration_ambiguous": "The y-axis scale could not be settled from the tick labels.",
+    # the zero line is outside the plot, so heights do not map to values
+    "baseline_outside_plot": "The zero line of the y axis is not inside the plot area.",
+    # a bar runs past the last tick, so its value is cut off
+    "value_clipped_at_axis": "At least one bar runs past the end of the y axis.",
+}
+
+# Blocking flags that describe ambiguity rather than a missing piece of the
+# chart. ``--force`` may continue past these (the user is told loudly).
+FORCEABLE_FLAGS = frozenset({
+    "category_count_mismatch", "category_ambiguous", "series_ambiguous",
+    "y_ticks_not_arithmetic", "y_calibration_ambiguous",
+})
+
+# Flags worth telling the user about that do not stop a build. Each is matched
+# by name, or by the prefix before the colon.
+NOTE_FLAGS = {
+    # values measured from pixels because no bar was detected
+    "bars_rescued": "{n} bar value(s) were measured from pixels because YOLO did not detect the bar.",
+    # a rescue found no bar pixels, so the bar is drawn as zero
+    "value_inferred_zero": "At least one bar was drawn as zero because no bar pixels were found.",
+    # y tick labels that disagreed with the others were ignored
+    "y_ticks_dropped": "{n} y-axis tick label(s) were ignored because they disagreed with the rest.",
+    # the title box reaches the image edge, so the title text may be cut off
+    "title_touches_right_edge": "The chart title touches the right edge of the image and may be cut off.",
+}
+
+NEXT_STEPS = ("Try a clearer or higher-resolution image, or write the chart by hand as "
+              "a VerticalBarChart JSON file (see tests/fixtures/tactile/rainfall.json) "
+              "and run `python -m src.tactile --chart FILE --output OUT.svg`.")
+
+_CATEGORY_KEY = re.compile(r"category\[(\d+)\]")
+
+
+@dataclass(frozen=True)
+class MissingItem:
+    field: str        # title, x_axis_title, y_axis_title, series_name[i] or category[j]
+    reason: str
+    cli_flag: str     # e.g. "--title" or "--category 2=TEXT"
+
+
+@dataclass(frozen=True)
+class Completeness:
+    status: str
+    notes: list[str] = field(default_factory=list)
+    missing: list[MissingItem] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
+    forceable: bool = False   # every blocker is an ambiguity ``--force`` may skip
+
+
+@dataclass(frozen=True)
+class Overrides:
+    """Text the user supplies. Bar values cannot be overridden."""
+
+    title: str | None = None
+    x_axis_title: str | None = None
+    y_axis_title: str | None = None
+    categories: dict[int, str] = field(default_factory=dict)
+    series_names: dict[int, str] = field(default_factory=dict)
+
+
+def _flag_name(flag: str) -> str:
+    return flag.split(":", 1)[0]
+
+
+def _unreadable_categories(spec: VerticalBarSpec) -> list[int]:
+    marked = {int(m.group(1)) for key in spec.confidence if (m := _CATEGORY_KEY.fullmatch(key))}
+    marked |= {j for j, text in enumerate(spec.categories) if not text.strip()}
+    return sorted(j for j in marked if j < len(spec.categories))
+
+
+def check_completeness(spec: VerticalBarSpec) -> Completeness:
+    blockers: list[str] = []
+    forceable = True
+    for flag in spec.flags:
+        message = BLOCKING_FLAGS.get(_flag_name(flag))
+        if message:
+            blockers.append(f"{message} ({_flag_name(flag)}) {NEXT_STEPS}")
+            forceable = forceable and _flag_name(flag) in FORCEABLE_FLAGS
+    if not spec.categories:
+        blockers.append(f"No category labels were read. {NEXT_STEPS}")
+        forceable = False
+    if any(value is None for series in spec.series for value in series.values):
+        blockers.append(f"Some bar values could not be read. {NEXT_STEPS}")
+        forceable = False
+
+    notes = []
+    for flag in spec.flags:
+        name, _, count = flag.partition(":")
+        if name in NOTE_FLAGS:
+            notes.append(NOTE_FLAGS[name].format(n=count))
+
+    if blockers:
+        return Completeness(CANNOT_BUILD, notes, [], blockers, forceable)
+
+    missing: list[MissingItem] = []
+    if spec.title is None or "title_missing" in spec.flags:
+        missing.append(MissingItem("title", "No chart title was read.", "--title"))
+    if spec.x_axis_title is None or "x_axis_title_missing" in spec.flags:
+        missing.append(MissingItem("x_axis_title", "No x-axis title was read.", "--x-title"))
+    if spec.y_axis_title is None or "y_axis_title_missing" in spec.flags:
+        missing.append(MissingItem("y_axis_title", "No y-axis title was read.", "--y-title"))
+    for j in _unreadable_categories(spec):
+        shown = spec.categories[j] or "(empty)"
+        missing.append(MissingItem(
+            f"category[{j}]", f"Category {j} was unreadable (read as {shown!r}).",
+            f"--category {j}=TEXT"))
+    if len(spec.series) > 1:
+        for i, series in enumerate(spec.series):
+            if not series.name:
+                colour = f" (colour {series.source_color})" if series.source_color else ""
+                missing.append(MissingItem(
+                    f"series_name[{i}]", f"Series {i}{colour} has no legend name.",
+                    f"--series {i}=NAME"))
+    return Completeness(NEEDS_INPUT if missing else READY, notes, missing, [], False)
+
+
+def completeness_from_error(error: ChartInterpretationError,
+                            frame: DetectionFrame | None = None,
+                            min_confidence: float = 0.3) -> Completeness:
+    """Turn a reconstruction failure into a plain-language ``cannot_build``."""
+    def count(role: str) -> int:
+        return sum(1 for d in frame.detections
+                   if d.role == role and d.confidence >= min_confidence) if frame else 0
+
+    text = str(error)
+    if "no x tick labels" in text:
+        message = "No x tick labels were found."
+        titles = count("x_axis_title")
+        if titles:
+            message += f" {titles} label(s) may have been detected as axis titles."
+    elif "fewer than 2 readable y tick labels" in text or "y-axis calibration" in text:
+        message = "Fewer than 2 y-axis tick labels could be read, so bar heights cannot be turned into values."
+    elif "no vertical bars" in text:
+        message = "No vertical bars were found in the plot area."
+        if count("horizontal_bar"):
+            message += " The chart may have horizontal bars."
+    else:
+        message = f"The chart could not be interpreted ({text})."
+    return Completeness(CANNOT_BUILD, [], [], [f"{message} {NEXT_STEPS}"], False)
+
+
+def apply_overrides(spec: VerticalBarSpec,
+                    overrides: Overrides) -> tuple[VerticalBarSpec, list[str]]:
+    """Return a copy of ``spec`` with user-supplied text filled in.
+
+    Matching flags and per-category confidences are removed. Flags that make a
+    spec ``cannot_build`` are never touched.
+    """
+    for label, value in (("title", overrides.title), ("x_axis_title", overrides.x_axis_title),
+                         ("y_axis_title", overrides.y_axis_title),
+                         *((f"category {j}", t) for j, t in overrides.categories.items()),
+                         *((f"series {i}", t) for i, t in overrides.series_names.items())):
+        if value is not None and not value.strip():
+            raise ValueError(f"override for {label} is empty")
+    for j in overrides.categories:
+        if not 0 <= j < len(spec.categories):
+            raise ValueError(f"category index {j} is out of range (0 to {len(spec.categories) - 1})")
+    for i in overrides.series_names:
+        if not 0 <= i < len(spec.series):
+            raise ValueError(f"series index {i} is out of range (0 to {len(spec.series) - 1})")
+
+    flags = list(spec.flags)
+    confidence = dict(spec.confidence)
+    notes: list[str] = []
+
+    def drop(*names: str) -> None:
+        flags[:] = [f for f in flags if f not in names]
+
+    title, x_title, y_title = spec.title, spec.x_axis_title, spec.y_axis_title
+    if overrides.title is not None:
+        title = overrides.title
+        drop("title_missing", "title_touches_right_edge")
+        confidence.pop("title", None)
+        notes.append("chart title supplied by user")
+    if overrides.x_axis_title is not None:
+        x_title = overrides.x_axis_title
+        drop("x_axis_title_missing")
+        confidence.pop("x_axis_title", None)
+        notes.append("x-axis title supplied by user")
+    if overrides.y_axis_title is not None:
+        y_title = overrides.y_axis_title
+        drop("y_axis_title_missing")
+        confidence.pop("y_axis_title", None)
+        notes.append("y-axis title supplied by user")
+
+    categories = list(spec.categories)
+    for j, text in sorted(overrides.categories.items()):
+        categories[j] = text
+        confidence.pop(f"category[{j}]", None)
+        notes.append(f"category {j} supplied by user: {text!r}")
+    if overrides.categories and not any(_CATEGORY_KEY.fullmatch(k) for k in confidence):
+        drop("category_unreadable")
+
+    series = list(spec.series)
+    for i, name in sorted(overrides.series_names.items()):
+        series[i] = replace(series[i], name=name)
+        notes.append(f"series {i} name supplied by user: {name!r}")
+
+    return replace(spec, title=title, x_axis_title=x_title, y_axis_title=y_title,
+                   categories=categories, series=series, flags=flags,
+                   confidence=confidence), notes
+
+
+def spec_to_chart(spec: VerticalBarSpec) -> VerticalBarChart:
+    """Build the layout's chart from a spec whose status is ``ready``."""
+    result = check_completeness(spec)
+    if result.status != READY:
+        raise ValueError(
+            f"spec is not ready ({result.status}); resolve it before building a chart: "
+            + "; ".join(result.blockers or [f"{m.field}: {m.reason}" for m in result.missing]))
+    return VerticalBarChart(
+        spec.source_key, spec.title, spec.x_axis_title, spec.y_axis_title,
+        tuple(spec.categories),
+        tuple(BarSeries(s.name or None, tuple(float(v) for v in s.values)) for s in spec.series))
