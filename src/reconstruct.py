@@ -29,6 +29,8 @@ MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
 UNREADABLE_CATEGORY_CONFIDENCE = 0.1
+SHORT_BAR_MIN_PX = 6          # detected bars shorter than this are re-measured from pixels
+SHORT_BAR_PLOT_FRACTION = 0.03  # ... or shorter than this share of the plot height
 RESCUE_CONFIDENCE = 0.2
 RESCUE_STRIP_FRACTION = 0.5   # central share of the bar width that is probed
 RESCUE_ROW_FRACTION = 0.6     # share of strip pixels that must match for a row to count
@@ -469,10 +471,20 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     legend_labels = [d for d in roles.get("legend_label", [])
                      if legend is None or _inside(_centre(d), legend, 4, 4)]
     swatch_colors = [_sample_rgb(rgb, d) for d in swatches]
+    can_rescue = rescue_bars and baseline_inside
+    # Very short boxes carry mostly outline and antialiasing pixels, so their
+    # colour is unreliable and their height is a few pixels of box noise: leave
+    # them out of colour clustering and let the rescue re-measure their slots.
+    plot_height = plot.box.y2 - plot.box.y1 if plot is not None else 0.0
+    short_limit = max(SHORT_BAR_MIN_PX, SHORT_BAR_PLOT_FRACTION * plot_height)
+    active = [k for k, bar in enumerate(bars)
+              if not can_rescue or bar.box.y2 - bar.box.y1 >= short_limit] or list(range(len(bars)))
+    short_bars = len(bars) - len(active)
     swatch_name = {s: (texts.get(legend_labels[l].id, ("", 0.0))[0] or None)
                    for s, l in _pair_legend(swatches, legend_labels).items()}
     seeds, swatch_of_seed = _legend_seeds(swatch_colors)
-    clusters, seed_of_cluster = _cluster_colors(bar_colors, seeds)
+    clusters, seed_of_cluster = _cluster_colors([bar_colors[k] for k in active], seeds)
+    clusters = [[active[i] for i in members] for members in clusters]
     cluster_centre = [
         tuple(statistics.median(bar_colors[k][ch] for k in members) for ch in range(3))
         if bar_colors[members[0]] is not None else None
@@ -502,7 +514,6 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         ambiguous_series = True
 
     bar_width = statistics.median(d.box.x2 - d.box.x1 for d in bars)
-    can_rescue = rescue_bars and baseline_inside
     series = []
     offsets_by_cluster: dict[int, float] = {}
     count_mismatch = category_ambiguous = False
@@ -579,6 +590,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         else:
             series += [s for _, s in added]
         flags.append(f"series_from_swatch:{len(added)}")
+    if short_bars:
+        flags.append(f"short_bars_remeasured:{short_bars}")
     if rescued_total:
         flags.append(f"bars_rescued:{rescued_total}")
     if rescued_zero:

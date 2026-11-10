@@ -486,3 +486,49 @@ def test_matched_series_do_not_gain_swatch_series():
     spec = grouped_chart((RED, GREEN), [(100, 50), (150, 60), (40, 120)]).run()
     assert len(spec.series) == 2
     assert not any(f.startswith("series_from_swatch") for f in spec.flags)
+
+
+def test_short_detected_bar_is_remeasured_from_pixels():
+    chart = base_chart(values=(120, 60, 2))  # the 2-unit bar is 3 px tall
+    spec = chart.run()
+    assert_values(spec, [120, 60, 2])
+    assert spec.series[0].value_rescued == [False, False, True]
+    assert "short_bars_remeasured:1" in spec.flags and "bars_rescued:1" in spec.flags
+    assert "category_count_mismatch" not in spec.flags
+
+
+def test_short_box_that_misses_most_of_the_bar_gets_the_pixel_height():
+    chart = base_chart(values=(120, 60, 4))
+    third = [d for d in chart.detections if d.role == "vertical_bar"][2]
+    box = third.box
+    chart.paint((box.x1, y_of(40), box.x2, ZERO_Y), (200, 100, 30))  # really 40 units tall
+    spec = chart.run()
+    assert_values(spec, [120, 60, 40])
+    assert spec.series[0].value_rescued[2] is True
+
+
+def test_short_limit_is_six_px_or_three_percent_of_the_plot_height():
+    # The plot is 300 px tall, so the limit is 9 px: 8 px (5 units) is short, 9 px (6 units) is not.
+    short = base_chart(values=(120, 60, 5)).run()
+    assert "short_bars_remeasured:1" in short.flags
+    ok = base_chart(values=(120, 60, 6)).run()
+    assert not any(f.startswith("short_bars_remeasured") for f in ok.flags)
+    assert ok.series[0].value_rescued == [False, False, False]
+
+
+def test_short_bars_are_kept_when_rescue_is_off_or_the_zero_line_is_missing():
+    chart = base_chart(values=(120, 60, 2))
+    spec = reconstruct_vbar(chart.frame(), chart.texts, chart.image, rescue_bars=False)
+    assert not any(f.startswith("short_bars_remeasured") for f in spec.flags)
+    assert spec.series[0].value_rescued == [False, False, False]
+    assert_values(spec, [120, 60, 2])
+
+
+def test_short_bar_colour_does_not_create_an_extra_series():
+    chart = grouped_chart((RED, GREEN), [(100, 2), (150, 60), (40, 120)])
+    third = [d for d in chart.detections if d.role == "vertical_bar"][1]
+    chart.image[int(third.box.y1):int(third.box.y2), int(third.box.x1):int(third.box.x2)] = (90, 90, 90)
+    spec = chart.run()
+    assert len(spec.series) == 2 and "series_ambiguous" not in spec.flags
+    assert_values(spec, [100, 150, 40], series=0)
+    assert "short_bars_remeasured:1" in spec.flags

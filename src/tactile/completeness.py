@@ -70,6 +70,8 @@ NOTE_FLAGS = {
     # legend swatches with no detected bars became series measured from pixels
     "series_from_swatch": ("{n} series had no detected bars and were built from the legend; "
                            "their values were measured from pixels and are usually near zero."),
+    # very short detected bars were re-measured from pixels
+    "short_bars_remeasured": "{n} very short bar(s) were re-measured from pixels.",
     # some tick labels were not read or were dropped, leaving gaps in the tick values
     "y_ticks_not_arithmetic": ("The y-axis tick values are not evenly spaced, probably because some "
                                "tick labels were missed. Bar values use the line through the ticks "
