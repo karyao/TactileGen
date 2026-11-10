@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, replace
 
+from src.tactile.braille import to_braille
 from src.contracts import (
     BarSeries,
     DetectionFrame,
@@ -110,6 +111,24 @@ def _unreadable_categories(spec: VerticalBarSpec) -> list[int]:
     return sorted(j for j in marked if j < len(spec.categories))
 
 
+def _unencodable(text: str) -> str | None:
+    """Characters the layout's braille encoder rejects in ``text``, or None if it encodes."""
+    try:
+        to_braille(text)
+        return None
+    except ValueError as exc:
+        bad = sorted({ch for ch in text if not ch.isspace() and _rejects(ch)})
+        return " ".join(repr(ch) for ch in bad) if bad else str(exc)
+
+
+def _rejects(char: str) -> bool:
+    try:
+        to_braille(char)
+        return False
+    except ValueError:
+        return True
+
+
 def check_completeness(spec: VerticalBarSpec) -> Completeness:
     blockers: list[str] = []
     forceable = True
@@ -153,6 +172,25 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
                 missing.append(MissingItem(
                     f"series_name[{i}]", f"Series {i}{colour} has no legend name.",
                     f"--series {i}=NAME"))
+
+    # Every string the layout encodes must pass the layout's own braille encoder.
+    listed = {m.field for m in missing}
+    strings = [("title", "The chart title", "--title", spec.title),
+               ("x_axis_title", "The x-axis title", "--x-title", spec.x_axis_title),
+               ("y_axis_title", "The y-axis title", "--y-title", spec.y_axis_title)]
+    strings += [(f"category[{j}]", f"Category {j}", f"--category {j}=TEXT", text)
+                for j, text in enumerate(spec.categories)]
+    if len(spec.series) > 1:
+        strings += [(f"series_name[{i}]", f"Series {i} name", f"--series {i}=NAME", s.name)
+                    for i, s in enumerate(spec.series)]
+    for name, label, cli_flag, text in strings:
+        if name in listed or not text:
+            continue
+        bad = _unencodable(text)
+        if bad:
+            missing.append(MissingItem(
+                name, f"{label} ({text!r}) has characters that cannot be written in "
+                      f"braille: {bad}. It was probably misread.", cli_flag))
     return Completeness(NEEDS_INPUT if missing else READY, notes, missing, [], False)
 
 

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from src.contracts import ChartInterpretationError, VerticalBarSpec
 from src.tactile.completeness import (
-    CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, Completeness, Overrides,
+    CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Completeness, Overrides,
     apply_overrides, check_completeness, completeness_from_error, spec_to_chart,
 )
 from src.tactile.layout import X_LABEL_MODES, layout_vertical_bar_chart_pages
@@ -179,6 +179,9 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
             print("\nStill missing: " + ", ".join(m.field for m in skipped), file=out)
             return EXIT_NEEDS_INPUT
         result = check_completeness(spec)
+        if result.status != READY:
+            _print_missing(result, out)
+            return EXIT_NEEDS_INPUT
 
     _print_summary(spec, out)
     if not args.yes:

@@ -89,6 +89,21 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn("No x tick labels", out)
 
+    def test_unencodable_name_exits_2_and_flag_fixes_it(self):
+        spec = make_spec(series=[SeriesSpec("Chile", "#112233", [1.0, 2.0, 3.0]),
+                                 SeriesSpec("E] Salvador", "#445566", [3.0, 2.0, 1.0])])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--series 1=NAME", out)
+        code, _, _, written = self.go(spec, argv=["--yes", "--series", "1=El Salvador"])
+        self.assertEqual((code, written), (0, True))
+
+    def test_tty_answer_that_cannot_be_encoded_stops(self):
+        code, out, _, written = self.go(
+            make_spec(title=None, flags=["title_missing"]), tty=True, answers=["Bad]"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--title", out)
+
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
         self.assertEqual(code, 1)

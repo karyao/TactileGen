@@ -98,6 +98,41 @@ class Status(unittest.TestCase):
         self.assertEqual((result.status, result.missing), (CANNOT_BUILD, []))
 
 
+class Encodable(unittest.TestCase):
+    def test_salvador_misread_needs_input(self):
+        spec = make_spec(series=two_series(("Chile", "E] Salvador")))
+        result = check_completeness(spec)
+        self.assertEqual(result.status, NEEDS_INPUT)
+        item, = result.missing
+        self.assertEqual((item.field, item.cli_flag), ("series_name[1]", "--series 1=NAME"))
+        self.assertIn("']'", item.reason)
+
+    def test_each_field_names_its_flag(self):
+        spec = make_spec(title="A]", x_axis_title="B[", y_axis_title="C}",
+                         categories=["2001", "2{2", "2003"])
+        flags = {m.field: m.cli_flag for m in check_completeness(spec).missing}
+        self.assertEqual(flags, {"title": "--title", "x_axis_title": "--x-title",
+                                 "y_axis_title": "--y-title", "category[1]": "--category 1=TEXT"})
+
+    def test_override_with_bad_characters_stays_needs_input(self):
+        fixed, _ = apply_overrides(make_spec(), Overrides(title="Bad]"))
+        self.assertEqual([m.field for m in check_completeness(fixed).missing], ["title"])
+
+    def test_override_with_good_text_clears_it(self):
+        spec = make_spec(series=two_series(("Chile", "E] Salvador")))
+        fixed, _ = apply_overrides(spec, Overrides(series_names={1: "El Salvador"}))
+        self.assertEqual(check_completeness(fixed).status, READY)
+
+    def test_no_duplicate_when_already_missing(self):
+        spec = make_spec(categories=["2001", "]", "2003"], flags=["category_unreadable"],
+                         confidence={"category[1]": 0.1})
+        self.assertEqual([m.field for m in check_completeness(spec).missing], ["category[1]"])
+
+    def test_normal_text_is_ready(self):
+        spec = make_spec(title="Goods (2007-2012), 50%", categories=["East Asia", "-5", "3.5"])
+        self.assertEqual(check_completeness(spec).status, READY)
+
+
 class Errors(unittest.TestCase):
     def frame(self, *roles):
         detections = tuple(Detection(f"d{i}", role, Box(0, 0, 10, 10), 0.9)
