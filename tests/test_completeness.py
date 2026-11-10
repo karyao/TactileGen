@@ -80,6 +80,11 @@ class Status(unittest.TestCase):
         self.assertTrue(any("not evenly spaced" in n for n in result.notes))
         self.assertTrue(any("2 y-axis tick" in n for n in result.notes))
 
+    def test_series_from_swatch_is_a_note(self):
+        result = check_completeness(make_spec(flags=["series_from_swatch:2"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertTrue(any("2 series had no detected bars" in n for n in result.notes))
+
     def test_leading_zero_tick_blocks_and_cannot_be_forced(self):
         result = check_completeness(make_spec(flags=["y_tick_leading_zero"]))
         self.assertEqual(result.status, CANNOT_BUILD)

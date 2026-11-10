@@ -306,6 +306,14 @@ def _rescue_value(rgb: np.ndarray, centre_x: float, width: float, baseline: floa
 
 # --- legend --------------------------------------------------------------------
 
+def _legend_ranks(swatches: list[Detection], swatch_ids: list[int]) -> dict[int, int]:
+    """Reading order (rows top to bottom, then left to right) of the given legend swatches."""
+    height = statistics.median(swatches[i].box.y2 - swatches[i].box.y1 for i in swatch_ids)
+    order = sorted(swatch_ids, key=lambda i: (round(_centre(swatches[i])[1] / max(height, 1.0)),
+                                              _centre(swatches[i])[0]))
+    return {index: rank for rank, index in enumerate(order)}
+
+
 def _pair_legend(swatches: list[Detection], labels: list[Detection]):
     """Pair each swatch with its nearest label (one-to-one, same-row preferred)."""
     costs = []
@@ -484,8 +492,9 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         if c not in matches and s not in matches.values():
             matches[c] = s
 
+    unmatched_seeds = [i for i, sw in enumerate(swatch_of_seed) if sw not in matches.values()]
     ambiguous_series = False
-    if swatches and len(matches) < max(len(clusters), len(seeds)):
+    if swatches and len(matches) < len(clusters):
         ambiguous_series = True
     if not swatches and len(clusters) > 1:
         ambiguous_series = True
@@ -495,6 +504,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     bar_width = statistics.median(d.box.x2 - d.box.x1 for d in bars)
     can_rescue = rescue_bars and baseline_inside
     series = []
+    offsets_by_cluster: dict[int, float] = {}
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
     for c, members in enumerate(clusters):
@@ -520,6 +530,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             # Groups sit at a fixed offset from the tick that depends on the
             # series count, so measure it from this series' detected bars.
             offset = statistics.median(_centre(bars[k])[0] - label_x[j] for j, k in kept.items())
+            offsets_by_cluster[c] = offset
             for j in range(len(categories)):
                 if row[j] is not None:
                     continue
@@ -535,6 +546,39 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         series.append(SeriesSpec(
             name, _hex(None if centre is None else tuple(int(v) for v in centre)), row,
             value_rescued=rescued, value_confidence=value_conf))
+    # Legend swatches with no bars of their colour are series the detector missed
+    # entirely (usually values too small to see): measure them from pixels.
+    added = []
+    if unmatched_seeds:
+        ranks = _legend_ranks(swatches, swatch_of_seed)
+        refs = sorted((ranks[matches[c]], offsets_by_cluster[c]) for c in offsets_by_cluster
+                      if matches.get(c) in ranks)
+        pitches = [(o2 - o1) / (r2 - r1) for (r1, o1), (r2, o2) in itertools.combinations(refs, 2)
+                   if r2 != r1]
+        pitch = statistics.median(pitches) if pitches else bar_width
+        for i in unmatched_seeds:
+            colour = swatch_colors[swatch_of_seed[i]]
+            if not (can_rescue and refs and colour is not None):
+                ambiguous_series = True
+                continue
+            rank = ranks[swatch_of_seed[i]]
+            ref_rank, ref_offset = min(refs, key=lambda r: abs(r[0] - rank))
+            offset = ref_offset + (rank - ref_rank) * pitch
+            row = [_rescue_value(rgb, label_x[j] + offset, bar_width, baseline, a, colour)
+                   for j in range(len(categories))]
+            rescued_total += len(row)
+            rescued_zero += sum(v == 0.0 for v in row)
+            added.append((rank, SeriesSpec(
+                swatch_name.get(swatch_of_seed[i]), _hex(colour), row,
+                value_rescued=[True] * len(row), value_confidence=[RESCUE_CONFIDENCE] * len(row))))
+    if added:
+        if len(matches) == len(clusters):   # every series has a legend rank: keep legend order
+            ranked = sorted([(ranks[matches[c]], s) for c, s in enumerate(series)] + added,
+                            key=lambda pair: pair[0])
+            series = [s for _, s in ranked]
+        else:
+            series += [s for _, s in added]
+        flags.append(f"series_from_swatch:{len(added)}")
     if rescued_total:
         flags.append(f"bars_rescued:{rescued_total}")
     if rescued_zero:

@@ -85,9 +85,10 @@ Flags (each is "could not resolve this", not "wrong"):
 | `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. |
 | `category_count_mismatch`, `category_ambiguous` | Bars and x labels disagree in number, or two bars of a series map to one label. |
 | `category_unreadable` | An x label is empty or has no letter or digit (e.g. a lone `|`); OCR confidence is not used. That category's confidence is set to 0.1 (`confidence["category[j]"]`). |
-| `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one. |
+| `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one (a legend swatch with no bars of its colour becomes a series when it can be measured; see `series_from_swatch`). |
+| `series_from_swatch:N` | N legend swatches matched no bar colour. Each became a series named by its legend label, with values measured from pixels at the slots implied by the detected series' spacing (`value_rescued` true). Note, not a blocker. |
 | `plot_area_missing` | No plot area detected; position filters were skipped. |
-| `bars_rescued:N` | N values had no detected bar and were measured from pixels (`SeriesSpec.value_rescued`, low `value_confidence`). |
+| `bars_rescued:N` | N values (including those of swatch-built series) had no detected bar and were measured from pixels (`SeriesSpec.value_rescued`, low `value_confidence`). |
 | `value_inferred_zero` | At least one rescued value found no bar pixels and was set to 0.0. |
 
 Series colours are seeded from the legend swatches, so near-identical series colours stay separate when a legend is detected. Bar rescue and the category guard can be switched off with `rescue_bars=False` and `category_guard=False`.

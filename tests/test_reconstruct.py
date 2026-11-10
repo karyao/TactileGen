@@ -421,3 +421,68 @@ def test_guard_off_only_flags_empty_text():
 
     assert "category_unreadable" not in off("|", 0.95).flags
     assert "category_unreadable" in off("", 0.0).flags
+
+
+def test_series_with_no_detected_bars_is_built_from_its_legend_swatch():
+    groups = [(100, 50, 4), (150, 60, 2), (40, 120, 6)]
+    chart = grouped_chart((RED, GREEN, BLUE), groups,
+                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
+    spec = chart.run()
+    assert [s.name for s in spec.series] == ["S0", "S1", "S2"]
+    assert_values(spec, [4, 2, 6], series=2)
+    assert spec.series[2].value_rescued == [True, True, True]
+    assert spec.series[2].source_color == "#1e64c8"
+    assert "series_from_swatch:1" in spec.flags and "series_ambiguous" not in spec.flags
+    assert "bars_rescued:3" in spec.flags
+
+
+def test_swatch_series_in_the_middle_keeps_legend_order():
+    groups = [(100, 4, 80), (150, 2, 60), (40, 6, 120)]
+    chart = grouped_chart((RED, GREEN, BLUE), groups,
+                          missing={(0, 1), (1, 1), (2, 1)}, shift=-15.0)
+    spec = chart.run()
+    assert [s.name for s in spec.series] == ["S0", "S1", "S2"]
+    assert_values(spec, [4, 2, 6], series=1)
+    assert_values(spec, [80, 60, 120], series=2)
+
+
+def test_swatch_series_with_nothing_painted_reads_zero_and_flags_it():
+    groups = [(100, 50, 0), (150, 60, 0), (40, 120, 0)]
+    chart = grouped_chart((RED, GREEN, BLUE), groups,
+                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
+    spec = chart.run()
+    assert spec.series[2].name == "S2"
+    assert spec.series[2].values == [0.0, 0.0, 0.0]
+    assert "value_inferred_zero" in spec.flags
+
+
+def test_swatch_series_without_a_placement_stays_ambiguous():
+    # Nothing can be measured when the zero line is below the plot (see the rescue test above),
+    # so the unmatched swatch keeps the old series_ambiguous flag.
+    def y_at(value):
+        return PLOT[3] - 1.5 * (value - 100)
+
+    chart = Chart()
+    chart.add("plot_area", PLOT)
+    for tick in (100, 150, 200):
+        chart.add("y_tick_label", (40, y_at(tick) - 6, 75, y_at(tick) + 6), text=str(tick))
+    for i, value in enumerate((150, 120)):
+        box = (100 + 200 * i, y_at(value), 160 + 200 * i, PLOT[3])
+        chart.add("vertical_bar", box)
+        chart.paint(box, RED)
+        chart.add("x_tick_label", (box[0], 345, box[2], 360), text=f"C{i}")
+    for row, colour in enumerate((RED, GREEN)):
+        y = 362 + 12 * row
+        chart.add("legend_swatch", (100, y, 114, y + 10))
+        chart.paint((100, y, 114, y + 10), colour)
+        chart.add("legend_label", (120, y, 180, y + 10), text=f"S{row}")
+    spec = chart.run()
+    assert len(spec.series) == 1
+    assert "series_ambiguous" in spec.flags
+    assert not any(f.startswith("series_from_swatch") for f in spec.flags)
+
+
+def test_matched_series_do_not_gain_swatch_series():
+    spec = grouped_chart((RED, GREEN), [(100, 50), (150, 60), (40, 120)]).run()
+    assert len(spec.series) == 2
+    assert not any(f.startswith("series_from_swatch") for f in spec.flags)

@@ -67,6 +67,9 @@ NOTE_FLAGS = {
     # a rescue found no bar pixels; {n} counts those values, drawn as zero
     "value_inferred_zero": ("No bar was visible for {n} value(s), so they are drawn as 0. "
                             "The data may include values below the axis that are not drawn."),
+    # legend swatches with no detected bars became series measured from pixels
+    "series_from_swatch": ("{n} series had no detected bars and were built from the legend; "
+                           "their values were measured from pixels and are usually near zero."),
     # some tick labels were not read or were dropped, leaving gaps in the tick values
     "y_ticks_not_arithmetic": ("The y-axis tick values are not evenly spaced, probably because some "
                                "tick labels were missed. Bar values use the line through the ticks "
