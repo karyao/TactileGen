@@ -145,6 +145,21 @@ class Pipeline(unittest.TestCase):
         code, out, _, written = self.go(spec, argv=["--yes", "--category", "1=Hungary"])
         self.assertEqual((code, written), (0, True))
 
+    def test_cut_off_title_asks_and_confirming_it_builds(self):
+        spec = make_spec(flags=["title_cut_off"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--title", out)
+        self.assertIn("cut off at the image edge", out)
+        code, out, _, written = self.go(spec, argv=["--yes", "--title", "Sales"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("chart title supplied by user", out)
+
+    def test_tty_confirming_a_cut_off_y_title(self):
+        spec = make_spec(flags=["y_axis_title_cut_off"])
+        code, _, _, written = self.go(spec, tty=True, answers=["Revenue", "y"])
+        self.assertEqual((code, written), (0, True))
+
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
         self.assertEqual(code, 1)

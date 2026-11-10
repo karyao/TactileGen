@@ -2,6 +2,8 @@
 
 import unittest
 
+import numpy as np
+
 from src.contracts import (
     Box, ChartInterpretationError, Detection, DetectionFrame, SeriesSpec,
     VerticalBarSpec, YAxisSpec,
@@ -9,7 +11,7 @@ from src.contracts import (
 from src.tactile.completeness import (
     BLOCKING_FLAGS, CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Overrides,
     apply_overrides, check_completeness, completeness_from_error, spec_to_chart,
-    spec_to_chart_with_notes,
+    spec_to_chart_with_notes, cut_off_flags,
 )
 
 
@@ -193,6 +195,74 @@ class SuspiciousCategories(unittest.TestCase):
     def test_cannot_build_still_wins(self):
         spec = self.spec(["Germany", "i", "Greece"], flags=["series_ambiguous"])
         self.assertEqual(check_completeness(spec).status, CANNOT_BUILD)
+
+
+class CutOffTitles(unittest.TestCase):
+    W, H = 200, 120
+
+    def frame(self, *detections):
+        items = tuple(Detection(f"d{i}", role, Box(*box), 0.9)
+                      for i, (role, box) in enumerate(detections))
+        return DetectionFrame("val/1.png", self.W, self.H, items)
+
+    def image(self, ink=None):
+        image = np.full((self.H, self.W, 3), 255, np.uint8)
+        if ink:
+            x1, y1, x2, y2 = ink
+            image[y1:y2, x1:x2] = 0
+        return image
+
+    def test_ink_in_last_columns_of_the_title_rows_flags_the_chart_title(self):
+        frame = self.frame(("chart_title", (20, 5, 190, 25)))
+        self.assertEqual(cut_off_flags(frame, self.image((196, 8, 200, 20))), ["title_cut_off"])
+
+    def test_ink_elsewhere_or_outside_the_title_rows_does_not(self):
+        frame = self.frame(("chart_title", (20, 5, 190, 25)))
+        self.assertEqual(cut_off_flags(frame, self.image((100, 8, 140, 20))), [])
+        self.assertEqual(cut_off_flags(frame, self.image((196, 60, 200, 100))), [])
+        self.assertEqual(cut_off_flags(frame, self.image()), [])
+
+    def test_single_stray_pixel_is_not_ink(self):
+        frame = self.frame(("chart_title", (20, 5, 190, 25)))
+        image = self.image()
+        image[10, 199] = 0
+        self.assertEqual(cut_off_flags(frame, image), [])
+
+    def test_y_axis_title_box_touching_the_top_edge(self):
+        for top, expected in ((0.0, ["y_axis_title_cut_off"]), (2.0, ["y_axis_title_cut_off"]),
+                              (3.0, [])):
+            with self.subTest(top=top):
+                frame = self.frame(("y_axis_title", (2, top, 20, 100)))
+                self.assertEqual(cut_off_flags(frame, self.image()), expected)
+
+    def test_no_title_detections_means_no_flags(self):
+        self.assertEqual(cut_off_flags(self.frame(), self.image()), [])
+
+    def test_cut_off_titles_become_needs_input_with_a_clear_message(self):
+        spec = make_spec(flags=["title_cut_off", "y_axis_title_cut_off"])
+        result = check_completeness(spec)
+        self.assertEqual(result.status, NEEDS_INPUT)
+        self.assertEqual([(m.field, m.cli_flag) for m in result.missing],
+                         [("title", "--title"), ("y_axis_title", "--y-title")])
+        for item in result.missing:
+            self.assertIn("cut off at the image edge", item.reason)
+            self.assertIn("same text to confirm", item.reason)
+
+    def test_supplied_or_confirmed_title_is_not_asked_again(self):
+        spec = make_spec(flags=["title_cut_off", "y_axis_title_cut_off"])
+        fixed, notes = apply_overrides(spec, Overrides(title="Sales", y_axis_title="Revenue"))
+        self.assertEqual(fixed.flags, [])
+        self.assertEqual(check_completeness(fixed).status, READY)
+        self.assertIn("chart title supplied by user", notes)
+
+    def test_other_title_text_is_still_asked_for_separately(self):
+        spec = make_spec(flags=["title_cut_off", "y_axis_title_cut_off"])
+        fixed, _ = apply_overrides(spec, Overrides(title="Sales"))
+        self.assertEqual([m.field for m in check_completeness(fixed).missing], ["y_axis_title"])
+
+    def test_missing_title_is_not_listed_twice(self):
+        spec = make_spec(title=None, flags=["title_missing", "title_cut_off"])
+        self.assertEqual([m.field for m in check_completeness(spec).missing], ["title"])
 
 
 class Errors(unittest.TestCase):

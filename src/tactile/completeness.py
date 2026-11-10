@@ -14,9 +14,12 @@ Nothing here invents text or numbers. Overrides supply text only.
 
 from __future__ import annotations
 
+import math
 import re
 import statistics
 from dataclasses import dataclass, field, replace
+
+import numpy as np
 
 from src.tactile.braille import to_braille
 from src.contracts import (
@@ -68,6 +71,9 @@ NOTE_FLAGS = {
     # the title box reaches the image edge, so the title text may be cut off
     "title_touches_right_edge": "The chart title touches the right edge of the image and may be cut off.",
 }
+
+CUT_OFF_REASON = ("The {what} appears cut off at the image edge. Enter the full title, "
+                  "or enter the same text to confirm it.")
 
 NEXT_STEPS = ("Try a clearer or higher-resolution image, or write the chart by hand as "
               "a VerticalBarChart JSON file (see tests/fixtures/tactile/rainfall.json) "
@@ -124,6 +130,36 @@ def _suspicious_categories(spec: VerticalBarSpec) -> list[tuple[int, str]]:
                       f"median year ({middle:g}), so it was probably misread.")
                   for j, c in enumerate(cats) if abs(int(c) - middle) > YEAR_SPREAD]
     return [(j, reason) for j, reason in found if j not in supplied]
+
+
+# A title whose ink runs to the right edge of the image (chart title) or whose
+# box touches the top edge (rotated y-axis title) was cut off by the image.
+EDGE_COLUMNS = 3      # image columns checked for ink at the right edge
+EDGE_INK_PIXELS = 2   # dark pixels in those columns that count as ink
+TOP_EDGE_PIXELS = 2   # a y-axis title box starting this close to the top is cut off
+_DARK = 128           # greyscale value below which a pixel is ink
+
+
+def cut_off_flags(frame, image) -> list[str]:
+    """Flags for titles the image edge cuts off: ``title_cut_off``, ``y_axis_title_cut_off``.
+
+    ``image`` is a BGR array as ``cv2.imread`` returns it. Uses the same title
+    detections as ``reconstruct_vbar`` (best detection at its confidence floor).
+    """
+    from src.reconstruct import MIN_CONFIDENCE, _best, _group_roles
+
+    roles = _group_roles(frame, MIN_CONFIDENCE)
+    flags = []
+    title = _best(roles.get("chart_title", []))
+    if title is not None:
+        gray = image[:, :, :3] @ np.array([0.114, 0.587, 0.299])
+        rows = gray[int(title.box.y1):math.ceil(title.box.y2), -EDGE_COLUMNS:]
+        if int((rows < _DARK).sum()) >= EDGE_INK_PIXELS:
+            flags.append("title_cut_off")
+    y_title = _best(roles.get("y_axis_title", []))
+    if y_title is not None and y_title.box.y1 <= TOP_EDGE_PIXELS:
+        flags.append("y_axis_title_cut_off")
+    return flags
 
 
 def _flag_name(flag: str) -> str:
@@ -185,10 +221,15 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
     missing: list[MissingItem] = []
     if spec.title is None or "title_missing" in spec.flags:
         missing.append(MissingItem("title", "No chart title was read.", "--title"))
+    elif "title_cut_off" in spec.flags:
+        missing.append(MissingItem("title", CUT_OFF_REASON.format(what="chart title"), "--title"))
     if spec.x_axis_title is None or "x_axis_title_missing" in spec.flags:
         missing.append(MissingItem("x_axis_title", "No x-axis title was read.", "--x-title"))
     if spec.y_axis_title is None or "y_axis_title_missing" in spec.flags:
         missing.append(MissingItem("y_axis_title", "No y-axis title was read.", "--y-title"))
+    elif "y_axis_title_cut_off" in spec.flags:
+        missing.append(MissingItem("y_axis_title", CUT_OFF_REASON.format(what="y-axis title"),
+                                   "--y-title"))
     for j in _unreadable_categories(spec):
         shown = spec.categories[j] or "(empty)"
         missing.append(MissingItem(
@@ -282,7 +323,7 @@ def apply_overrides(spec: VerticalBarSpec,
     title, x_title, y_title = spec.title, spec.x_axis_title, spec.y_axis_title
     if overrides.title is not None:
         title = overrides.title
-        drop("title_missing", "title_touches_right_edge")
+        drop("title_missing", "title_touches_right_edge", "title_cut_off")
         confidence.pop("title", None)
         notes.append("chart title supplied by user")
     if overrides.x_axis_title is not None:
@@ -292,7 +333,7 @@ def apply_overrides(spec: VerticalBarSpec,
         notes.append("x-axis title supplied by user")
     if overrides.y_axis_title is not None:
         y_title = overrides.y_axis_title
-        drop("y_axis_title_missing")
+        drop("y_axis_title_missing", "y_axis_title_cut_off")
         confidence.pop("y_axis_title", None)
         notes.append("y-axis title supplied by user")
 

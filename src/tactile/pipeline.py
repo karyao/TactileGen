@@ -17,7 +17,8 @@ from pathlib import Path
 from src.contracts import ChartInterpretationError, VerticalBarSpec
 from src.tactile.completeness import (
     CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Completeness, Overrides,
-    apply_overrides, check_completeness, completeness_from_error, spec_to_chart_with_notes,
+    apply_overrides, check_completeness, completeness_from_error, cut_off_flags,
+    spec_to_chart_with_notes,
 )
 from src.tactile.layout import X_LABEL_MODES, layout_vertical_bar_chart_pages
 from src.tactile.rules import check_layout, format_report
@@ -43,7 +44,8 @@ def analyse(image_path: Path, weights: Path):
     frame = run_detection(load_model(weights), image_path)
     ocr = run_ocr(image, frame, TesseractBackend(), "eng")
     try:
-        return reconstruct_vbar(frame, ocr, image), None, frame
+        spec = reconstruct_vbar(frame, ocr, image)
+        return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:
         return None, error, frame
 
