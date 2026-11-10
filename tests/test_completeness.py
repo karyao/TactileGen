@@ -144,6 +144,57 @@ class Encodable(unittest.TestCase):
         self.assertEqual(check_completeness(spec).status, READY)
 
 
+class SuspiciousCategories(unittest.TestCase):
+    def spec(self, cats, **kw):
+        return make_spec(categories=cats, series=[SeriesSpec(None, "#112233", [1.0] * len(cats))], **kw)
+
+    def test_single_character_among_long_names(self):
+        result = check_completeness(self.spec(["Germany", "Greece", "i", "India"]))
+        self.assertEqual(result.status, NEEDS_INPUT)
+        item, = result.missing
+        self.assertEqual((item.field, item.cli_flag), ("category[2]", "--category 2=TEXT"))
+        self.assertIn("single character", item.reason)
+
+    def test_single_character_is_fine_when_categories_are_short(self):
+        self.assertEqual(check_completeness(self.spec(["A", "B", "C"])).status, READY)
+        self.assertEqual(check_completeness(self.spec(["US", "UK", "x"])).status, READY)
+
+    def test_year_far_from_median(self):
+        result = check_completeness(self.spec(["2007", "2008", "6002", "2010", "2011"]))
+        item, = result.missing
+        self.assertEqual(item.field, "category[2]")
+        self.assertIn("median year", item.reason)
+
+    def test_two_years_that_disagree_are_both_asked_about(self):
+        result = check_completeness(self.spec(["2000", "9002"]))
+        self.assertEqual([m.field for m in result.missing], ["category[0]", "category[1]"])
+
+    def test_ordinary_and_long_spans_pass(self):
+        self.assertEqual(check_completeness(self.spec(["1960", "1980", "2000", "2012"])).status, READY)
+        self.assertEqual(check_completeness(self.spec(["2013", "2012", "2011"])).status, READY)
+        self.assertEqual(check_completeness(self.spec(["1996", "2005", "2012"])).status, READY)
+
+    def test_mixed_categories_do_not_trigger_the_year_rule(self):
+        self.assertEqual(check_completeness(self.spec(["2000", "Total", "9002"])).status, READY)
+
+    def test_supplying_text_clears_it_and_is_not_asked_again(self):
+        spec = self.spec(["Germany", "Greece", "i", "India"])
+        fixed, _ = apply_overrides(spec, Overrides(categories={2: "Hungary"}))
+        self.assertEqual(check_completeness(fixed).status, READY)
+        # the user may confirm a real one-character label
+        fixed, _ = apply_overrides(spec, Overrides(categories={2: "i"}))
+        self.assertEqual(check_completeness(fixed).status, READY)
+
+    def test_no_duplicate_with_unreadable_category(self):
+        spec = self.spec(["Germany", "Greece", "?", "India"], flags=["category_unreadable"],
+                         confidence={"category[2]": 0.1})
+        self.assertEqual([m.field for m in check_completeness(spec).missing], ["category[2]"])
+
+    def test_cannot_build_still_wins(self):
+        spec = self.spec(["Germany", "i", "Greece"], flags=["series_ambiguous"])
+        self.assertEqual(check_completeness(spec).status, CANNOT_BUILD)
+
+
 class Errors(unittest.TestCase):
     def frame(self, *roles):
         detections = tuple(Detection(f"d{i}", role, Box(0, 0, 10, 10), 0.9)
@@ -180,7 +231,7 @@ class Overrides_(unittest.TestCase):
             confidence={"category[1]": 0.1})
         fixed, notes = apply_overrides(spec, Overrides(
             title="T", y_axis_title="Y", categories={1: "2002"}, series_names={1: "B"}))
-        self.assertEqual(fixed.flags, ["bars_rescued:1"])
+        self.assertEqual(fixed.flags, ["bars_rescued:1", "category_supplied:1"])
         self.assertEqual((fixed.title, fixed.y_axis_title, fixed.categories[1],
                           fixed.series[1].name), ("T", "Y", "2002", "B"))
         self.assertNotIn("category[1]", fixed.confidence)

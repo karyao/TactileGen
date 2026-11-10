@@ -137,6 +137,14 @@ class Pipeline(unittest.TestCase):
         self.assertEqual((code, written), (1, False))
         self.assertIn("negative bar values are not supported", err)
 
+    def test_suspicious_category_asks_and_flag_fixes_it(self):
+        spec = make_spec(categories=["Germany", "i", "Greece"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--category 1=TEXT", out)
+        code, out, _, written = self.go(spec, argv=["--yes", "--category", "1=Hungary"])
+        self.assertEqual((code, written), (0, True))
+
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
         self.assertEqual(code, 1)

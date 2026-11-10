@@ -15,6 +15,7 @@ Nothing here invents text or numbers. Overrides supply text only.
 from __future__ import annotations
 
 import re
+import statistics
 from dataclasses import dataclass, field, replace
 
 from src.tactile.braille import to_braille
@@ -102,6 +103,29 @@ class Overrides:
     series_names: dict[int, str] = field(default_factory=dict)
 
 
+# A category this far (in years) from the median year is treated as a misread.
+YEAR_SPREAD = 50
+# A one-character category is suspicious when the other labels are this long.
+SHORT_CATEGORY_MEDIAN = 4
+
+
+def _suspicious_categories(spec: VerticalBarSpec) -> list[tuple[int, str]]:
+    """Categories that read cleanly but look like OCR misreads, skipping any the user supplied."""
+    supplied = {int(f.split(":", 1)[1]) for f in spec.flags if f.startswith("category_supplied:")}
+    cats = spec.categories
+    found: list[tuple[int, str]] = []
+    if cats and statistics.median(len(c.strip()) for c in cats) >= SHORT_CATEGORY_MEDIAN:
+        found += [(j, f"Category {j} ({c!r}) is a single character but the other categories "
+                      "are longer, so it was probably misread.")
+                  for j, c in enumerate(cats) if len(c.strip()) == 1]
+    if cats and all(re.fullmatch(r"\d{4}", c) for c in cats):
+        middle = statistics.median(int(c) for c in cats)
+        found += [(j, f"Category {j} ({c!r}) is more than {YEAR_SPREAD} years from the "
+                      f"median year ({middle:g}), so it was probably misread.")
+                  for j, c in enumerate(cats) if abs(int(c) - middle) > YEAR_SPREAD]
+    return [(j, reason) for j, reason in found if j not in supplied]
+
+
 def _flag_name(flag: str) -> str:
     return flag.split(":", 1)[0]
 
@@ -170,6 +194,10 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
         missing.append(MissingItem(
             f"category[{j}]", f"Category {j} was unreadable (read as {shown!r}).",
             f"--category {j}=TEXT"))
+    listed_now = {m.field for m in missing}
+    for j, reason in _suspicious_categories(spec):
+        if f"category[{j}]" not in listed_now:
+            missing.append(MissingItem(f"category[{j}]", reason, f"--category {j}=TEXT"))
     if len(spec.series) > 1:
         for i, series in enumerate(spec.series):
             if not series.name:
@@ -272,6 +300,7 @@ def apply_overrides(spec: VerticalBarSpec,
     for j, text in sorted(overrides.categories.items()):
         categories[j] = text
         confidence.pop(f"category[{j}]", None)
+        flags.append(f"category_supplied:{j}")
         notes.append(f"category {j} supplied by user: {text!r}")
     if overrides.categories and not any(_CATEGORY_KEY.fullmatch(k) for k in confidence):
         drop("category_unreadable")
