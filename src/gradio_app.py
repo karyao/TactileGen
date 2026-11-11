@@ -15,11 +15,14 @@ from typing import Any
 
 from src.borealis import BOREALIS_CSS, borealis_theme
 from src.contract_io import write_ocr_frame
-from src.contracts import DetectionFrame, OCRFrame
+from src.contracts import DetectionFrame, LegendMappingFrame, OCRFrame
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
+from src.legend_matcher import match_legend_to_bars
 from src.ocr import run_ocr
 from src.presentation import (
+    LEGEND_TABLE_HEADERS,
     OCR_TABLE_HEADERS,
+    legend_rows,
     ocr_rows,
     render_detection_overlay,
     summarize_detections,
@@ -39,6 +42,10 @@ OCR_WARNING = (
     "Text recognition was unavailable. Detection results are still shown. "
     "Check the terminal for details."
 )
+LEGEND_WARNING = (
+    "Legend matching was unavailable. Detection and OCR results are still shown. "
+    "Check the terminal for details."
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -55,6 +62,8 @@ class AnalysisResult:
     detection_frame: DetectionFrame
     ocr_frame: OCRFrame | None
     ocr_warning: str | None
+    legend_mapping: LegendMappingFrame | None = None
+    legend_warning: str | None = None
 
 
 def ready_status() -> str:
@@ -182,7 +191,7 @@ def analyze_image(
     )
     if image.shape[:2] != (frame.height, frame.width):
         raise ValueError("image dimensions do not match the detection frame")
-    _report_progress(progress, 0.65, "Reading detected text")
+    _report_progress(progress, 0.60, "Reading detected text")
     ocr_frame = None
     ocr_warning = None
     try:
@@ -191,17 +200,29 @@ def analyze_image(
     except Exception:
         LOGGER.exception("Chart text recognition failed")
         ocr_warning = OCR_WARNING
-    _report_progress(progress, 0.85, "Rendering annotations")
-    overlay = render_detection_overlay(image, frame)
+    _report_progress(progress, 0.80, "Matching legend series")
+    legend_mapping = None
+    legend_warning = None
+    try:
+        legend_mapping = match_legend_to_bars(image, frame, ocr_frame)
+    except Exception:
+        LOGGER.exception("Legend-to-bar matching failed")
+        legend_warning = LEGEND_WARNING
+    _report_progress(progress, 0.90, "Rendering annotations")
+    overlay = render_detection_overlay(image, frame, legend_mapping=legend_mapping)
     rgb_overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
     _report_progress(progress, 1.0, "Analysis complete")
     return AnalysisResult(
-        summary=summarize_detections(frame, ocr=ocr_frame),
+        summary=summarize_detections(
+            frame, ocr=ocr_frame, legend_mapping=legend_mapping
+        ),
         overlay_rgb=rgb_overlay,
         detection_count=len(frame.detections),
         detection_frame=frame,
         ocr_frame=ocr_frame,
         ocr_warning=ocr_warning,
+        legend_mapping=legend_mapping,
+        legend_warning=legend_warning,
     )
 
 
@@ -220,29 +241,54 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
     atexit.register(artifacts.cleanup)
     artifact_root = Path(artifacts.name)
 
-    def ready_results():
+    def result_updates(
+        status: str,
+        *,
+        empty_message: str = "",
+        summary: str | None = None,
+        overlay=None,
+        ocr_table: list[list[Any]] | None = None,
+        ocr_download_path: Path | None = None,
+        legend_table: list[list[Any]] | None = None,
+        ocr_warning: str | None = None,
+        legend_warning: str | None = None,
+        error_message: str | None = None,
+    ):
         return (
-            gr.update(value=ready_status()),
-            gr.update(value="Upload a chart and choose Analyze chart.", visible=True),
-            gr.update(value="", visible=False),
-            gr.update(value=None, visible=False),
-            gr.update(value=[], visible=False),
-            gr.update(value=None, visible=False),
-            gr.update(value="", visible=False),
-            gr.update(value="", visible=False),
+            gr.update(value=status),
+            gr.update(value=empty_message, visible=bool(empty_message)),
+            gr.update(value=summary or "", visible=summary is not None),
+            gr.update(value=overlay, visible=overlay is not None),
+            gr.update(value=ocr_table or [], visible=ocr_table is not None),
+            gr.update(
+                value=ocr_download_path,
+                visible=ocr_download_path is not None,
+            ),
+            gr.update(value=legend_table or [], visible=legend_table is not None),
+            gr.update(
+                value=alert_message(ocr_warning) if ocr_warning else "",
+                visible=ocr_warning is not None,
+            ),
+            gr.update(
+                value=alert_message(legend_warning) if legend_warning else "",
+                visible=legend_warning is not None,
+            ),
+            gr.update(
+                value=alert_message(error_message) if error_message else "",
+                visible=error_message is not None,
+            ),
+        )
+
+    def ready_results():
+        return result_updates(
+            ready_status(),
+            empty_message="Upload a chart and choose Analyze chart.",
         )
 
     def begin_analysis():
         return (
             *(gr.update(interactive=False) for _ in range(6)),
-            gr.update(value=analyzing_status()),
-            gr.update(value="", visible=False),
-            gr.update(value="", visible=False),
-            gr.update(value=None, visible=False),
-            gr.update(value=[], visible=False),
-            gr.update(value=None, visible=False),
-            gr.update(value="", visible=False),
-            gr.update(value="", visible=False),
+            *result_updates(analyzing_status()),
         )
 
     def analyze_event(image_path, confidence, nms_iou, language, progress=gr.Progress()):
@@ -266,19 +312,20 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 _download_path(artifact_root, image_path, result.ocr_frame)
                 if result.ocr_frame is not None else None
             )
-            return (
-                gr.update(value=complete_status(result.detection_count, ocr_count)),
-                gr.update(value="", visible=False),
-                gr.update(value=result.summary, visible=True),
-                gr.update(value=result.overlay_rgb, visible=True),
-                gr.update(value=rows, visible=result.ocr_frame is not None),
-                gr.update(value=download, visible=download is not None),
-                gr.update(
-                    value=(alert_message(result.ocr_warning)
-                           if result.ocr_warning is not None else ""),
-                    visible=result.ocr_warning is not None,
-                ),
-                gr.update(value="", visible=False),
+            mapping_rows = (
+                legend_rows(result.detection_frame, result.legend_mapping)
+                if result.legend_mapping is not None else []
+            )
+            show_mapping = result.legend_mapping is not None and bool(mapping_rows)
+            return result_updates(
+                complete_status(result.detection_count, ocr_count),
+                summary=result.summary,
+                overlay=result.overlay_rgb,
+                ocr_table=rows if result.ocr_frame is not None else None,
+                ocr_download_path=download,
+                legend_table=mapping_rows if show_mapping else None,
+                ocr_warning=result.ocr_warning,
+                legend_warning=result.legend_warning,
             )
         except UploadValidationError as exc:
             LOGGER.info("Rejected upload: %s", exc)
@@ -286,16 +333,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
         except Exception:
             LOGGER.exception("Chart analysis failed")
             message = "Analysis failed. Check the terminal and try another image."
-        return (
-            gr.update(value=ready_status()),
-            gr.update(value="", visible=False),
-            gr.update(value="", visible=False),
-            gr.update(value=None, visible=False),
-            gr.update(value=[], visible=False),
-            gr.update(value=None, visible=False),
-            gr.update(value="", visible=False),
-            gr.update(value=alert_message(message), visible=True),
-        )
+        return result_updates(ready_status(), error_message=message)
 
     def finish_analysis():
         return tuple(gr.update(interactive=True) for _ in range(6))
@@ -322,12 +360,14 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                     "**Statistical chart element detector**\n\n"
                     "# TactileGen\n\n"
                     "Inspect the regions detected by YOLO in a vertical categorical "
-                    "bar chart and read detected text with Tesseract."
+                    "bar chart, read detected text, and associate legend series "
+                    "with bars."
                 )
                 gr.Markdown(
                     "**Scope:** Vertical categorical bar charts only. The detector "
-                    "returns chart elements, bounding boxes, and OCR text. It does not "
-                    "yet reconstruct chart values or trends.",
+                    "returns chart elements, bounding boxes, OCR text, and provisional "
+                    "legend-to-bar matches. It does not reconstruct numeric values "
+                    "or trends.",
                     elem_classes="borealis-scope",
                 )
 
@@ -443,7 +483,21 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         variant="secondary",
                         elem_classes="borealis-ocr-download",
                     )
+                    legend_output = gr.Dataframe(
+                        value=[],
+                        headers=list(LEGEND_TABLE_HEADERS),
+                        datatype=["str", "str", "number", "str", "str", "str"],
+                        type="array",
+                        label="Legend mappings",
+                        interactive=False,
+                        visible=False,
+                        wrap=True,
+                        elem_classes="borealis-legend-table",
+                    )
                     ocr_warning_output = gr.HTML(
+                        "", visible=False, elem_classes="borealis-error"
+                    )
+                    legend_warning_output = gr.HTML(
                         "", visible=False, elem_classes="borealis-error"
                     )
                     error_output = gr.HTML(
@@ -459,7 +513,9 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 annotated_output,
                 ocr_output,
                 ocr_download,
+                legend_output,
                 ocr_warning_output,
+                legend_warning_output,
                 error_output,
             ],
             queue=False,
@@ -476,7 +532,9 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             annotated_output,
             ocr_output,
             ocr_download,
+            legend_output,
             ocr_warning_output,
+            legend_warning_output,
             error_output,
         ]
         start = analyze_button.click(

@@ -21,9 +21,12 @@ from src.contracts import (
     Box,
     Detection,
     DetectionFrame,
+    LegendBarAssignment,
+    LegendMappingFrame,
     OCRFrame,
     RecognizedText,
     VerticalBarChart,
+    join_legend_assignments,
     join_text_regions,
 )
 from src.dataset.prepare_plotqa import CLASS_NAMES as ConverterClassNames
@@ -33,6 +36,27 @@ FIXTURES = Path(__file__).parent / "fixtures" / "contracts"
 
 
 class ContractTest(unittest.TestCase):
+    def test_legend_mapping_validates_statuses_and_exact_bar_coverage(self):
+        frame = DetectionFrame("input/chart.png", 20, 20, (
+            Detection("bar", "vertical_bar", Box(0, 0, 5, 10), 0.9),
+            Detection("swatch", "legend_swatch", Box(10, 0, 15, 5), 0.9),
+            Detection("label", "legend_label", Box(15, 0, 20, 5), 0.9),
+        ))
+        mapping = LegendMappingFrame("input/chart.png", (
+            LegendBarAssignment(
+                "bar", "swatch", "label", "North", 0.9, "matched"
+            ),
+        ))
+        self.assertEqual(join_legend_assignments(frame, mapping)[0][0].id, "bar")
+        with self.assertRaisesRegex(ValueError, "detection order"):
+            join_legend_assignments(
+                frame, LegendMappingFrame("input/chart.png", ())
+            )
+        with self.assertRaises(ValueError):
+            LegendBarAssignment("bar", status="unknown")
+        with self.assertRaises(ValueError):
+            LegendBarAssignment("bar", match_score=True, status="weak_match")
+
     def test_existing_class_order_and_box_are_shared(self):
         self.assertEqual(CLASS_NAMES, (
             "horizontal_bar", "vertical_bar", "dot", "line_segment",

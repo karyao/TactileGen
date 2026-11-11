@@ -162,6 +162,45 @@ are recorded in the [RapidOCR baseline report](rapidocr_baseline.md).
 The final engine and title-fix deltas are summarized in the
 [OCR comparison](ocr_comparison.md).
 
+## Legend-to-bar matching accuracy
+
+Legend matching has separate oracle and end-to-end tracks. The oracle track
+uses authoritative PlotQA boxes and legend text to isolate OpenCV matching.
+The end-to-end track runs YOLO and OCR first, then reports bar-detection and
+final series-assignment metrics. Its per-bar diagnostics include OCR confidence,
+but do not independently score legend detection or OCR recognition. Both tracks
+write aggregate metrics to `metrics.json` and diagnostics to `assignments.csv`.
+
+```bash
+.venv/bin/python -m src.baseline.legend_matching evaluate \
+  --annotations data/annotations_validation.json \
+  --data-root dataset_yolo_vbars_clean \
+  --split val \
+  --track both \
+  --limit 100 \
+  --output-dir output/legend_matching_val_smoke
+```
+
+Use `calibrate` on validation data to compare the checked-in error and margin
+grid. Never calibrate on the test split.
+
+```bash
+.venv/bin/python -m src.baseline.legend_matching calibrate \
+  --annotations data/annotations_validation.json \
+  --data-root dataset_yolo_vbars_clean \
+  --split val \
+  --output-dir output/legend_matching_calibration
+```
+
+The selected runtime settings use a 15% proportional interior inset,
+`max_error=0.03`, and `min_margin=0.01`. On the untouched test split's 9,334
+charts with usable legends, the oracle track scored **0.9996 accepted
+precision**, **0.9201 recall**, and **0.9582 F1** over 119,252 eligible bars.
+It assigned every bar correctly on **0.7505** of charts. The similar validation
+result was 0.9997 precision, 0.9224 recall, 0.9594 F1, and 0.7596 chart-level
+accuracy over 117,946 bars. These figures isolate color matching with
+authoritative boxes and text; they do not represent full YOLO/OCR performance.
+
 ```bash
 python3.12 -m pip install -r requirements-model.txt -r requirements-ocr.txt
 python3.12 -m src.baseline.ocr evaluate \
