@@ -20,6 +20,7 @@ from src.tactile.completeness import (
     apply_overrides, check_completeness, completeness_from_error, cut_off_flags,
     spec_to_chart_with_notes,
 )
+from src.tactile.category_reread import reread_categories
 from src.tactile.layout import X_LABEL_MODES, layout_vertical_bar_chart_pages
 from src.tactile.rules import check_layout, format_report
 from src.tactile.svg import render_svg
@@ -44,7 +45,7 @@ def analyse(image_path: Path, weights: Path):
     frame = run_detection(load_model(weights), image_path)
     ocr = run_ocr(image, frame, TesseractBackend(), "eng")
     try:
-        spec = reconstruct_vbar(frame, ocr, image)
+        spec = reread_categories(reconstruct_vbar(frame, ocr, image), frame, image)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:
         return None, error, frame
@@ -128,6 +129,10 @@ def _print_summary(spec: VerticalBarSpec, out) -> None:
     print("\nCategories as read:", file=out)
     for j, name in enumerate(spec.categories):
         print(f"  {j}: {name}", file=out)
+    reread = sorted(int(f.split(":", 1)[1]) for f in spec.flags if f.startswith("category_reread_index:"))
+    if reread:
+        print("re-read by fallback: " + ", ".join(f"{j}: {spec.categories[j]!r}" for j in reread),
+              file=out)
     print("Series:", file=out)
     for i, series in enumerate(spec.series):
         print(f"  {i}: {series.name or '(single series, unnamed)'}", file=out)

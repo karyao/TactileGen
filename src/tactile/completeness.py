@@ -92,6 +92,9 @@ NOTE_FLAGS = {
     "short_bars_remeasured": "{n} very short bar(s) were re-measured from pixels.",
     # a bar's top edge was re-measured from pixels because the detector box disagreed
     "bar_edge_corrected": "{n} bar(s) had their top edge corrected from the pixels.",
+    # category labels the first OCR pass could not read were re-read with a rotated fallback
+    "category_reread": ("{n} category label(s) were re-read with a rotated OCR fallback; "
+                        "check them in the category list."),
     # some tick labels were not read or were dropped, leaving gaps in the tick values
     "y_ticks_not_arithmetic": ("The y-axis tick values are not evenly spaced, probably because some "
                                "tick labels were missed. Bar values use the line through the ticks "
@@ -388,10 +391,16 @@ def apply_overrides(spec: VerticalBarSpec,
         categories[j] = text
         confidence.pop(f"category[{j}]", None)
         flags.append(f"category_supplied:{j}")
+        flags = [f for f in flags if f != f"category_reread_index:{j}"]
         notes.append(f"category {j} supplied by user: {text!r}")
     if overrides.categories and not any(_CATEGORY_KEY.fullmatch(k) for k in confidence):
         drop("category_unreadable")
 
+    if overrides.categories:   # keep category_reread:N equal to the labels still re-read
+        left = sum(f.startswith("category_reread_index:") for f in flags)
+        flags = [f for f in flags if not f.startswith("category_reread:")]
+        if left:
+            flags.append(f"category_reread:{left}")
     series = list(spec.series)
     for i, name in sorted(overrides.series_names.items()):
         series[i] = replace(series[i], name=name)
