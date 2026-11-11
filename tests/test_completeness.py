@@ -78,7 +78,9 @@ class Status(unittest.TestCase):
     def test_each_blocking_flag(self):
         for flag in BLOCKING_FLAGS:
             with self.subTest(flag=flag):
-                result = check_completeness(make_spec(flags=[flag]))
+                # a negative tick keeps value_clipped_at_axis a blocker
+                result = check_completeness(make_spec(
+                    flags=[flag], y_axis=YAxisSpec(-50, 50, [-50, 0, 50])))
                 self.assertEqual(result.status, CANNOT_BUILD)
                 if flag not in SELF_EXPLAINING_FLAGS:
                     self.assertIn("rainfall.json", result.blockers[0])
@@ -104,6 +106,20 @@ class Status(unittest.TestCase):
         result = check_completeness(make_spec(flags=["bar_edge_corrected:2"]))
         self.assertEqual((result.status, result.blockers), (READY, []))
         self.assertTrue(any("2 bar(s) had their top edge corrected" in n for n in result.notes))
+
+    def test_clipped_bar_is_a_note_on_an_axis_from_zero(self):
+        result = check_completeness(make_spec(flags=["value_clipped_at_axis"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertEqual([n for n in result.notes if "past the end" in n],
+                         ["At least one bar runs past the end of the y axis, so its value is a lower bound."])
+
+    def test_clipped_bar_still_blocks_with_a_negative_tick_and_cannot_be_forced(self):
+        spec = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]), flags=["value_clipped_at_axis"])
+        result = check_completeness(spec)
+        self.assertEqual(result.status, CANNOT_BUILD)
+        self.assertIn("runs past the end of the y axis", result.blockers[0])
+        self.assertFalse(result.forceable)
+        self.assertFalse(any("lower bound" in n for n in result.notes))
 
     def test_leading_zero_tick_blocks_and_cannot_be_forced(self):
         result = check_completeness(make_spec(flags=["y_tick_leading_zero"]))

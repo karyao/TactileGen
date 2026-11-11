@@ -82,7 +82,7 @@ Flags (each is "could not resolve this", not "wrong"):
 | `y_tick_leading_zero` | A surviving y tick label starts with a zero followed by a digit (e.g. `04`); a decimal point was probably lost, so the calibration may fit misread numbers. |
 | `y_ticks_not_arithmetic`, `y_calibration_ambiguous` | Surviving ticks are not evenly spaced, or two tick subsets fit equally well. |
 | `baseline_outside_plot`, `bar_baseline_offset` | The calibrated zero line is outside the plot, or bar bases sit far from it. |
-| `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. |
+| `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. For tactile output it is a note when no y tick is negative, and a blocker (not forceable) when a negative y tick exists, because the layout cannot draw negative bars. |
 | `category_count_mismatch`, `category_ambiguous` | Bars and x labels disagree in number, or two bars of a series map to one label. |
 | `category_unreadable` | An x label is empty or has no letter or digit (e.g. a lone `|`); OCR confidence is not used. That category's confidence is set to 0.1 (`confidence["category[j]"]`). |
 | `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one (a legend swatch with no bars of its colour becomes a series when it can be measured; see `series_from_swatch`). |

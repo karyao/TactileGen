@@ -53,7 +53,8 @@ BLOCKING_FLAGS = {
     "y_calibration_ambiguous": "The y-axis scale could not be settled from the tick labels.",
     # the zero line is outside the plot, so heights do not map to values
     "baseline_outside_plot": "The zero line of the y axis is not inside the plot area.",
-    # a bar runs past the last tick, so its value is cut off
+    # a bar runs past the last tick, so its value is cut off; only a blocker when the axis
+    # has negative ticks (the layout cannot draw those), otherwise a note (see NOTE_FLAGS)
     "value_clipped_at_axis": "At least one bar runs past the end of the y axis.",
 }
 
@@ -77,6 +78,9 @@ NOTE_FLAGS = {
     # a rescue found no bar pixels; {n} counts those values, drawn as zero
     "value_inferred_zero": ("No bar was visible for {n} value(s), so they are drawn as 0. "
                             "The data may include values below the axis that are not drawn."),
+    # a bar reaches the plot edge beyond the last tick on an axis from zero: a lower bound
+    "value_clipped_at_axis": ("At least one bar runs past the end of the y axis, so its value "
+                              "is a lower bound."),
     # legend swatches with no detected bars became series measured from pixels
     "series_from_swatch": ("{n} series had no detected bars and were built from the legend; "
                            "their values were measured from pixels and are usually near zero."),
@@ -215,7 +219,10 @@ def _rejects(char: str) -> bool:
 def check_completeness(spec: VerticalBarSpec) -> Completeness:
     blockers: list[str] = []
     forceable = True
+    axis_from_zero = min(spec.y_axis.tick_values) >= 0
     for flag in spec.flags:
+        if _flag_name(flag) == "value_clipped_at_axis" and axis_from_zero:
+            continue  # reported as a note below
         message = BLOCKING_FLAGS.get(_flag_name(flag))
         if message:
             message = message.format(n=flag.partition(":")[2])
@@ -236,6 +243,8 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
             count = sum(1 for series in spec.series
                         for value, rescued in zip(series.values, series.value_rescued)
                         if rescued and value == 0.0)
+        if name == "value_clipped_at_axis" and not axis_from_zero:
+            continue  # a blocker on a negative axis
         if name in NOTE_FLAGS:
             notes.append(NOTE_FLAGS[name].format(n=count))
 

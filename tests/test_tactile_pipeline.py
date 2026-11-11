@@ -138,6 +138,15 @@ class Pipeline(unittest.TestCase):
         self.assertEqual((code, written), (1, False))
         self.assertIn("negative bar values are not supported", err)
 
+    def test_clipped_bar_builds_with_a_note_unless_the_axis_is_negative(self):
+        code, out, _, written = self.go(make_spec(flags=["value_clipped_at_axis"]), argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("lower bound", out)
+        spec = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]), flags=["value_clipped_at_axis"])
+        for extra in ([], ["--force"]):
+            code, _, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+
     def test_suspicious_category_asks_and_flag_fixes_it(self):
         spec = make_spec(categories=["Germany", "i", "Greece"])
         code, out, _, written = self.go(spec, argv=["--yes"])
