@@ -96,4 +96,8 @@ Flags (each is "could not resolve this", not "wrong"):
 
 Series colours are seeded from the legend swatches, so near-identical series colours stay separate when a legend is detected. Bar rescue and the category guard can be switched off with `rescue_bars=False` and `category_guard=False`.
 
+### From a spec to a tactile chart
+
+`src.tactile.completeness.spec_to_chart_with_notes` applies one rule before the layout: when the lowest y tick read is 0 or above, every negative bar value becomes 0.0 and the note "Values below the axis minimum were set to 0" is printed, because such an axis cannot show values below it (a pixel-offset artefact, or a bar that is not drawn). With a negative y tick nothing is changed and the layout rejects negative values.
+
 `python -m scripts.eval_reconstruct` measures the stage on PlotQA test charts.

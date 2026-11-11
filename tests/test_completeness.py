@@ -379,16 +379,17 @@ class Build(unittest.TestCase):
         self.assertEqual((chart.title, chart.categories), ("Sales", ("2001", "2002", "2003")))
         self.assertEqual(chart.series[0].values, (10.0, 20.0, 30.0))
 
-    def test_tiny_negative_noise_becomes_zero_with_a_note(self):
-        spec = make_spec(series=[SeriesSpec(None, "#112233", [-0.4, 100.0, -0.6])])
+    def test_negatives_become_zero_when_the_axis_starts_at_zero(self):
+        spec = make_spec(series=[SeriesSpec(None, "#112233", [-0.4, 100.0, -60.0])])
         chart, notes = spec_to_chart_with_notes(spec)
-        self.assertEqual(chart.series[0].values, (0.0, 100.0, -0.6))
-        self.assertIn("1 value(s) slightly below zero", notes[0])
+        self.assertEqual(chart.series[0].values, (0.0, 100.0, 0.0))
+        self.assertEqual(notes, ["Values below the axis minimum were set to 0 (2 value(s))."])
 
-    def test_larger_negatives_are_left_for_the_layout_to_reject(self):
-        spec = make_spec(series=[SeriesSpec(None, "#112233", [-5.0, 100.0, 20.0])])
+    def test_negative_axis_leaves_negative_values_for_the_layout_to_reject(self):
+        spec = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]),
+                         series=[SeriesSpec(None, "#112233", [-5.0, 40.0, 20.0])])
         chart, notes = spec_to_chart_with_notes(spec)
-        self.assertEqual((chart.series[0].values, notes), ((-5.0, 100.0, 20.0), []))
+        self.assertEqual((chart.series[0].values, notes), ((-5.0, 40.0, 20.0), []))
 
     def test_no_adjustment_when_nothing_is_negative(self):
         self.assertEqual(spec_to_chart_with_notes(make_spec())[1], [])

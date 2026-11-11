@@ -127,13 +127,14 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("too narrow", out)
 
-    def test_tiny_negative_is_zeroed_with_a_note_but_a_real_one_is_rejected(self):
-        tiny = make_spec(series=[SeriesSpec(None, "#112233", [-0.1, 20.0, 30.0])])
-        code, out, _, written = self.go(tiny, argv=["--yes"])
+    def test_negative_values_are_zeroed_on_an_axis_from_zero_but_rejected_on_a_negative_axis(self):
+        zero_axis = make_spec(series=[SeriesSpec(None, "#112233", [-0.6, 20.0, 30.0])])
+        code, out, _, written = self.go(zero_axis, argv=["--yes"])
         self.assertEqual((code, written), (0, True))
-        self.assertIn("treated as 0", out)
-        real = make_spec(series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
-        code, _, err, written = self.go(real, argv=["--yes"])
+        self.assertIn("Values below the axis minimum were set to 0", out)
+        negative_axis = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]),
+                                  series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
+        code, _, err, written = self.go(negative_axis, argv=["--yes"])
         self.assertEqual((code, written), (1, False))
         self.assertIn("negative bar values are not supported", err)
 

@@ -380,11 +380,6 @@ def apply_overrides(spec: VerticalBarSpec,
                    confidence=confidence), notes
 
 
-# Negative values smaller than this share of the chart maximum are pixel-offset
-# noise from measuring a bar at the zero line, not real data.
-NEGATIVE_NOISE_FRACTION = 0.005
-
-
 def spec_to_chart(spec: VerticalBarSpec) -> VerticalBarChart:
     """Build the layout's chart from a spec whose status is ``ready``."""
     return spec_to_chart_with_notes(spec)[0]
@@ -393,29 +388,29 @@ def spec_to_chart(spec: VerticalBarSpec) -> VerticalBarChart:
 def spec_to_chart_with_notes(spec: VerticalBarSpec) -> tuple[VerticalBarChart, list[str]]:
     """Like ``spec_to_chart``, also returning notes about values it had to adjust.
 
-    Negative values under 0.5% of the chart maximum become 0.0. Larger
-    negatives are left alone, so the layout still rejects them.
+    When the lowest y tick read is 0 or above, the axis cannot show anything
+    below it, so every negative value (a pixel-offset artefact, or a bar that
+    is not drawn) becomes 0.0. With a negative axis nothing is changed, and the
+    layout rejects negative values.
     """
     result = check_completeness(spec)
     if result.status != READY:
         raise ValueError(
             f"spec is not ready ({result.status}); resolve it before building a chart: "
             + "; ".join(result.blockers or [f"{m.field}: {m.reason}" for m in result.missing]))
-    biggest = max(abs(v) for series in spec.series for v in series.values)
-    limit = NEGATIVE_NOISE_FRACTION * biggest
+    axis_from_zero = min(spec.y_axis.tick_values) >= 0
     zeroed = 0
     series_out = []
     for series in spec.series:
         values = []
         for value in series.values:
-            if biggest and -limit < value < 0:
+            if axis_from_zero and value < 0:
                 value, zeroed = 0.0, zeroed + 1
             values.append(float(value))
         series_out.append(BarSeries(series.name or None, tuple(values)))
     notes = []
     if zeroed:
-        notes.append(f"{zeroed} value(s) slightly below zero (under 0.5% of the chart maximum) "
-                     "were treated as 0.")
+        notes.append(f"Values below the axis minimum were set to 0 ({zeroed} value(s)).")
     chart = VerticalBarChart(
         spec.source_key, spec.title, spec.x_axis_title, spec.y_axis_title,
         tuple(spec.categories), tuple(series_out))
