@@ -46,7 +46,7 @@ ADJACENT_GAP_RATIO = 0.10
 ARITHMETIC_TOLERANCE = 0.03
 
 _SUFFIX = {"K": 1e3, "M": 1e6, "B": 1e9}
-_LEADING_ZERO = re.compile(r"-?0\d")  # "04": the decimal point of "0.4" was probably lost
+_LEADING_ZERO = re.compile(r"(-?)0(\d+)")  # "04": the decimal point of "0.4" was probably lost
 _NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
@@ -132,6 +132,13 @@ def parse_tick_value(text: str) -> tuple[float, str | None] | None:
         return None
     value = float(cleaned) * scale
     return (value, unit) if math.isfinite(value) else None
+
+
+def _repair_lost_decimal(text: str) -> str | None:
+    """``"04"`` -> ``"0.4"``: a tick label that is a zero followed by digits lost its decimal point."""
+    cleaned = text.strip().replace("−", "-").replace("–", "-").replace(",", "").replace(" ", "").lstrip("$")
+    match = _LEADING_ZERO.fullmatch(cleaned)
+    return f"{match.group(1)}0.{match.group(2)}" if match else None
 
 
 def _calibrate(ticks: list[tuple[float, float]]):
@@ -388,10 +395,15 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
 
     # y calibration
     parsed = []
+    repaired_ids: set[str] = set()
     for detection in y_labels:
-        value = parse_tick_value(texts.get(detection.id, ("", 0.0))[0])
+        text = texts.get(detection.id, ("", 0.0))[0]
+        repaired = _repair_lost_decimal(text)
+        value = parse_tick_value(repaired if repaired else text)
         if value is not None:
             parsed.append((detection, *value))
+            if repaired:
+                repaired_ids.add(detection.id)
     if len(parsed) < 2:
         raise ChartInterpretationError("fewer than 2 readable y tick labels")
     a, b, inliers, ambiguous = _calibrate([(_centre(d)[1], v) for d, v, _ in parsed])
@@ -401,8 +413,11 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         flags.append(f"y_ticks_dropped:{dropped}")
     if ambiguous:
         flags.append("y_calibration_ambiguous")
-    if any(_LEADING_ZERO.match(texts[d.id][0].strip()) for d, _, _ in good):
-        flags.append("y_tick_leading_zero")
+    repaired_good = [d for d, _, _ in good if d.id in repaired_ids]
+    if repaired_good:
+        flags.append(f"y_tick_decimal_repaired:{len(repaired_good)}")
+        if ambiguous:   # two scales fit equally well, so the repair cannot be trusted
+            flags.append("y_tick_leading_zero")
     tick_values = [v for _, v, _ in sorted(good, key=lambda t: t[1])]
     if not _is_arithmetic(tick_values):
         flags.append("y_ticks_not_arithmetic")

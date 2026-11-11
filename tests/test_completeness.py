@@ -121,6 +121,11 @@ class Status(unittest.TestCase):
         self.assertFalse(result.forceable)
         self.assertFalse(any("lower bound" in n for n in result.notes))
 
+    def test_decimal_repair_is_a_note(self):
+        result = check_completeness(make_spec(flags=["y_tick_decimal_repaired:3"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertTrue(any("3 y-axis tick label(s) had lost their decimal point" in n for n in result.notes))
+
     def test_leading_zero_tick_blocks_and_cannot_be_forced(self):
         result = check_completeness(make_spec(flags=["y_tick_leading_zero"]))
         self.assertEqual(result.status, CANNOT_BUILD)

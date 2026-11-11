@@ -102,18 +102,35 @@ def labelled_chart(texts):
     return chart
 
 
-def test_leading_zero_tick_label_is_flagged():
-    for texts in (("0", "050", "100", "150", "200"), ("0", "50", "100", "150", "0200")):
-        assert "y_tick_leading_zero" in labelled_chart(texts).run().flags
+def test_lost_decimal_point_in_tick_labels_is_repaired():
+    spec = labelled_chart(("0", "02", "04", "06", "08")).run()   # 0, 0.2, ... 0.8
+    assert spec.y_axis.tick_values == pytest.approx([0, 0.2, 0.4, 0.6, 0.8])
+    assert_values(spec, [0.48, 0.24, 0.72])
+    assert "y_tick_decimal_repaired:4" in spec.flags and "y_tick_leading_zero" not in spec.flags
 
 
-def test_ordinary_tick_labels_are_not_flagged_as_leading_zero():
+def test_leading_zero_label_that_disagrees_with_the_axis_is_dropped_not_repaired():
+    spec = labelled_chart(("0", "050", "100", "150", "200")).run()   # "050" would be 0.05
+    assert "y_ticks_dropped:1" in spec.flags
+    assert not any(f.startswith(("y_tick_decimal_repaired", "y_tick_leading_zero")) for f in spec.flags)
+    assert_values(spec, [120, 60, 180])
+
+
+def test_repair_that_cannot_be_trusted_keeps_the_blocker():
+    # 0, 0.2, 0.8, 1.0 at equal pixel steps: several two-tick lines fit equally well.
+    spec = labelled_chart(("0", "02", "08", "10", "")).run()
+    assert "y_calibration_ambiguous" in spec.flags and "y_tick_leading_zero" in spec.flags
+
+
+def test_ordinary_tick_labels_are_not_repaired():
     for texts in (("0", "50", "100", "150", "200"), ("0", "0.5", "1.0", "1.5", "2.0"),
                   ("-0", "50", "100", "150", "200")):
-        assert "y_tick_leading_zero" not in labelled_chart(texts).run().flags
+        flags = labelled_chart(texts).run().flags
+        assert "y_tick_leading_zero" not in flags
+        assert not any(f.startswith("y_tick_decimal_repaired") for f in flags)
 
 
-def test_dropped_tick_with_leading_zero_does_not_flag():
+def test_dropped_spurious_tick_with_leading_zero_is_not_repaired():
     chart = base_chart()
     chart.add("y_tick_label", (40, y_of(75) - 6, 75, y_of(75) + 6), text="0900")
     spec = chart.run()

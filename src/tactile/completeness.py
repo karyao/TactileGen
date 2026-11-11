@@ -41,9 +41,10 @@ BLOCKING_FLAGS = {
     "category_ambiguous": "Some bars could not be matched to a single category label.",
     # legend entries and bar colours do not pair up
     "series_ambiguous": "The legend entries could not be matched to the bar colours.",
-    # a surviving tick label like "04" has a leading zero, so a decimal point was probably lost
-    "y_tick_leading_zero": ("A y-axis tick label has a leading zero (like '04'), so a decimal "
-                            "point may have been lost and the axis scale could be wrong."),
+    # a repaired tick label like "04" sits on an axis where two scales fit equally well
+    "y_tick_leading_zero": ("A y-axis tick label has a leading zero (like '04') and the repaired "
+                            "scale is ambiguous, so a decimal point may have been lost and the "
+                            "axis scale could be wrong."),
     # under 60% of the category x series slots had a detected bar; {n} is the percentage missed.
     # --force may build anyway (bars below an axis that starts at zero read as 0)
     "bars_mostly_missed": ("{n}% of bars were not detected and would be drawn as 0 (the data may "
@@ -78,6 +79,9 @@ NOTE_FLAGS = {
     # a rescue found no bar pixels; {n} counts those values, drawn as zero
     "value_inferred_zero": ("No bar was visible for {n} value(s), so they are drawn as 0. "
                             "The data may include values below the axis that are not drawn."),
+    # tick labels like "04" were read as 0.4: the lost decimal point was put back
+    "y_tick_decimal_repaired": ("{n} y-axis tick label(s) had lost their decimal point (like '04' "
+                                "for 0.4) and were repaired."),
     # a bar reaches the plot edge beyond the last tick on an axis from zero: a lower bound
     "value_clipped_at_axis": ("At least one bar runs past the end of the y axis, so its value "
                               "is a lower bound."),
