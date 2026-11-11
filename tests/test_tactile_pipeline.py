@@ -147,6 +147,13 @@ class Pipeline(unittest.TestCase):
             code, _, _, written = self.go(spec, argv=["--yes", *extra])
             self.assertEqual((code, written), (3, False))
 
+    def test_lost_minus_signs_keep_a_clipped_chart_blocked_even_with_force(self):
+        spec = make_spec(flags=["value_clipped_at_axis", "y_tick_negative_read", "y_ticks_dropped:2"])
+        for extra in ([], ["--force"]):
+            code, out, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+            self.assertIn("runs past the end of the y axis", out)
+
     def test_suspicious_category_asks_and_flag_fixes_it(self):
         spec = make_spec(categories=["Germany", "i", "Greece"])
         code, out, _, written = self.go(spec, argv=["--yes"])

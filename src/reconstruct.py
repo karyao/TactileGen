@@ -413,6 +413,10 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         flags.append(f"y_ticks_dropped:{dropped}")
     if ambiguous:
         flags.append("y_calibration_ambiguous")
+    if any(v < 0 for _, v, _ in parsed):
+        # A minus sign was read on some tick label, even if the fit dropped it. OCR loses
+        # minus signs, so an axis whose surviving ticks are all >= 0 may still be negative.
+        flags.append("y_tick_negative_read")
     repaired_good = [d for d, _, _ in good if d.id in repaired_ids]
     if repaired_good:
         flags.append(f"y_tick_decimal_repaired:{len(repaired_good)}")

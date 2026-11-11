@@ -329,6 +329,51 @@ class CutOffTitles(unittest.TestCase):
         self.assertEqual([m.field for m in check_completeness(spec).missing], ["title"])
 
 
+def negative_axis_chart(ticks, flags, values=(0.4, 0.6, 1.0)):
+    """Spec as reconstructed for an all-negative axis whose minus signs OCR lost (cached 32821 etc.)."""
+    return make_spec(y_axis=YAxisSpec(min(ticks), max(ticks), list(ticks)),
+                     series=[SeriesSpec(None, "#112233", list(values))], flags=flags)
+
+
+class NegativeAxisWithLostMinusSigns(unittest.TestCase):
+    """Charts 32821, 32905 and 33050: surviving ticks are all >= 0 but minus signs were read."""
+
+    CASES = {
+        32821: ([0.0, 0.2, 0.4, 0.6, 0.8, 1.4],
+                ["y_ticks_dropped:2", "y_tick_decimal_repaired:1", "y_ticks_not_arithmetic",
+                 "value_clipped_at_axis", "bar_edge_corrected:6", "y_tick_negative_read"]),
+        32905: ([0.0, 0.2, 0.4, 0.6, 0.8],
+                ["y_ticks_dropped:1", "y_tick_decimal_repaired:1", "value_clipped_at_axis",
+                 "bar_edge_corrected:4", "y_tick_negative_read"]),
+        33050: ([0.0, 0.2, 0.4, 0.6, 0.8, 1.4],
+                ["y_ticks_dropped:2", "y_tick_decimal_repaired:1", "y_ticks_not_arithmetic",
+                 "value_clipped_at_axis", "bar_edge_corrected:5", "y_tick_negative_read"]),
+    }
+
+    def test_the_three_charts_stay_blocked_and_cannot_be_forced(self):
+        for chart_id, (ticks, flags) in self.CASES.items():
+            with self.subTest(chart=chart_id):
+                result = check_completeness(negative_axis_chart(ticks, flags))
+                self.assertEqual(result.status, CANNOT_BUILD)
+                self.assertIn("runs past the end of the y axis", result.blockers[0])
+                self.assertFalse(result.forceable)
+
+    def test_without_the_minus_read_the_same_chart_would_build(self):
+        ticks, flags = self.CASES[32905]
+        flags = [f for f in flags if f != "y_tick_negative_read"]
+        self.assertEqual(check_completeness(negative_axis_chart(ticks, flags)).status, READY)
+
+    def test_negative_values_are_not_clamped_when_a_minus_sign_was_read(self):
+        spec = make_spec(y_axis=YAxisSpec(0, 100, [0, 50, 100]), flags=["y_tick_negative_read"],
+                         series=[SeriesSpec(None, "#112233", [-5.0, 40.0, 20.0])])
+        chart, notes = spec_to_chart_with_notes(spec)
+        self.assertEqual((chart.series[0].values, notes), ((-5.0, 40.0, 20.0), []))
+
+    def test_axis_from_zero_without_a_minus_read_still_clamps(self):
+        spec = make_spec(series=[SeriesSpec(None, "#112233", [-5.0, 40.0, 20.0])])
+        self.assertEqual(spec_to_chart_with_notes(spec)[0].series[0].values, (0.0, 40.0, 20.0))
+
+
 class Errors(unittest.TestCase):
     def frame(self, *roles):
         detections = tuple(Detection(f"d{i}", role, Box(0, 0, 10, 10), 0.9)

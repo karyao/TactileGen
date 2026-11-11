@@ -643,3 +643,17 @@ def test_swatch_built_series_do_not_count_as_missed():
     spec = chart.run()
     assert "series_from_swatch:1" in spec.flags
     assert not _missed(spec)
+
+
+def test_minus_sign_read_on_a_dropped_tick_label_is_flagged():
+    chart = base_chart()
+    chart.add("y_tick_label", (40, y_of(75) - 6, 75, y_of(75) + 6), text="-1")  # dropped from the fit
+    spec = chart.run()
+    assert "y_ticks_dropped:1" in spec.flags and "y_tick_negative_read" in spec.flags
+    assert min(spec.y_axis.tick_values) == 0
+
+
+def test_no_negative_read_flag_without_a_minus_sign():
+    assert "y_tick_negative_read" not in base_chart().run().flags
+    assert "y_tick_negative_read" not in labelled_chart(("0", "0.5", "1.0", "1.5", "2.0")).run().flags
+    assert "y_tick_negative_read" in labelled_chart(("0", "- 50", "100", "150", "200")).run().flags

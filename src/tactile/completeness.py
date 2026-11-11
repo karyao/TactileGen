@@ -192,6 +192,15 @@ def cut_off_flags(frame, image) -> list[str]:
     return flags
 
 
+def axis_starts_at_zero(spec: VerticalBarSpec) -> bool:
+    """True when the y axis is known to start at 0 or above.
+
+    The lowest surviving tick must be >= 0 and no tick label may have been read with a
+    minus sign: OCR drops minus signs, and the fit may have dropped the labels that kept one.
+    """
+    return min(spec.y_axis.tick_values) >= 0 and "y_tick_negative_read" not in spec.flags
+
+
 def _flag_name(flag: str) -> str:
     return flag.split(":", 1)[0]
 
@@ -223,7 +232,7 @@ def _rejects(char: str) -> bool:
 def check_completeness(spec: VerticalBarSpec) -> Completeness:
     blockers: list[str] = []
     forceable = True
-    axis_from_zero = min(spec.y_axis.tick_values) >= 0
+    axis_from_zero = axis_starts_at_zero(spec)
     for flag in spec.flags:
         if _flag_name(flag) == "value_clipped_at_axis" and axis_from_zero:
             continue  # reported as a note below
@@ -401,7 +410,7 @@ def spec_to_chart(spec: VerticalBarSpec) -> VerticalBarChart:
 def spec_to_chart_with_notes(spec: VerticalBarSpec) -> tuple[VerticalBarChart, list[str]]:
     """Like ``spec_to_chart``, also returning notes about values it had to adjust.
 
-    When the lowest y tick read is 0 or above, the axis cannot show anything
+    When the axis is known to start at 0 or above (``axis_starts_at_zero``), it cannot show anything
     below it, so every negative value (a pixel-offset artefact, or a bar that
     is not drawn) becomes 0.0. With a negative axis nothing is changed, and the
     layout rejects negative values.
@@ -411,7 +420,7 @@ def spec_to_chart_with_notes(spec: VerticalBarSpec) -> tuple[VerticalBarChart, l
         raise ValueError(
             f"spec is not ready ({result.status}); resolve it before building a chart: "
             + "; ".join(result.blockers or [f"{m.field}: {m.reason}" for m in result.missing]))
-    axis_from_zero = min(spec.y_axis.tick_values) >= 0
+    axis_from_zero = axis_starts_at_zero(spec)
     zeroed = 0
     series_out = []
     for series in spec.series:

@@ -79,11 +79,12 @@ Flags (each is "could not resolve this", not "wrong"):
 | `title_missing`, `x_axis_title_missing`, `y_axis_title_missing` | No title box detected, or its text was empty. The field is `None`. |
 | `title_touches_right_edge` | The title box reaches the right image edge; the text may be clipped. |
 | `y_ticks_dropped:N` | N y tick labels were unreadable or inconsistent with the fitted line. |
+| `y_tick_negative_read` | Some y tick label was read with a minus sign, even if the fit dropped it. Marker only: OCR loses minus signs, so the tactile adapter treats the axis as starting at zero (negative-value clamp, `value_clipped_at_axis` as a note) only when the lowest surviving tick is >= 0 and this flag is absent. |
 | `y_tick_decimal_repaired:N` | N surviving y tick labels were a zero followed by digits (e.g. `04`) and were read as `0.4`, because OCR had dropped the decimal point. On the full test split this repaired 27 of 28 charts that previously read 10 times too large, with no change to any chart that was already correct. Note, not a blocker. |
 | `y_tick_leading_zero` | A repaired tick label sits on an axis where two scales fit equally well (`y_calibration_ambiguous`), so the repair cannot be trusted. A blocker that `--force` cannot skip. |
 | `y_ticks_not_arithmetic`, `y_calibration_ambiguous` | Surviving ticks are not evenly spaced, or two tick subsets fit equally well. |
 | `baseline_outside_plot`, `bar_baseline_offset` | The calibrated zero line is outside the plot, or bar bases sit far from it. |
-| `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. For tactile output it is a note when no y tick is negative, and a blocker (not forceable) when a negative y tick exists, because the layout cannot draw negative bars. |
+| `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. For tactile output it is a note when the axis starts at zero (lowest surviving tick >= 0 and no `y_tick_negative_read`), and a blocker (not forceable) otherwise, because the layout cannot draw negative bars. |
 | `category_count_mismatch`, `category_ambiguous` | Bars and x labels disagree in number, or two bars of a series map to one label. |
 | `category_unreadable` | An x label is empty or has no letter or digit (e.g. a lone `|`); OCR confidence is not used. That category's confidence is set to 0.1 (`confidence["category[j]"]`). |
 | `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one (a legend swatch with no bars of its colour becomes a series when it can be measured; see `series_from_swatch`). |
@@ -99,6 +100,6 @@ Series colours are seeded from the legend swatches, so near-identical series col
 
 ### From a spec to a tactile chart
 
-`src.tactile.completeness.spec_to_chart_with_notes` applies one rule before the layout: when the lowest y tick read is 0 or above, every negative bar value becomes 0.0 and the note "Values below the axis minimum were set to 0" is printed, because such an axis cannot show values below it (a pixel-offset artefact, or a bar that is not drawn). With a negative y tick nothing is changed and the layout rejects negative values.
+`src.tactile.completeness.spec_to_chart_with_notes` applies one rule before the layout: when the axis is known to start at 0 or above (lowest surviving y tick >= 0 and no y tick label read with a minus sign), every negative bar value becomes 0.0 and the note "Values below the axis minimum were set to 0" is printed, because such an axis cannot show values below it (a pixel-offset artefact, or a bar that is not drawn). With a negative y tick, or a minus sign read on any tick label, nothing is changed and the layout rejects negative values.
 
 `python -m scripts.eval_reconstruct` measures the stage on PlotQA test charts.
