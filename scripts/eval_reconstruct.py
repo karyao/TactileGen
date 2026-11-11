@@ -17,7 +17,7 @@ from pathlib import Path
 import cv2
 
 from src.contracts import ChartInterpretationError
-from src.detection import load_model, run_detection
+from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
 from src.ocr import run_ocr
 from src.reconstruct import (
     COLOR_DISTANCE, MIN_CONFIDENCE, _centre, _dedupe, _inside, reconstruct_vbar,
@@ -349,6 +349,9 @@ def main() -> None:
                         help="also reconstruct without bar rescue and report before/after")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", type=Path, default=Path("output/eval_reconstruct.json"))
+    parser.add_argument("--conf", type=float, default=DEFAULT_CONFIDENCE, help="YOLO confidence cutoff (default %(default)s)")
+    parser.add_argument("--iou", type=float, default=DEFAULT_NMS_IOU, help="YOLO NMS IoU threshold (default %(default)s)")
+    parser.add_argument("--min-conf", type=float, default=MIN_CONFIDENCE, help="reconstruction confidence floor (default %(default)s)")
     args = parser.parse_args()
 
     records = [r for r in json.loads(args.annotations.read_text())
@@ -363,13 +366,13 @@ def main() -> None:
         row = {"image_id": image_id}
         try:
             image = cv2.imread(str(path))
-            frame = run_detection(model, path)
+            frame = run_detection(model, path, confidence=args.conf, nms_iou=args.iou)
             ocr = run_ocr(image, frame, backend, "eng")
-            spec = reconstruct_vbar(frame, ocr, image)
+            spec = reconstruct_vbar(frame, ocr, image, min_confidence=args.min_conf)
             row.update(rescued_total=sum(sum(x.value_rescued) for x in spec.series),
                        rescued=_rescued_values(spec, record))
             if args.compare_rescue:
-                before = reconstruct_vbar(frame, ocr, image, rescue_bars=False)
+                before = reconstruct_vbar(frame, ocr, image, rescue_bars=False, min_confidence=args.min_conf)
                 row["before"] = {"flags": before.flags, "errors": _relative_errors(before, record)}
             row.update(ok=True, flags=spec.flags,
                        categories_match=[_norm(c) for c in spec.categories]
