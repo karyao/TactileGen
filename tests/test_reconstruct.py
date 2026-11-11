@@ -102,18 +102,35 @@ def labelled_chart(texts):
     return chart
 
 
-def test_leading_zero_tick_label_is_flagged():
-    for texts in (("0", "050", "100", "150", "200"), ("0", "50", "100", "150", "0200")):
-        assert "y_tick_leading_zero" in labelled_chart(texts).run().flags
+def test_lost_decimal_point_in_tick_labels_is_repaired():
+    spec = labelled_chart(("0", "02", "04", "06", "08")).run()   # 0, 0.2, ... 0.8
+    assert spec.y_axis.tick_values == pytest.approx([0, 0.2, 0.4, 0.6, 0.8])
+    assert_values(spec, [0.48, 0.24, 0.72])
+    assert "y_tick_decimal_repaired:4" in spec.flags and "y_tick_leading_zero" not in spec.flags
 
 
-def test_ordinary_tick_labels_are_not_flagged_as_leading_zero():
+def test_leading_zero_label_that_disagrees_with_the_axis_is_dropped_not_repaired():
+    spec = labelled_chart(("0", "050", "100", "150", "200")).run()   # "050" would be 0.05
+    assert "y_ticks_dropped:1" in spec.flags
+    assert not any(f.startswith(("y_tick_decimal_repaired", "y_tick_leading_zero")) for f in spec.flags)
+    assert_values(spec, [120, 60, 180])
+
+
+def test_repair_that_cannot_be_trusted_keeps_the_blocker():
+    # 0, 0.2, 0.8, 1.0 at equal pixel steps: several two-tick lines fit equally well.
+    spec = labelled_chart(("0", "02", "08", "10", "")).run()
+    assert "y_calibration_ambiguous" in spec.flags and "y_tick_leading_zero" in spec.flags
+
+
+def test_ordinary_tick_labels_are_not_repaired():
     for texts in (("0", "50", "100", "150", "200"), ("0", "0.5", "1.0", "1.5", "2.0"),
                   ("-0", "50", "100", "150", "200")):
-        assert "y_tick_leading_zero" not in labelled_chart(texts).run().flags
+        flags = labelled_chart(texts).run().flags
+        assert "y_tick_leading_zero" not in flags
+        assert not any(f.startswith("y_tick_decimal_repaired") for f in flags)
 
 
-def test_dropped_tick_with_leading_zero_does_not_flag():
+def test_dropped_spurious_tick_with_leading_zero_is_not_repaired():
     chart = base_chart()
     chart.add("y_tick_label", (40, y_of(75) - 6, 75, y_of(75) + 6), text="0900")
     spec = chart.run()
@@ -184,7 +201,9 @@ def test_negative_bar_uses_far_edge_from_zero():
         chart.add("vertical_bar", box)
         chart.paint(box, (200, 100, 30))
         chart.add("x_tick_label", (box[0], 345, box[2], 360), text=f"C{i}")
-    assert_values(chart.run(), [100, -60])
+    spec = chart.run()
+    assert_values(spec, [100, -60])
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)  # negative bar skipped
 
 
 def test_adjacent_bars():
@@ -421,3 +440,220 @@ def test_guard_off_only_flags_empty_text():
 
     assert "category_unreadable" not in off("|", 0.95).flags
     assert "category_unreadable" in off("", 0.0).flags
+
+
+def test_series_with_no_detected_bars_is_built_from_its_legend_swatch():
+    groups = [(100, 50, 4), (150, 60, 2), (40, 120, 6)]
+    chart = grouped_chart((RED, GREEN, BLUE), groups,
+                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
+    spec = chart.run()
+    assert [s.name for s in spec.series] == ["S0", "S1", "S2"]
+    assert_values(spec, [4, 2, 6], series=2)
+    assert spec.series[2].value_rescued == [True, True, True]
+    assert spec.series[2].source_color == "#1e64c8"
+    assert "series_from_swatch:1" in spec.flags and "series_ambiguous" not in spec.flags
+    assert "bars_rescued:3" in spec.flags
+
+
+def test_swatch_series_in_the_middle_keeps_legend_order():
+    groups = [(100, 4, 80), (150, 2, 60), (40, 6, 120)]
+    chart = grouped_chart((RED, GREEN, BLUE), groups,
+                          missing={(0, 1), (1, 1), (2, 1)}, shift=-15.0)
+    spec = chart.run()
+    assert [s.name for s in spec.series] == ["S0", "S1", "S2"]
+    assert_values(spec, [4, 2, 6], series=1)
+    assert_values(spec, [80, 60, 120], series=2)
+
+
+def test_swatch_series_with_nothing_painted_reads_zero_and_flags_it():
+    groups = [(100, 50, 0), (150, 60, 0), (40, 120, 0)]
+    chart = grouped_chart((RED, GREEN, BLUE), groups,
+                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
+    spec = chart.run()
+    assert spec.series[2].name == "S2"
+    assert spec.series[2].values == [0.0, 0.0, 0.0]
+    assert "value_inferred_zero" in spec.flags
+
+
+def test_swatch_series_without_a_placement_stays_ambiguous():
+    # Nothing can be measured when the zero line is below the plot (see the rescue test above),
+    # so the unmatched swatch keeps the old series_ambiguous flag.
+    def y_at(value):
+        return PLOT[3] - 1.5 * (value - 100)
+
+    chart = Chart()
+    chart.add("plot_area", PLOT)
+    for tick in (100, 150, 200):
+        chart.add("y_tick_label", (40, y_at(tick) - 6, 75, y_at(tick) + 6), text=str(tick))
+    for i, value in enumerate((150, 120)):
+        box = (100 + 200 * i, y_at(value), 160 + 200 * i, PLOT[3])
+        chart.add("vertical_bar", box)
+        chart.paint(box, RED)
+        chart.add("x_tick_label", (box[0], 345, box[2], 360), text=f"C{i}")
+    for row, colour in enumerate((RED, GREEN)):
+        y = 362 + 12 * row
+        chart.add("legend_swatch", (100, y, 114, y + 10))
+        chart.paint((100, y, 114, y + 10), colour)
+        chart.add("legend_label", (120, y, 180, y + 10), text=f"S{row}")
+    spec = chart.run()
+    assert len(spec.series) == 1
+    assert "series_ambiguous" in spec.flags
+    assert not any(f.startswith("series_from_swatch") for f in spec.flags)
+
+
+def test_matched_series_do_not_gain_swatch_series():
+    spec = grouped_chart((RED, GREEN), [(100, 50), (150, 60), (40, 120)]).run()
+    assert len(spec.series) == 2
+    assert not any(f.startswith("series_from_swatch") for f in spec.flags)
+
+
+def test_short_detected_bar_is_remeasured_from_pixels():
+    chart = base_chart(values=(120, 60, 2))  # the 2-unit bar is 3 px tall
+    spec = chart.run()
+    assert_values(spec, [120, 60, 2])
+    assert spec.series[0].value_rescued == [False, False, True]
+    assert "short_bars_remeasured:1" in spec.flags and "bars_rescued:1" in spec.flags
+    assert "category_count_mismatch" not in spec.flags
+
+
+def test_short_box_that_misses_most_of_the_bar_gets_the_pixel_height():
+    chart = base_chart(values=(120, 60, 4))
+    third = [d for d in chart.detections if d.role == "vertical_bar"][2]
+    box = third.box
+    chart.paint((box.x1, y_of(40), box.x2, ZERO_Y), (200, 100, 30))  # really 40 units tall
+    spec = chart.run()
+    assert_values(spec, [120, 60, 40])
+    assert spec.series[0].value_rescued[2] is True
+
+
+def test_short_limit_is_six_px_or_three_percent_of_the_plot_height():
+    # The plot is 300 px tall, so the limit is 9 px: 8 px (5 units) is short, 9 px (6 units) is not.
+    short = base_chart(values=(120, 60, 5)).run()
+    assert "short_bars_remeasured:1" in short.flags
+    ok = base_chart(values=(120, 60, 6)).run()
+    assert not any(f.startswith("short_bars_remeasured") for f in ok.flags)
+    assert ok.series[0].value_rescued == [False, False, False]
+
+
+def test_short_bars_are_kept_when_rescue_is_off_or_the_zero_line_is_missing():
+    chart = base_chart(values=(120, 60, 2))
+    spec = reconstruct_vbar(chart.frame(), chart.texts, chart.image, rescue_bars=False)
+    assert not any(f.startswith("short_bars_remeasured") for f in spec.flags)
+    assert spec.series[0].value_rescued == [False, False, False]
+    assert_values(spec, [120, 60, 2])
+
+
+def test_short_bar_colour_does_not_create_an_extra_series():
+    chart = grouped_chart((RED, GREEN), [(100, 2), (150, 60), (40, 120)])
+    third = [d for d in chart.detections if d.role == "vertical_bar"][1]
+    chart.image[int(third.box.y1):int(third.box.y2), int(third.box.x1):int(third.box.x2)] = (90, 90, 90)
+    spec = chart.run()
+    assert len(spec.series) == 2 and "series_ambiguous" not in spec.flags
+    assert_values(spec, [100, 150, 40], series=0)
+    assert "short_bars_remeasured:1" in spec.flags
+
+
+def _shift_top(chart, index, dy):
+    """Move the detector's top edge of one bar down by ``dy`` px; the painted bar stays put."""
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    old = bars[index]
+    chart.detections[chart.detections.index(old)] = Detection(
+        old.id, old.role, Box(old.box.x1, old.box.y1 + dy, old.box.x2, old.box.y2), old.confidence)
+
+
+def test_detector_top_edge_far_from_the_pixels_is_corrected():
+    chart = base_chart(values=(120, 60, 180))
+    _shift_top(chart, 1, 12)  # 12 px = 8 units too low
+    spec = chart.run()
+    assert_values(spec, [120, 60, 180])
+    assert "bar_edge_corrected:1" in spec.flags
+    assert spec.series[0].value_rescued == [False, False, False]
+
+
+def test_small_edge_differences_keep_the_detector_value():
+    chart = base_chart(values=(120, 60, 180))
+    _shift_top(chart, 1, 4)
+    spec = chart.run()
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)
+    assert spec.series[0].values[1] == pytest.approx(60 - 4 / 1.5, rel=0.01)
+
+
+def test_edge_check_is_off_without_rescue():
+    chart = base_chart(values=(120, 60, 180))
+    _shift_top(chart, 1, 12)
+    spec = reconstruct_vbar(chart.frame(), chart.texts, chart.image, rescue_bars=False)
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)
+    assert spec.series[0].values[1] == pytest.approx(52, rel=0.01)
+
+
+def test_edge_check_ignores_bars_when_the_zero_line_is_outside_the_plot():
+    def y_at(value):
+        return PLOT[3] - 1.5 * (value - 100)
+
+    chart = Chart()
+    chart.add("plot_area", PLOT)
+    for tick in (100, 150, 200):
+        chart.add("y_tick_label", (40, y_at(tick) - 6, 75, y_at(tick) + 6), text=str(tick))
+    for i, value in enumerate((150, 120)):
+        box = (100 + 200 * i, y_at(value), 160 + 200 * i, PLOT[3])
+        chart.add("vertical_bar", box)
+        chart.paint((box[0], box[1] - 20, box[2], box[3]), (200, 100, 30))
+        chart.add("x_tick_label", (box[0], 345, box[2], 360), text=f"C{i}")
+    spec = chart.run()
+    assert "baseline_outside_plot" in spec.flags
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)
+
+
+def _missed(spec):
+    return [f for f in spec.flags if f.startswith("bars_mostly_missed")]
+
+
+def test_chart_with_most_bars_undetected_is_flagged():
+    chart = base_chart(values=(120, 60, 180))
+    _drop_detection(chart, 2)
+    _drop_detection(chart, 1)
+    spec = chart.run()
+    assert "bars_mostly_missed:67" in spec.flags  # 1 of 3 slots detected
+
+
+def test_bars_mostly_missed_needs_fewer_than_sixty_percent():
+    two_of_three = base_chart(values=(120, 60, 180))
+    _drop_detection(two_of_three, 2)
+    assert not _missed(two_of_three.run())
+    three_of_five = base_chart(values=(120, 60, 90, 70, 100))
+    _drop_detection(three_of_five, 4)
+    _drop_detection(three_of_five, 3)
+    assert not _missed(three_of_five.run())  # exactly 0.6
+    two_of_five = base_chart(values=(120, 60, 90, 70, 100))
+    for index in (4, 3, 2):
+        _drop_detection(two_of_five, index)
+    assert "bars_mostly_missed:60" in two_of_five.run().flags
+
+
+def test_short_detected_bars_count_as_detected():
+    chart = base_chart(values=(120, 60, 2, 2, 2))  # three 3 px bars, all detected
+    spec = chart.run()
+    assert "short_bars_remeasured:3" in spec.flags
+    assert not _missed(spec)
+
+
+def test_swatch_built_series_do_not_count_as_missed():
+    chart = grouped_chart((RED, GREEN, BLUE), [(100, 50, 4), (150, 60, 2), (40, 120, 6)],
+                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
+    spec = chart.run()
+    assert "series_from_swatch:1" in spec.flags
+    assert not _missed(spec)
+
+
+def test_minus_sign_read_on_a_dropped_tick_label_is_flagged():
+    chart = base_chart()
+    chart.add("y_tick_label", (40, y_of(75) - 6, 75, y_of(75) + 6), text="-1")  # dropped from the fit
+    spec = chart.run()
+    assert "y_ticks_dropped:1" in spec.flags and "y_tick_negative_read" in spec.flags
+    assert min(spec.y_axis.tick_values) == 0
+
+
+def test_no_negative_read_flag_without_a_minus_sign():
+    assert "y_tick_negative_read" not in base_chart().run().flags
+    assert "y_tick_negative_read" not in labelled_chart(("0", "0.5", "1.0", "1.5", "2.0")).run().flags
+    assert "y_tick_negative_read" in labelled_chart(("0", "- 50", "100", "150", "200")).run().flags

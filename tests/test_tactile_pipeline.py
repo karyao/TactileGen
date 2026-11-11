@@ -127,15 +127,32 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("too narrow", out)
 
-    def test_tiny_negative_is_zeroed_with_a_note_but_a_real_one_is_rejected(self):
-        tiny = make_spec(series=[SeriesSpec(None, "#112233", [-0.1, 20.0, 30.0])])
-        code, out, _, written = self.go(tiny, argv=["--yes"])
+    def test_negative_values_are_zeroed_on_an_axis_from_zero_but_rejected_on_a_negative_axis(self):
+        zero_axis = make_spec(series=[SeriesSpec(None, "#112233", [-0.6, 20.0, 30.0])])
+        code, out, _, written = self.go(zero_axis, argv=["--yes"])
         self.assertEqual((code, written), (0, True))
-        self.assertIn("treated as 0", out)
-        real = make_spec(series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
-        code, _, err, written = self.go(real, argv=["--yes"])
+        self.assertIn("Values below the axis minimum were set to 0", out)
+        negative_axis = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]),
+                                  series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
+        code, _, err, written = self.go(negative_axis, argv=["--yes"])
         self.assertEqual((code, written), (1, False))
         self.assertIn("negative bar values are not supported", err)
+
+    def test_clipped_bar_builds_with_a_note_unless_the_axis_is_negative(self):
+        code, out, _, written = self.go(make_spec(flags=["value_clipped_at_axis"]), argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("lower bound", out)
+        spec = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]), flags=["value_clipped_at_axis"])
+        for extra in ([], ["--force"]):
+            code, _, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+
+    def test_lost_minus_signs_keep_a_clipped_chart_blocked_even_with_force(self):
+        spec = make_spec(flags=["value_clipped_at_axis", "y_tick_negative_read", "y_ticks_dropped:2"])
+        for extra in ([], ["--force"]):
+            code, out, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+            self.assertIn("runs past the end of the y axis", out)
 
     def test_suspicious_category_asks_and_flag_fixes_it(self):
         spec = make_spec(categories=["Germany", "i", "Greece"])
@@ -171,6 +188,17 @@ class Pipeline(unittest.TestCase):
             code, out, _, written = self.go(spec, argv=["--yes", *extra])
             self.assertEqual((code, written), (3, False))
             self.assertIn("decimal point may have been lost", out)
+
+    def test_bars_mostly_missed_blocks_until_forced(self):
+        spec = make_spec(flags=["bars_mostly_missed:67"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (3, False))
+        self.assertIn("67% of bars were not detected and would be drawn as 0", out)
+        self.assertIn("Re-run with --force to build anyway.", out)
+        code, out, err, written = self.go(spec, argv=["--yes", "--force"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("WARNING: --force", err)
+        self.assertIn("bars_mostly_missed:67", out)
 
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])

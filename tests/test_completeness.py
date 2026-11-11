@@ -9,7 +9,8 @@ from src.contracts import (
     VerticalBarSpec, YAxisSpec,
 )
 from src.tactile.completeness import (
-    BLOCKING_FLAGS, CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Overrides,
+    BLOCKING_FLAGS, CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, SELF_EXPLAINING_FLAGS,
+    Overrides,
     apply_overrides, check_completeness, completeness_from_error, spec_to_chart,
     spec_to_chart_with_notes, cut_off_flags,
 )
@@ -66,12 +67,23 @@ class Status(unittest.TestCase):
     def test_unnamed_single_series_is_ready(self):
         self.assertEqual(check_completeness(make_spec()).status, READY)
 
+    def test_bars_mostly_missed_message_and_forceable(self):
+        result = check_completeness(make_spec(flags=["bars_mostly_missed:67"]))
+        self.assertEqual(result.status, CANNOT_BUILD)
+        self.assertEqual(result.blockers, [
+            "67% of bars were not detected and would be drawn as 0 (the data may include values "
+            "below the axis, or the detector may have missed bars). Re-run with --force to build anyway."])
+        self.assertTrue(result.forceable)
+
     def test_each_blocking_flag(self):
         for flag in BLOCKING_FLAGS:
             with self.subTest(flag=flag):
-                result = check_completeness(make_spec(flags=[flag]))
+                # a negative tick keeps value_clipped_at_axis a blocker
+                result = check_completeness(make_spec(
+                    flags=[flag], y_axis=YAxisSpec(-50, 50, [-50, 0, 50])))
                 self.assertEqual(result.status, CANNOT_BUILD)
-                self.assertIn("rainfall.json", result.blockers[0])
+                if flag not in SELF_EXPLAINING_FLAGS:
+                    self.assertIn("rainfall.json", result.blockers[0])
                 self.assertEqual(result.forceable, flag in FORCEABLE_FLAGS)
 
     def test_uneven_y_ticks_are_only_a_note(self):
@@ -79,6 +91,40 @@ class Status(unittest.TestCase):
         self.assertEqual((result.status, result.blockers), (READY, []))
         self.assertTrue(any("not evenly spaced" in n for n in result.notes))
         self.assertTrue(any("2 y-axis tick" in n for n in result.notes))
+
+    def test_series_from_swatch_is_a_note(self):
+        result = check_completeness(make_spec(flags=["series_from_swatch:2"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertTrue(any("2 series had no detected bars" in n for n in result.notes))
+
+    def test_short_bars_remeasured_is_a_note(self):
+        result = check_completeness(make_spec(flags=["short_bars_remeasured:3"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertTrue(any("3 very short bar(s)" in n for n in result.notes))
+
+    def test_bar_edge_corrected_is_a_note(self):
+        result = check_completeness(make_spec(flags=["bar_edge_corrected:2"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertTrue(any("2 bar(s) had their top edge corrected" in n for n in result.notes))
+
+    def test_clipped_bar_is_a_note_on_an_axis_from_zero(self):
+        result = check_completeness(make_spec(flags=["value_clipped_at_axis"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertEqual([n for n in result.notes if "past the end" in n],
+                         ["At least one bar runs past the end of the y axis, so its value is a lower bound."])
+
+    def test_clipped_bar_still_blocks_with_a_negative_tick_and_cannot_be_forced(self):
+        spec = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]), flags=["value_clipped_at_axis"])
+        result = check_completeness(spec)
+        self.assertEqual(result.status, CANNOT_BUILD)
+        self.assertIn("runs past the end of the y axis", result.blockers[0])
+        self.assertFalse(result.forceable)
+        self.assertFalse(any("lower bound" in n for n in result.notes))
+
+    def test_decimal_repair_is_a_note(self):
+        result = check_completeness(make_spec(flags=["y_tick_decimal_repaired:3"]))
+        self.assertEqual((result.status, result.blockers), (READY, []))
+        self.assertTrue(any("3 y-axis tick label(s) had lost their decimal point" in n for n in result.notes))
 
     def test_leading_zero_tick_blocks_and_cannot_be_forced(self):
         result = check_completeness(make_spec(flags=["y_tick_leading_zero"]))
@@ -283,6 +329,51 @@ class CutOffTitles(unittest.TestCase):
         self.assertEqual([m.field for m in check_completeness(spec).missing], ["title"])
 
 
+def negative_axis_chart(ticks, flags, values=(0.4, 0.6, 1.0)):
+    """Spec as reconstructed for an all-negative axis whose minus signs OCR lost (cached 32821 etc.)."""
+    return make_spec(y_axis=YAxisSpec(min(ticks), max(ticks), list(ticks)),
+                     series=[SeriesSpec(None, "#112233", list(values))], flags=flags)
+
+
+class NegativeAxisWithLostMinusSigns(unittest.TestCase):
+    """Charts 32821, 32905 and 33050: surviving ticks are all >= 0 but minus signs were read."""
+
+    CASES = {
+        32821: ([0.0, 0.2, 0.4, 0.6, 0.8, 1.4],
+                ["y_ticks_dropped:2", "y_tick_decimal_repaired:1", "y_ticks_not_arithmetic",
+                 "value_clipped_at_axis", "bar_edge_corrected:6", "y_tick_negative_read"]),
+        32905: ([0.0, 0.2, 0.4, 0.6, 0.8],
+                ["y_ticks_dropped:1", "y_tick_decimal_repaired:1", "value_clipped_at_axis",
+                 "bar_edge_corrected:4", "y_tick_negative_read"]),
+        33050: ([0.0, 0.2, 0.4, 0.6, 0.8, 1.4],
+                ["y_ticks_dropped:2", "y_tick_decimal_repaired:1", "y_ticks_not_arithmetic",
+                 "value_clipped_at_axis", "bar_edge_corrected:5", "y_tick_negative_read"]),
+    }
+
+    def test_the_three_charts_stay_blocked_and_cannot_be_forced(self):
+        for chart_id, (ticks, flags) in self.CASES.items():
+            with self.subTest(chart=chart_id):
+                result = check_completeness(negative_axis_chart(ticks, flags))
+                self.assertEqual(result.status, CANNOT_BUILD)
+                self.assertIn("runs past the end of the y axis", result.blockers[0])
+                self.assertFalse(result.forceable)
+
+    def test_without_the_minus_read_the_same_chart_would_build(self):
+        ticks, flags = self.CASES[32905]
+        flags = [f for f in flags if f != "y_tick_negative_read"]
+        self.assertEqual(check_completeness(negative_axis_chart(ticks, flags)).status, READY)
+
+    def test_negative_values_are_not_clamped_when_a_minus_sign_was_read(self):
+        spec = make_spec(y_axis=YAxisSpec(0, 100, [0, 50, 100]), flags=["y_tick_negative_read"],
+                         series=[SeriesSpec(None, "#112233", [-5.0, 40.0, 20.0])])
+        chart, notes = spec_to_chart_with_notes(spec)
+        self.assertEqual((chart.series[0].values, notes), ((-5.0, 40.0, 20.0), []))
+
+    def test_axis_from_zero_without_a_minus_read_still_clamps(self):
+        spec = make_spec(series=[SeriesSpec(None, "#112233", [-5.0, 40.0, 20.0])])
+        self.assertEqual(spec_to_chart_with_notes(spec)[0].series[0].values, (0.0, 40.0, 20.0))
+
+
 class Errors(unittest.TestCase):
     def frame(self, *roles):
         detections = tuple(Detection(f"d{i}", role, Box(0, 0, 10, 10), 0.9)
@@ -354,16 +445,17 @@ class Build(unittest.TestCase):
         self.assertEqual((chart.title, chart.categories), ("Sales", ("2001", "2002", "2003")))
         self.assertEqual(chart.series[0].values, (10.0, 20.0, 30.0))
 
-    def test_tiny_negative_noise_becomes_zero_with_a_note(self):
-        spec = make_spec(series=[SeriesSpec(None, "#112233", [-0.4, 100.0, -0.6])])
+    def test_negatives_become_zero_when_the_axis_starts_at_zero(self):
+        spec = make_spec(series=[SeriesSpec(None, "#112233", [-0.4, 100.0, -60.0])])
         chart, notes = spec_to_chart_with_notes(spec)
-        self.assertEqual(chart.series[0].values, (0.0, 100.0, -0.6))
-        self.assertIn("1 value(s) slightly below zero", notes[0])
+        self.assertEqual(chart.series[0].values, (0.0, 100.0, 0.0))
+        self.assertEqual(notes, ["Values below the axis minimum were set to 0 (2 value(s))."])
 
-    def test_larger_negatives_are_left_for_the_layout_to_reject(self):
-        spec = make_spec(series=[SeriesSpec(None, "#112233", [-5.0, 100.0, 20.0])])
+    def test_negative_axis_leaves_negative_values_for_the_layout_to_reject(self):
+        spec = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]),
+                         series=[SeriesSpec(None, "#112233", [-5.0, 40.0, 20.0])])
         chart, notes = spec_to_chart_with_notes(spec)
-        self.assertEqual((chart.series[0].values, notes), ((-5.0, 100.0, 20.0), []))
+        self.assertEqual((chart.series[0].values, notes), ((-5.0, 40.0, 20.0), []))
 
     def test_no_adjustment_when_nothing_is_negative(self):
         self.assertEqual(spec_to_chart_with_notes(make_spec())[1], [])

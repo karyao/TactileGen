@@ -29,6 +29,10 @@ MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
 UNREADABLE_CATEGORY_CONFIDENCE = 0.1
+MIN_DETECTED_BAR_FRACTION = 0.6  # below this share of detected slots, most values are guesses
+BAR_EDGE_TOLERANCE_PX = 5     # a pixel-measured top edge this far from the box edge wins
+SHORT_BAR_MIN_PX = 6          # detected bars shorter than this are re-measured from pixels
+SHORT_BAR_PLOT_FRACTION = 0.03  # ... or shorter than this share of the plot height
 RESCUE_CONFIDENCE = 0.2
 RESCUE_STRIP_FRACTION = 0.5   # central share of the bar width that is probed
 RESCUE_ROW_FRACTION = 0.6     # share of strip pixels that must match for a row to count
@@ -42,7 +46,7 @@ ADJACENT_GAP_RATIO = 0.10
 ARITHMETIC_TOLERANCE = 0.03
 
 _SUFFIX = {"K": 1e3, "M": 1e6, "B": 1e9}
-_LEADING_ZERO = re.compile(r"-?0\d")  # "04": the decimal point of "0.4" was probably lost
+_LEADING_ZERO = re.compile(r"(-?)0(\d+)")  # "04": the decimal point of "0.4" was probably lost
 _NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
@@ -128,6 +132,13 @@ def parse_tick_value(text: str) -> tuple[float, str | None] | None:
         return None
     value = float(cleaned) * scale
     return (value, unit) if math.isfinite(value) else None
+
+
+def _repair_lost_decimal(text: str) -> str | None:
+    """``"04"`` -> ``"0.4"``: a tick label that is a zero followed by digits lost its decimal point."""
+    cleaned = text.strip().replace("−", "-").replace("–", "-").replace(",", "").replace(" ", "").lstrip("$")
+    match = _LEADING_ZERO.fullmatch(cleaned)
+    return f"{match.group(1)}0.{match.group(2)}" if match else None
 
 
 def _calibrate(ticks: list[tuple[float, float]]):
@@ -306,6 +317,14 @@ def _rescue_value(rgb: np.ndarray, centre_x: float, width: float, baseline: floa
 
 # --- legend --------------------------------------------------------------------
 
+def _legend_ranks(swatches: list[Detection], swatch_ids: list[int]) -> dict[int, int]:
+    """Reading order (rows top to bottom, then left to right) of the given legend swatches."""
+    height = statistics.median(swatches[i].box.y2 - swatches[i].box.y1 for i in swatch_ids)
+    order = sorted(swatch_ids, key=lambda i: (round(_centre(swatches[i])[1] / max(height, 1.0)),
+                                              _centre(swatches[i])[0]))
+    return {index: rank for rank, index in enumerate(order)}
+
+
 def _pair_legend(swatches: list[Detection], labels: list[Detection]):
     """Pair each swatch with its nearest label (one-to-one, same-row preferred)."""
     costs = []
@@ -376,10 +395,15 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
 
     # y calibration
     parsed = []
+    repaired_ids: set[str] = set()
     for detection in y_labels:
-        value = parse_tick_value(texts.get(detection.id, ("", 0.0))[0])
+        text = texts.get(detection.id, ("", 0.0))[0]
+        repaired = _repair_lost_decimal(text)
+        value = parse_tick_value(repaired if repaired else text)
         if value is not None:
             parsed.append((detection, *value))
+            if repaired:
+                repaired_ids.add(detection.id)
     if len(parsed) < 2:
         raise ChartInterpretationError("fewer than 2 readable y tick labels")
     a, b, inliers, ambiguous = _calibrate([(_centre(d)[1], v) for d, v, _ in parsed])
@@ -389,8 +413,15 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         flags.append(f"y_ticks_dropped:{dropped}")
     if ambiguous:
         flags.append("y_calibration_ambiguous")
-    if any(_LEADING_ZERO.match(texts[d.id][0].strip()) for d, _, _ in good):
-        flags.append("y_tick_leading_zero")
+    if any(v < 0 for _, v, _ in parsed):
+        # A minus sign was read on some tick label, even if the fit dropped it. OCR loses
+        # minus signs, so an axis whose surviving ticks are all >= 0 may still be negative.
+        flags.append("y_tick_negative_read")
+    repaired_good = [d for d, _, _ in good if d.id in repaired_ids]
+    if repaired_good:
+        flags.append(f"y_tick_decimal_repaired:{len(repaired_good)}")
+        if ambiguous:   # two scales fit equally well, so the repair cannot be trusted
+            flags.append("y_tick_leading_zero")
     tick_values = [v for _, v, _ in sorted(good, key=lambda t: t[1])]
     if not _is_arithmetic(tick_values):
         flags.append("y_ticks_not_arithmetic")
@@ -461,10 +492,20 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     legend_labels = [d for d in roles.get("legend_label", [])
                      if legend is None or _inside(_centre(d), legend, 4, 4)]
     swatch_colors = [_sample_rgb(rgb, d) for d in swatches]
+    can_rescue = rescue_bars and baseline_inside
+    # Very short boxes carry mostly outline and antialiasing pixels, so their
+    # colour is unreliable and their height is a few pixels of box noise: leave
+    # them out of colour clustering and let the rescue re-measure their slots.
+    plot_height = plot.box.y2 - plot.box.y1 if plot is not None else 0.0
+    short_limit = max(SHORT_BAR_MIN_PX, SHORT_BAR_PLOT_FRACTION * plot_height)
+    active = [k for k, bar in enumerate(bars)
+              if not can_rescue or bar.box.y2 - bar.box.y1 >= short_limit] or list(range(len(bars)))
+    short_bars = len(bars) - len(active)
     swatch_name = {s: (texts.get(legend_labels[l].id, ("", 0.0))[0] or None)
                    for s, l in _pair_legend(swatches, legend_labels).items()}
     seeds, swatch_of_seed = _legend_seeds(swatch_colors)
-    clusters, seed_of_cluster = _cluster_colors(bar_colors, seeds)
+    clusters, seed_of_cluster = _cluster_colors([bar_colors[k] for k in active], seeds)
+    clusters = [[active[i] for i in members] for members in clusters]
     cluster_centre = [
         tuple(statistics.median(bar_colors[k][ch] for k in members) for ch in range(3))
         if bar_colors[members[0]] is not None else None
@@ -484,8 +525,9 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         if c not in matches and s not in matches.values():
             matches[c] = s
 
+    unmatched_seeds = [i for i, sw in enumerate(swatch_of_seed) if sw not in matches.values()]
     ambiguous_series = False
-    if swatches and len(matches) < max(len(clusters), len(seeds)):
+    if swatches and len(matches) < len(clusters):
         ambiguous_series = True
     if not swatches and len(clusters) > 1:
         ambiguous_series = True
@@ -493,8 +535,27 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         ambiguous_series = True
 
     bar_width = statistics.median(d.box.x2 - d.box.x1 for d in bars)
-    can_rescue = rescue_bars and baseline_inside
+    # The detector sometimes puts a bar's top edge several pixels off while the
+    # box still overlaps the bar well. Check positive bars against the pixels.
+    edges_corrected = 0
+    if can_rescue:
+        for c, members in enumerate(clusters):
+            if cluster_centre[c] is None:
+                continue
+            for k in members:
+                box = bars[k].box
+                if abs(box.y2 - baseline) > abs(box.y1 - baseline):
+                    continue
+                half = RESCUE_STRIP_FRACTION * (box.x2 - box.x1) / 2
+                left = max(0, int(round(_centre(bars[k])[0] - half)))
+                right = min(rgb.shape[1], max(left + 1, int(round(_centre(bars[k])[0] + half))))
+                up = _run_length(rgb, left, right, int(round(baseline)) - 1, -1, cluster_centre[c])
+                if up >= 1 and abs(box.y1 - (round(baseline) - up)) >= BAR_EDGE_TOLERANCE_PX:
+                    values[k] = -a * up
+                    edges_corrected += 1
     series = []
+    detected_slots = 0
+    offsets_by_cluster: dict[int, float] = {}
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
     for c, members in enumerate(clusters):
@@ -511,6 +572,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             best_gap[slot] = gap
             kept[slot] = k
             row[slot] = values[k]
+        detected_slots += len(kept)
         rescued = [False] * len(categories)
         value_conf: list[float | None] = [
             bars[kept[j]].confidence if j in kept else None for j in range(len(categories))]
@@ -520,6 +582,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             # Groups sit at a fixed offset from the tick that depends on the
             # series count, so measure it from this series' detected bars.
             offset = statistics.median(_centre(bars[k])[0] - label_x[j] for j, k in kept.items())
+            offsets_by_cluster[c] = offset
             for j in range(len(categories)):
                 if row[j] is not None:
                     continue
@@ -535,6 +598,48 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         series.append(SeriesSpec(
             name, _hex(None if centre is None else tuple(int(v) for v in centre)), row,
             value_rescued=rescued, value_confidence=value_conf))
+    # Legend swatches with no bars of their colour are series the detector missed
+    # entirely (usually values too small to see): measure them from pixels.
+    added = []
+    if unmatched_seeds:
+        ranks = _legend_ranks(swatches, swatch_of_seed)
+        refs = sorted((ranks[matches[c]], offsets_by_cluster[c]) for c in offsets_by_cluster
+                      if matches.get(c) in ranks)
+        pitches = [(o2 - o1) / (r2 - r1) for (r1, o1), (r2, o2) in itertools.combinations(refs, 2)
+                   if r2 != r1]
+        pitch = statistics.median(pitches) if pitches else bar_width
+        for i in unmatched_seeds:
+            colour = swatch_colors[swatch_of_seed[i]]
+            if not (can_rescue and refs and colour is not None):
+                ambiguous_series = True
+                continue
+            rank = ranks[swatch_of_seed[i]]
+            ref_rank, ref_offset = min(refs, key=lambda r: abs(r[0] - rank))
+            offset = ref_offset + (rank - ref_rank) * pitch
+            row = [_rescue_value(rgb, label_x[j] + offset, bar_width, baseline, a, colour)
+                   for j in range(len(categories))]
+            rescued_total += len(row)
+            rescued_zero += sum(v == 0.0 for v in row)
+            added.append((rank, SeriesSpec(
+                swatch_name.get(swatch_of_seed[i]), _hex(colour), row,
+                value_rescued=[True] * len(row), value_confidence=[RESCUE_CONFIDENCE] * len(row))))
+    if added:
+        if len(matches) == len(clusters):   # every series has a legend rank: keep legend order
+            ranked = sorted([(ranks[matches[c]], s) for c, s in enumerate(series)] + added,
+                            key=lambda pair: pair[0])
+            series = [s for _, s in ranked]
+        else:
+            series += [s for _, s in added]
+        flags.append(f"series_from_swatch:{len(added)}")
+    # Share of category x series slots (for series with at least one detected
+    # bar) that had a detected bar; very short bars were detected, just re-measured.
+    slots = len(categories) * len(clusters)
+    if slots and (detected_slots + short_bars) / slots < MIN_DETECTED_BAR_FRACTION:
+        flags.append(f"bars_mostly_missed:{round(100 * (1 - (detected_slots + short_bars) / slots))}")
+    if edges_corrected:
+        flags.append(f"bar_edge_corrected:{edges_corrected}")
+    if short_bars:
+        flags.append(f"short_bars_remeasured:{short_bars}")
     if rescued_total:
         flags.append(f"bars_rescued:{rescued_total}")
     if rescued_zero:

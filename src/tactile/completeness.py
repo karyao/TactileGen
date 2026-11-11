@@ -41,14 +41,21 @@ BLOCKING_FLAGS = {
     "category_ambiguous": "Some bars could not be matched to a single category label.",
     # legend entries and bar colours do not pair up
     "series_ambiguous": "The legend entries could not be matched to the bar colours.",
-    # a surviving tick label like "04" has a leading zero, so a decimal point was probably lost
-    "y_tick_leading_zero": ("A y-axis tick label has a leading zero (like '04'), so a decimal "
-                            "point may have been lost and the axis scale could be wrong."),
+    # a repaired tick label like "04" sits on an axis where two scales fit equally well
+    "y_tick_leading_zero": ("A y-axis tick label has a leading zero (like '04') and the repaired "
+                            "scale is ambiguous, so a decimal point may have been lost and the "
+                            "axis scale could be wrong."),
+    # under 60% of the category x series slots had a detected bar; {n} is the percentage missed.
+    # --force may build anyway (bars below an axis that starts at zero read as 0)
+    "bars_mostly_missed": ("{n}% of bars were not detected and would be drawn as 0 (the data may "
+                           "include values below the axis, or the detector may have missed bars). "
+                           "Re-run with --force to build anyway."),
     # two equally good scales fit the y ticks
     "y_calibration_ambiguous": "The y-axis scale could not be settled from the tick labels.",
     # the zero line is outside the plot, so heights do not map to values
     "baseline_outside_plot": "The zero line of the y axis is not inside the plot area.",
-    # a bar runs past the last tick, so its value is cut off
+    # a bar runs past the last tick, so its value is cut off; only a blocker when the axis
+    # has negative ticks (the layout cannot draw those), otherwise a note (see NOTE_FLAGS)
     "value_clipped_at_axis": "At least one bar runs past the end of the y axis.",
 }
 
@@ -57,7 +64,12 @@ BLOCKING_FLAGS = {
 FORCEABLE_FLAGS = frozenset({
     "category_count_mismatch", "category_ambiguous", "series_ambiguous",
     "y_calibration_ambiguous",
+    # many bars were not detected: the user may know the data has no hidden values
+    "bars_mostly_missed",
 })
+
+# Blocker messages that already say what to do, so no generic next steps are added.
+SELF_EXPLAINING_FLAGS = frozenset({"bars_mostly_missed"})
 
 # Flags worth telling the user about that do not stop a build. Each is matched
 # by name, or by the prefix before the colon.
@@ -67,6 +79,22 @@ NOTE_FLAGS = {
     # a rescue found no bar pixels; {n} counts those values, drawn as zero
     "value_inferred_zero": ("No bar was visible for {n} value(s), so they are drawn as 0. "
                             "The data may include values below the axis that are not drawn."),
+    # tick labels like "04" were read as 0.4: the lost decimal point was put back
+    "y_tick_decimal_repaired": ("{n} y-axis tick label(s) had lost their decimal point (like '04' "
+                                "for 0.4) and were repaired."),
+    # a bar reaches the plot edge beyond the last tick on an axis from zero: a lower bound
+    "value_clipped_at_axis": ("At least one bar runs past the end of the y axis, so its value "
+                              "is a lower bound."),
+    # legend swatches with no detected bars became series measured from pixels
+    "series_from_swatch": ("{n} series had no detected bars and were built from the legend; "
+                           "their values were measured from pixels and are usually near zero."),
+    # very short detected bars were re-measured from pixels
+    "short_bars_remeasured": "{n} very short bar(s) were re-measured from pixels.",
+    # a bar's top edge was re-measured from pixels because the detector box disagreed
+    "bar_edge_corrected": "{n} bar(s) had their top edge corrected from the pixels.",
+    # category labels the first OCR pass could not read were re-read with a rotated fallback
+    "category_reread": ("{n} category label(s) were re-read with a rotated OCR fallback; "
+                        "check them in the category list."),
     # some tick labels were not read or were dropped, leaving gaps in the tick values
     "y_ticks_not_arithmetic": ("The y-axis tick values are not evenly spaced, probably because some "
                                "tick labels were missed. Bar values use the line through the ticks "
@@ -167,6 +195,15 @@ def cut_off_flags(frame, image) -> list[str]:
     return flags
 
 
+def axis_starts_at_zero(spec: VerticalBarSpec) -> bool:
+    """True when the y axis is known to start at 0 or above.
+
+    The lowest surviving tick must be >= 0 and no tick label may have been read with a
+    minus sign: OCR drops minus signs, and the fit may have dropped the labels that kept one.
+    """
+    return min(spec.y_axis.tick_values) >= 0 and "y_tick_negative_read" not in spec.flags
+
+
 def _flag_name(flag: str) -> str:
     return flag.split(":", 1)[0]
 
@@ -198,10 +235,15 @@ def _rejects(char: str) -> bool:
 def check_completeness(spec: VerticalBarSpec) -> Completeness:
     blockers: list[str] = []
     forceable = True
+    axis_from_zero = axis_starts_at_zero(spec)
     for flag in spec.flags:
+        if _flag_name(flag) == "value_clipped_at_axis" and axis_from_zero:
+            continue  # reported as a note below
         message = BLOCKING_FLAGS.get(_flag_name(flag))
         if message:
-            blockers.append(f"{message} ({_flag_name(flag)}) {NEXT_STEPS}")
+            message = message.format(n=flag.partition(":")[2])
+            blockers.append(message if _flag_name(flag) in SELF_EXPLAINING_FLAGS
+                            else f"{message} ({_flag_name(flag)}) {NEXT_STEPS}")
             forceable = forceable and _flag_name(flag) in FORCEABLE_FLAGS
     if not spec.categories:
         blockers.append(f"No category labels were read. {NEXT_STEPS}")
@@ -217,6 +259,8 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
             count = sum(1 for series in spec.series
                         for value, rescued in zip(series.values, series.value_rescued)
                         if rescued and value == 0.0)
+        if name == "value_clipped_at_axis" and not axis_from_zero:
+            continue  # a blocker on a negative axis
         if name in NOTE_FLAGS:
             notes.append(NOTE_FLAGS[name].format(n=count))
 
@@ -347,10 +391,16 @@ def apply_overrides(spec: VerticalBarSpec,
         categories[j] = text
         confidence.pop(f"category[{j}]", None)
         flags.append(f"category_supplied:{j}")
+        flags = [f for f in flags if f != f"category_reread_index:{j}"]
         notes.append(f"category {j} supplied by user: {text!r}")
     if overrides.categories and not any(_CATEGORY_KEY.fullmatch(k) for k in confidence):
         drop("category_unreadable")
 
+    if overrides.categories:   # keep category_reread:N equal to the labels still re-read
+        left = sum(f.startswith("category_reread_index:") for f in flags)
+        flags = [f for f in flags if not f.startswith("category_reread:")]
+        if left:
+            flags.append(f"category_reread:{left}")
     series = list(spec.series)
     for i, name in sorted(overrides.series_names.items()):
         series[i] = replace(series[i], name=name)
@@ -361,11 +411,6 @@ def apply_overrides(spec: VerticalBarSpec,
                    confidence=confidence), notes
 
 
-# Negative values smaller than this share of the chart maximum are pixel-offset
-# noise from measuring a bar at the zero line, not real data.
-NEGATIVE_NOISE_FRACTION = 0.005
-
-
 def spec_to_chart(spec: VerticalBarSpec) -> VerticalBarChart:
     """Build the layout's chart from a spec whose status is ``ready``."""
     return spec_to_chart_with_notes(spec)[0]
@@ -374,29 +419,29 @@ def spec_to_chart(spec: VerticalBarSpec) -> VerticalBarChart:
 def spec_to_chart_with_notes(spec: VerticalBarSpec) -> tuple[VerticalBarChart, list[str]]:
     """Like ``spec_to_chart``, also returning notes about values it had to adjust.
 
-    Negative values under 0.5% of the chart maximum become 0.0. Larger
-    negatives are left alone, so the layout still rejects them.
+    When the axis is known to start at 0 or above (``axis_starts_at_zero``), it cannot show anything
+    below it, so every negative value (a pixel-offset artefact, or a bar that
+    is not drawn) becomes 0.0. With a negative axis nothing is changed, and the
+    layout rejects negative values.
     """
     result = check_completeness(spec)
     if result.status != READY:
         raise ValueError(
             f"spec is not ready ({result.status}); resolve it before building a chart: "
             + "; ".join(result.blockers or [f"{m.field}: {m.reason}" for m in result.missing]))
-    biggest = max(abs(v) for series in spec.series for v in series.values)
-    limit = NEGATIVE_NOISE_FRACTION * biggest
+    axis_from_zero = axis_starts_at_zero(spec)
     zeroed = 0
     series_out = []
     for series in spec.series:
         values = []
         for value in series.values:
-            if biggest and -limit < value < 0:
+            if axis_from_zero and value < 0:
                 value, zeroed = 0.0, zeroed + 1
             values.append(float(value))
         series_out.append(BarSeries(series.name or None, tuple(values)))
     notes = []
     if zeroed:
-        notes.append(f"{zeroed} value(s) slightly below zero (under 0.5% of the chart maximum) "
-                     "were treated as 0.")
+        notes.append(f"Values below the axis minimum were set to 0 ({zeroed} value(s)).")
     chart = VerticalBarChart(
         spec.source_key, spec.title, spec.x_axis_title, spec.y_axis_title,
         tuple(spec.categories), tuple(series_out))
