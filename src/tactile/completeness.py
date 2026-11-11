@@ -44,10 +44,11 @@ BLOCKING_FLAGS = {
     # a surviving tick label like "04" has a leading zero, so a decimal point was probably lost
     "y_tick_leading_zero": ("A y-axis tick label has a leading zero (like '04'), so a decimal "
                             "point may have been lost and the axis scale could be wrong."),
-    # under 60% of the category x series slots had a detected bar, so most values are guesses
-    # (and bars below an axis that starts at zero are not drawn, so nothing can be measured)
-    "bars_mostly_missed": ("Most bars were not detected (fewer than 60% of the expected bars), so "
-                           "many values are guesses and values below the axis may be missing."),
+    # under 60% of the category x series slots had a detected bar; {n} is the percentage missed.
+    # --force may build anyway (bars below an axis that starts at zero read as 0)
+    "bars_mostly_missed": ("{n}% of bars were not detected and would be drawn as 0 (the data may "
+                           "include values below the axis, or the detector may have missed bars). "
+                           "Re-run with --force to build anyway."),
     # two equally good scales fit the y ticks
     "y_calibration_ambiguous": "The y-axis scale could not be settled from the tick labels.",
     # the zero line is outside the plot, so heights do not map to values
@@ -61,7 +62,12 @@ BLOCKING_FLAGS = {
 FORCEABLE_FLAGS = frozenset({
     "category_count_mismatch", "category_ambiguous", "series_ambiguous",
     "y_calibration_ambiguous",
+    # many bars were not detected: the user may know the data has no hidden values
+    "bars_mostly_missed",
 })
+
+# Blocker messages that already say what to do, so no generic next steps are added.
+SELF_EXPLAINING_FLAGS = frozenset({"bars_mostly_missed"})
 
 # Flags worth telling the user about that do not stop a build. Each is matched
 # by name, or by the prefix before the colon.
@@ -212,7 +218,9 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
     for flag in spec.flags:
         message = BLOCKING_FLAGS.get(_flag_name(flag))
         if message:
-            blockers.append(f"{message} ({_flag_name(flag)}) {NEXT_STEPS}")
+            message = message.format(n=flag.partition(":")[2])
+            blockers.append(message if _flag_name(flag) in SELF_EXPLAINING_FLAGS
+                            else f"{message} ({_flag_name(flag)}) {NEXT_STEPS}")
             forceable = forceable and _flag_name(flag) in FORCEABLE_FLAGS
     if not spec.categories:
         blockers.append(f"No category labels were read. {NEXT_STEPS}")

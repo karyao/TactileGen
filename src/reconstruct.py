@@ -616,7 +616,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     # bar) that had a detected bar; very short bars were detected, just re-measured.
     slots = len(categories) * len(clusters)
     if slots and (detected_slots + short_bars) / slots < MIN_DETECTED_BAR_FRACTION:
-        flags.append("bars_mostly_missed")
+        flags.append(f"bars_mostly_missed:{round(100 * (1 - (detected_slots + short_bars) / slots))}")
     if edges_corrected:
         flags.append(f"bar_edge_corrected:{edges_corrected}")
     if short_bars:

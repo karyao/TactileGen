@@ -9,7 +9,8 @@ from src.contracts import (
     VerticalBarSpec, YAxisSpec,
 )
 from src.tactile.completeness import (
-    BLOCKING_FLAGS, CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Overrides,
+    BLOCKING_FLAGS, CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, SELF_EXPLAINING_FLAGS,
+    Overrides,
     apply_overrides, check_completeness, completeness_from_error, spec_to_chart,
     spec_to_chart_with_notes, cut_off_flags,
 )
@@ -66,12 +67,21 @@ class Status(unittest.TestCase):
     def test_unnamed_single_series_is_ready(self):
         self.assertEqual(check_completeness(make_spec()).status, READY)
 
+    def test_bars_mostly_missed_message_and_forceable(self):
+        result = check_completeness(make_spec(flags=["bars_mostly_missed:67"]))
+        self.assertEqual(result.status, CANNOT_BUILD)
+        self.assertEqual(result.blockers, [
+            "67% of bars were not detected and would be drawn as 0 (the data may include values "
+            "below the axis, or the detector may have missed bars). Re-run with --force to build anyway."])
+        self.assertTrue(result.forceable)
+
     def test_each_blocking_flag(self):
         for flag in BLOCKING_FLAGS:
             with self.subTest(flag=flag):
                 result = check_completeness(make_spec(flags=[flag]))
                 self.assertEqual(result.status, CANNOT_BUILD)
-                self.assertIn("rainfall.json", result.blockers[0])
+                if flag not in SELF_EXPLAINING_FLAGS:
+                    self.assertIn("rainfall.json", result.blockers[0])
                 self.assertEqual(result.forceable, flag in FORCEABLE_FLAGS)
 
     def test_uneven_y_ticks_are_only_a_note(self):

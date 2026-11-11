@@ -172,12 +172,16 @@ class Pipeline(unittest.TestCase):
             self.assertEqual((code, written), (3, False))
             self.assertIn("decimal point may have been lost", out)
 
-    def test_bars_mostly_missed_exits_3_even_with_force(self):
-        spec = make_spec(flags=["bars_mostly_missed"])
-        for extra in ([], ["--force"]):
-            code, out, _, written = self.go(spec, argv=["--yes", *extra])
-            self.assertEqual((code, written), (3, False))
-            self.assertIn("Most bars were not detected", out)
+    def test_bars_mostly_missed_blocks_until_forced(self):
+        spec = make_spec(flags=["bars_mostly_missed:67"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (3, False))
+        self.assertIn("67% of bars were not detected and would be drawn as 0", out)
+        self.assertIn("Re-run with --force to build anyway.", out)
+        code, out, err, written = self.go(spec, argv=["--yes", "--force"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("WARNING: --force", err)
+        self.assertIn("bars_mostly_missed:67", out)
 
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
