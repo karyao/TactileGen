@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "chart_type": "vbar_categorical",
+  "source_key": "demo/books_by_grade.png",
+  "title": "Books Read per Student",
+  "x_axis_title": "Grade",
+  "y_axis_title": "Books",
+  "categories": ["Grade 3", "Grade 4", "Grade 5"],
+  "series": [
+    {"name": "Fiction", "values": [12, 15, 18]},
+    {"name": "Nonfiction", "values": [6, 9, 11]}
+  ]
+}
