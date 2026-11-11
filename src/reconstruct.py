@@ -29,6 +29,7 @@ MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
 UNREADABLE_CATEGORY_CONFIDENCE = 0.1
+MIN_DETECTED_BAR_FRACTION = 0.6  # below this share of detected slots, most values are guesses
 BAR_EDGE_TOLERANCE_PX = 5     # a pixel-measured top edge this far from the box edge wins
 SHORT_BAR_MIN_PX = 6          # detected bars shorter than this are re-measured from pixels
 SHORT_BAR_PLOT_FRACTION = 0.03  # ... or shorter than this share of the plot height
@@ -534,6 +535,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                     values[k] = -a * up
                     edges_corrected += 1
     series = []
+    detected_slots = 0
     offsets_by_cluster: dict[int, float] = {}
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
@@ -551,6 +553,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             best_gap[slot] = gap
             kept[slot] = k
             row[slot] = values[k]
+        detected_slots += len(kept)
         rescued = [False] * len(categories)
         value_conf: list[float | None] = [
             bars[kept[j]].confidence if j in kept else None for j in range(len(categories))]
@@ -609,6 +612,11 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         else:
             series += [s for _, s in added]
         flags.append(f"series_from_swatch:{len(added)}")
+    # Share of category x series slots (for series with at least one detected
+    # bar) that had a detected bar; very short bars were detected, just re-measured.
+    slots = len(categories) * len(clusters)
+    if slots and (detected_slots + short_bars) / slots < MIN_DETECTED_BAR_FRACTION:
+        flags.append("bars_mostly_missed")
     if edges_corrected:
         flags.append(f"bar_edge_corrected:{edges_corrected}")
     if short_bars:

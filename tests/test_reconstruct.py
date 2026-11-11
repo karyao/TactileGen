@@ -585,3 +585,40 @@ def test_edge_check_ignores_bars_when_the_zero_line_is_outside_the_plot():
     spec = chart.run()
     assert "baseline_outside_plot" in spec.flags
     assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)
+
+
+def test_chart_with_most_bars_undetected_is_flagged():
+    chart = base_chart(values=(120, 60, 180))
+    _drop_detection(chart, 2)
+    _drop_detection(chart, 1)
+    spec = chart.run()
+    assert "bars_mostly_missed" in spec.flags  # 1 of 3 slots detected
+
+
+def test_bars_mostly_missed_needs_fewer_than_sixty_percent():
+    two_of_three = base_chart(values=(120, 60, 180))
+    _drop_detection(two_of_three, 2)
+    assert "bars_mostly_missed" not in two_of_three.run().flags
+    three_of_five = base_chart(values=(120, 60, 90, 70, 100))
+    _drop_detection(three_of_five, 4)
+    _drop_detection(three_of_five, 3)
+    assert "bars_mostly_missed" not in three_of_five.run().flags  # exactly 0.6
+    two_of_five = base_chart(values=(120, 60, 90, 70, 100))
+    for index in (4, 3, 2):
+        _drop_detection(two_of_five, index)
+    assert "bars_mostly_missed" in two_of_five.run().flags
+
+
+def test_short_detected_bars_count_as_detected():
+    chart = base_chart(values=(120, 60, 2, 2, 2))  # three 3 px bars, all detected
+    spec = chart.run()
+    assert "short_bars_remeasured:3" in spec.flags
+    assert "bars_mostly_missed" not in spec.flags
+
+
+def test_swatch_built_series_do_not_count_as_missed():
+    chart = grouped_chart((RED, GREEN, BLUE), [(100, 50, 4), (150, 60, 2), (40, 120, 6)],
+                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
+    spec = chart.run()
+    assert "series_from_swatch:1" in spec.flags
+    assert "bars_mostly_missed" not in spec.flags

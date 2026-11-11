@@ -44,6 +44,10 @@ BLOCKING_FLAGS = {
     # a surviving tick label like "04" has a leading zero, so a decimal point was probably lost
     "y_tick_leading_zero": ("A y-axis tick label has a leading zero (like '04'), so a decimal "
                             "point may have been lost and the axis scale could be wrong."),
+    # under 60% of the category x series slots had a detected bar, so most values are guesses
+    # (and bars below an axis that starts at zero are not drawn, so nothing can be measured)
+    "bars_mostly_missed": ("Most bars were not detected (fewer than 60% of the expected bars), so "
+                           "many values are guesses and values below the axis may be missing."),
     # two equally good scales fit the y ticks
     "y_calibration_ambiguous": "The y-axis scale could not be settled from the tick labels.",
     # the zero line is outside the plot, so heights do not map to values
