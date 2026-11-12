@@ -376,3 +376,62 @@ class Build(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def with_bar_less(**changes):
+    """Kenya with bars, plus two legend entries with no visible bars, in legend order."""
+    series = [SeriesSpec("Low & middle income", "#aa0000", [None, None, None], no_visible_bars=True),
+              SeriesSpec("Kenya", "#112233", [10.0, 20.0, 30.0]),
+              SeriesSpec("Vietnam", "#00aa00", [None, None, None], no_visible_bars=True)]
+    return make_spec(series=series, **changes)
+
+
+class BarLessSeries(unittest.TestCase):
+    def test_series_with_no_visible_bars_do_not_block(self):
+        result = check_completeness(with_bar_less())
+        self.assertEqual((result.status, result.blockers, result.missing), (READY, [], []))
+        self.assertIn("No bars are visible for: Low & middle income, Vietnam (they are listed in the key).",
+                      result.notes)
+
+    def test_a_missing_value_in_a_series_with_bars_still_blocks(self):
+        series = [SeriesSpec("Kenya", "#112233", [10.0, None, 30.0]),
+                  SeriesSpec("Vietnam", "#00aa00", [None, None, None], no_visible_bars=True)]
+        result = check_completeness(make_spec(series=series))
+        self.assertEqual(result.status, CANNOT_BUILD)
+        self.assertIn("Some bar values could not be read", result.blockers[0])
+        self.assertFalse(result.forceable)
+
+    def test_they_are_not_series_ambiguous_and_flags_still_block(self):
+        self.assertEqual(check_completeness(with_bar_less()).status, READY)
+        self.assertEqual(check_completeness(with_bar_less(flags=["series_ambiguous"])).status, CANNOT_BUILD)
+
+    def test_chart_keeps_every_series_and_no_values_for_the_bar_less_ones(self):
+        chart = spec_to_chart(with_bar_less())
+        self.assertEqual([(s.name, s.has_bars, s.values) for s in chart.series], [
+            ("Low & middle income", False, ()), ("Kenya", True, (10.0, 20.0, 30.0)),
+            ("Vietnam", False, ())])
+
+    def test_a_bar_less_name_braille_cannot_encode_is_asked_for_not_blocked(self):
+        spec = with_bar_less()
+        spec = apply_overrides(spec, Overrides(series_names={2: "Viet\u00f1am"}))[0]
+        result = check_completeness(spec)
+        self.assertEqual(result.status, NEEDS_INPUT)
+        self.assertEqual([m.field for m in result.missing], ["series_name[2]"])
+
+    def test_a_name_override_reaches_a_bar_less_series(self):
+        spec, notes = apply_overrides(with_bar_less(), Overrides(series_names={0: "Low income"}))
+        self.assertEqual(spec.series[0].name, "Low income")
+        self.assertTrue(spec.series[0].no_visible_bars)
+
+    def test_skipped_legend_entries_are_explained_and_never_block(self):
+        spec = with_bar_less(flags=["legend_entry_skipped:low_confidence:Ghost",
+                                    "legend_entry_skipped:bars_not_settled:Zed"])
+        result = check_completeness(spec)
+        self.assertEqual(result.status, READY)
+        self.assertIn("Legend entry 'Ghost' was not added to the key: its swatch, label or text was "
+                      "not read confidently enough.", result.notes)
+        self.assertTrue(any("'Zed'" in note and "could not all be matched" in note for note in result.notes))
+
+    def test_ordinary_specs_have_no_new_notes(self):
+        self.assertEqual(check_completeness(make_spec()).notes, [])
+        self.assertEqual(check_completeness(make_spec(series=two_series())).notes, [])

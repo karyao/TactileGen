@@ -33,6 +33,9 @@ DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
 UNREADABLE_CATEGORY_CONFIDENCE = 0.1
 RESCUE_CONFIDENCE = 0.2
+# A legend entry no bar matched becomes a series with no visible bars only when its
+# swatch box, label box and OCR text are all read at least this confidently (GUESS).
+LEGEND_ENTRY_MIN_CONFIDENCE = 0.5
 RESCUE_STRIP_FRACTION = 0.5   # central share of the bar width that is probed
 RESCUE_ROW_FRACTION = 0.6     # share of strip pixels that must match for a row to count
 _LUMA = np.array([0.299, 0.587, 0.114])
@@ -330,6 +333,59 @@ def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: s
     return text, detection
 
 
+def _bar_less_series(pending, entries, frame, texts, rgb, legend, taken_names, n_categories):
+    """Series with no visible bars for legend entries no bar matched.
+
+    Returns ``(added, skipped)``: ``added`` is ``(legend position, SeriesSpec)`` pairs and
+    ``skipped`` has one ``legend_entry_skipped:<reason>:<text>`` flag per entry that failed a
+    guard: the text was unreadable, the swatch, label or text confidence was below
+    ``LEGEND_ENTRY_MIN_CONFIDENCE``, the swatch lay outside the legend box, the name repeated
+    another series, or the swatch colour could not be sampled.
+    """
+    by_id = {detection.id: detection for detection in frame.detections}
+    position = {(entry.swatch_id, entry.label_id): index for index, entry in enumerate(entries)}
+    names = {name.casefold() for name in taken_names if name}
+    added, skipped = [], []
+    for entry in pending:
+        swatch, label = by_id[entry.swatch_id], by_id[entry.label_id]
+        text, text_confidence = texts.get(entry.label_id, ("", 0.0))
+        colour = None if not text else _sample_rgb(rgb, swatch)
+        if not text:
+            reason = "unreadable_text"
+        elif min(swatch.confidence, label.confidence, text_confidence) < LEGEND_ENTRY_MIN_CONFIDENCE:
+            reason = "low_confidence"
+        elif legend is not None and not _inside(_centre(swatch), legend, 4, 4):
+            reason = "outside_legend"
+        elif text.casefold() in names:
+            reason = "duplicate_name"
+        elif colour is None:
+            reason = "unreadable_swatch"
+        else:
+            reason = None
+        if reason is not None:
+            skipped.append(f"legend_entry_skipped:{reason}:{text or entry.label_id}")
+            continue
+        names.add(text.casefold())
+        added.append((position[(entry.swatch_id, entry.label_id)],
+                      SeriesSpec(text, _hex(colour), [None] * n_categories, no_visible_bars=True)))
+    return added, skipped
+
+
+def _in_legend_order(series, identities, entries, added):
+    """Merge bar-less series into ``series`` so the key follows the legend order.
+
+    Series with bars keep their left-to-right bar order. When that order matches their legend
+    order, every series is returned in legend order. When it does not, the bar order is kept
+    and the bar-less series follow in legend order; the second result is then True.
+    """
+    position = {(entry.swatch_id, entry.label_id): index for index, entry in enumerate(entries)}
+    visible = [position.get(identity[:2]) if identity else None for identity in identities]
+    if all(p is not None for p in visible) and visible == sorted(visible):
+        merged = sorted([*zip(visible, series), *added], key=lambda item: item[0])
+        return [item for _, item in merged], False
+    return [*series, *(item for _, item in sorted(added, key=lambda pair: pair[0]))], True
+
+
 def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      min_confidence: float = MIN_CONFIDENCE,
                      rescue_bars: bool = True,
@@ -502,8 +558,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         for swatch_id, identities in identities_by_swatch.items()
         if len(identities) > 1
     }
-    grouped: list[tuple[list[int], str | None]] = [
-        (members, None if identity[0] in conflicting_swatches else identity[2])
+    grouped: list[tuple[list[int], str | None, tuple[str, str, str] | None]] = [
+        (members, None if identity[0] in conflicting_swatches else identity[2], identity)
         for identity, members in matched_groups.items()
     ]
     if unresolved:
@@ -511,12 +567,13 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             [bar_colors[index] for index in unresolved], seeds
         )
         grouped.extend(
-            ([unresolved[local_index] for local_index in members], None)
+            ([unresolved[local_index] for local_index in members], None, None)
             for members in fallback_clusters
         )
     grouped.sort(key=lambda item: min(item[0]))
-    clusters = [members for members, _ in grouped]
-    cluster_names = [name for _, name in grouped]
+    clusters = [members for members, _, _ in grouped]
+    cluster_names = [name for _, name, _ in grouped]
+    cluster_identities = [identity for _, _, identity in grouped]
     cluster_centre = [
         tuple(statistics.median(bar_colors[k][ch] for k in members) for ch in range(3))
         if bar_colors[members[0]] is not None else None
@@ -593,6 +650,31 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     if swatches:
         pair_conf = [d.confidence for d in swatches]
         confidence["series"] = round(statistics.mean(pair_conf), 4)
+
+    # Legend entries that no bar matched are series with no visible bars. They are
+    # added only when every bar in the chart was matched to an entry, so an entry
+    # whose bars were merely hard to match can never become a phantom series.
+    used_swatches = {identity[0] for identity in matched_groups}
+    used_labels = {identity[1] for identity in matched_groups}
+    pending = [entry for entry in legend_mapping.entries
+               if entry.swatch_id not in used_swatches and entry.label_id not in used_labels]
+    if pending:
+        settled = (bool(matched_groups) and not unresolved
+                   and not conflicting_swatches and not ambiguous_series)
+        added: list[tuple[int, SeriesSpec]] = []
+        if settled:
+            added, skipped = _bar_less_series(
+                pending, legend_mapping.entries, frame, texts, rgb, legend,
+                [s.name for s in series], len(categories))
+        else:
+            skipped = [f"legend_entry_skipped:bars_not_settled:{entry.name or entry.label_id}"
+                       for entry in pending]
+        flags.extend(skipped)
+        if added:
+            series, reordered = _in_legend_order(
+                series, cluster_identities, legend_mapping.entries, added)
+            if reordered:
+                flags.append("legend_order_differs")
 
     # titles
     title, title_box = _title("chart_title", roles, texts, flags, confidence,

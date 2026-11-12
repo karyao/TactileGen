@@ -651,3 +651,89 @@ class SvgTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoVisibleBarsTest(unittest.TestCase):
+    """Legend entries with no visible bars are keyed, noted, and draw no bars."""
+
+    def chart(self, n_categories=4):
+        categories = tuple(str(2000 + j) for j in range(n_categories))
+        return VerticalBarChart(
+            "demo/legend.png", "Net energy imports", "Years", "Imports",
+            categories,
+            (BarSeries("Low & middle income", (), has_bars=False),
+             BarSeries("Kenya", tuple(13.0 + j for j in range(n_categories))),
+             BarSeries("Vietnam", (), has_bars=False)))
+
+    def note_text(self, layout):
+        return " ".join(label.text for label in layout.labels if label.role == "note")
+
+    def test_every_legend_entry_has_a_key_sample_and_braille_name_in_order(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        samples = sorted(layout.key_samples, key=lambda s: s.y)
+        self.assertEqual([s.series_index for s in samples], [0, 1, 2])
+        series_keys = [l for l in layout.labels if l.role == "key" and str(l.owner_id).startswith("key-sample")]
+        self.assertEqual([l.text for l in series_keys], ["Low & middle income", "Kenya", "Vietnam"])
+        self.assertEqual(len(set(layout.series_textures)), 3)
+        braille = [to_unicode(label.cells) for label in layout.labels if label.id == "key-0"]
+        self.assertEqual(braille, [to_unicode(to_braille("Low & middle income"))])
+
+    def test_only_series_with_bars_draw_bars_and_take_bar_slots(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        self.assertEqual({bar.series_index for bar in layout.bars}, {1})
+        self.assertEqual(len(layout.bars), 4)
+        solo = VerticalBarChart("demo/solo.png", "Net energy imports", "Years", "Imports",
+                                self.chart().categories, (self.chart().series[1],))
+        self.assertAlmostEqual(layout.bars[0].width, layout_vertical_bar_chart(solo).bars[0].width)
+        self.assertEqual(layout.bars[1].texture, layout.series_textures[1])
+
+    def test_the_transcribers_note_names_the_entries_without_saying_zero(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        note = self.note_text(layout)
+        self.assertEqual(note, "No bars are visible for: Low & middle income, Vietnam.")
+        self.assertNotIn("zero", note.lower())
+        note_labels = [l for l in layout.labels if l.role == "note"]
+        self.assertEqual(to_unicode(note_labels[0].cells)[:1], to_unicode(TN_OPEN)[:1])
+        first_key_y = min(l.y for l in layout.labels if str(l.owner_id).startswith("key-sample"))
+        self.assertTrue(all(l.y < first_key_y for l in note_labels))      # notes come before the key
+
+    def test_the_layout_passes_every_rule(self):
+        violations = [v for v in check_layout(layout_vertical_bar_chart(self.chart()))
+                      if v.rule.id != "overview_first"]
+        self.assertEqual(violations, [])
+
+    def test_a_chart_with_bars_for_every_series_is_laid_out_as_before(self):
+        plain = VerticalBarChart("demo/p.png", "T", "X", "Y", ("a", "b", "c"),
+                                 (BarSeries("A", (1.0, 2.0, 3.0)), BarSeries("B", (3.0, 2.0, 1.0))))
+        layout = layout_vertical_bar_chart(plain)
+        self.assertEqual(len(layout.bars), 6)
+        self.assertNotIn("note", {l.role for l in layout.labels})
+        self.assertEqual(layout, layout_vertical_bar_chart(replace(
+            plain, series=tuple(replace(s, has_bars=True) for s in plain.series))))
+
+    def test_a_single_unnamed_series_still_gets_no_key_and_no_note(self):
+        unnamed = VerticalBarChart("demo/u.png", "T", "X", "Y", ("a", "b"), (BarSeries(None, (1.0, 2.0)),))
+        layout = layout_vertical_bar_chart(unnamed)
+        self.assertEqual(layout.key_samples, ())
+        self.assertNotIn("note", {l.role for l in layout.labels})
+        self.assertFalse([l for l in layout.labels if str(l.owner_id).startswith("key-sample")])
+
+    def test_a_divided_graph_puts_the_note_and_every_key_on_the_key_page(self):
+        pages = layout_vertical_bar_chart_pages(self.chart(n_categories=30))
+        self.assertGreater(len(pages), 2)
+        key_page = pages[0]
+        self.assertEqual(key_page.page_kind, "key")
+        self.assertIn("No bars are visible for: Low & middle income, Vietnam.", self.note_text(key_page))
+        self.assertEqual(len(key_page.key_samples), 3)
+        for page in pages[1:]:
+            self.assertNotIn("No bars are visible", self.note_text(page))
+            self.assertEqual(page.key_samples, ())
+            self.assertEqual({bar.series_index for bar in page.bars}, {1})
+        for page in pages:
+            self.assertEqual([v for v in check_layout(page) if v.rule.id != "overview_first"], [])
+
+    def test_more_than_five_legend_entries_are_still_refused(self):
+        series = tuple(BarSeries(f"s{k}", (), has_bars=False) for k in range(5)) + (
+            BarSeries("with bars", (1.0, 2.0)),)
+        with self.assertRaises(ValueError):
+            layout_vertical_bar_chart(VerticalBarChart("demo/m.png", "T", "X", "Y", ("a", "b"), series))

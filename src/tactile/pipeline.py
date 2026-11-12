@@ -137,7 +137,8 @@ def _print_summary(spec: VerticalBarSpec, out) -> None:
         print(f"  {j}: {name}", file=out)
     print("Series:", file=out)
     for i, series in enumerate(spec.series):
-        print(f"  {i}: {series.name or '(single series, unnamed)'}", file=out)
+        shown = series.name or '(single series, unnamed)'
+        print(f"  {i}: {shown}" + (" (no visible bars)" if series.no_visible_bars else ""), file=out)
 
 
 def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,

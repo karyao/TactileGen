@@ -153,3 +153,63 @@ class ContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BarLessSeriesContractTest(unittest.TestCase):
+    def test_a_series_with_no_visible_bars_has_a_name_and_no_values(self):
+        from src.contracts import BarSeries, VerticalBarChart
+        series = BarSeries("Vietnam", (), has_bars=False)
+        chart = VerticalBarChart("demo/a.png", "T", "X", "Y", ("a", "b"),
+                                 (BarSeries("Kenya", (1.0, 2.0)), series))
+        self.assertFalse(chart.series[1].has_bars)
+        with self.assertRaises(ValueError):
+            BarSeries(None, (), has_bars=False)
+        with self.assertRaises(ValueError):
+            BarSeries("Vietnam", (0.0, 0.0), has_bars=False)
+
+    def test_a_chart_needs_at_least_one_series_with_bars(self):
+        from src.contracts import BarSeries, VerticalBarChart
+        with self.assertRaises(ValueError):
+            VerticalBarChart("demo/a.png", "T", "X", "Y", ("a",),
+                             (BarSeries("Vietnam", (), has_bars=False),))
+
+    def test_series_spec_with_no_visible_bars_cannot_carry_values(self):
+        from src.contracts import SeriesSpec, VerticalBarSpec, YAxisSpec
+        def spec(series):
+            return VerticalBarSpec("val/1.png", "T", "X", "Y", YAxisSpec(0, 1, [0, 1]), ["a", "b"],
+                                   series, False, [], {})
+        ok = spec([SeriesSpec("Vietnam", "#112233", [None, None], no_visible_bars=True)])
+        self.assertTrue(ok.series[0].no_visible_bars)
+        for bad in (SeriesSpec(None, "#112233", [None, None], no_visible_bars=True),
+                    SeriesSpec("V", "#112233", [0.0, None], no_visible_bars=True),
+                    SeriesSpec("V", "#112233", [None, None], [False, False], no_visible_bars=True)):
+            with self.assertRaises(ValueError):
+                spec([bad])
+
+    def test_legend_entries_are_validated_and_do_not_share_detections(self):
+        from src.contracts import LegendEntry, LegendMappingFrame
+        with self.assertRaises(ValueError):
+            LegendEntry("", "lb")
+        frame_ = LegendMappingFrame("val/1.png", (), (LegendEntry("s0", "l0", "A"), LegendEntry("s1", "l1")))
+        self.assertEqual(len(frame_.entries), 2)
+        with self.assertRaises(ValueError):
+            LegendMappingFrame("val/1.png", (), (LegendEntry("s0", "l0"), LegendEntry("s0", "l1")))
+        with self.assertRaises(ValueError):
+            LegendMappingFrame("val/1.png", (), ("not an entry",))
+        self.assertEqual(LegendMappingFrame("val/1.png", ()).entries, ())
+
+    def test_chart_json_round_trip_writes_has_bars_only_when_false(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from src.contract_io import load_vertical_bar_chart, write_vertical_bar_chart
+        from src.contracts import BarSeries, VerticalBarChart
+        chart = VerticalBarChart("demo/a.png", "T", "X", "Y", ("a", "b"),
+                                 (BarSeries("Kenya", (1.0, 2.0)), BarSeries("Vietnam", (), has_bars=False)))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "c.json"
+            write_vertical_bar_chart(path, chart)
+            data = json.loads(path.read_text())["series"]
+            self.assertNotIn("has_bars", data[0])
+            self.assertIs(data[1]["has_bars"], False)
+            self.assertEqual(load_vertical_bar_chart(path), chart)

@@ -345,6 +345,12 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
     return [single]
 
 
+def _no_bars_note(chart: VerticalBarChart) -> str | None:
+    """Transcriber's note naming legend entries with no visible bars (not "zero")."""
+    names = [series.name for series in chart.series if not series.has_bars]
+    return f"No bars are visible for: {', '.join(names)}." if names else None
+
+
 def _has_series_key(chart: VerticalBarChart) -> bool:
     """Several series always need a key; a single series only when the source
     chart had a legend naming it."""
@@ -371,7 +377,8 @@ def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
         return VerticalBarChart(
             chart.source_key, chart.title, chart.x_axis_title, chart.y_axis_title,
             tuple(names[i] for i in r),
-            tuple(BarSeries(s.name, tuple(s.values[i] for i in r)) for s in chart.series))
+            tuple(BarSeries(s.name, tuple(s.values[i] for i in r) if s.has_bars else (),
+                            s.has_bars) for s in chart.series))
 
     division = (f"This graph is divided by category into {n} parts with the same "
                 "scale on each part.")
@@ -520,8 +527,10 @@ def _key_page(chart: VerticalBarChart, transcriber_notes: tuple[str, ...]) -> Ta
     labels: list[BrailleLabel] = []
     samples: list[KeySample] = []
     notes: list[str] = []
+    no_bars = _no_bars_note(chart)
     y = _header(chart, usable, usable.y1, labels, samples, notes, show_title=True,
-                transcriber_notes=transcriber_notes, series_key=_has_series_key(chart))
+                transcriber_notes=(*transcriber_notes, no_bars) if no_bars else transcriber_notes,
+                series_key=_has_series_key(chart))
     if y > usable.y2:
         raise ValueError("the key page does not fit on one page")
     return TactileLayout(
@@ -549,12 +558,17 @@ def _layout(chart: VerticalBarChart, mode: str, *,
     values = [v for series in chart.series for v in series.values]
     if any(v < 0 for v in values):
         raise ValueError("negative bar values are not supported yet")
-    n_series, n_cat = len(chart.series), len(chart.categories)
-    if n_series > MAX_AREA_TEXTURES:
+    # Every series is keyed and has a texture; only series with bars take bar slots.
+    n_keyed, n_cat = len(chart.series), len(chart.categories)
+    n_series = sum(series.has_bars for series in chart.series)
+    if n_keyed > MAX_AREA_TEXTURES:
         raise ValueError(f"BANA §3.2.2 allows at most {MAX_AREA_TEXTURES} area textures; "
                          "this chart needs an alphabetic key or several graphics")
-    textures = TEXTURES[:n_series]
+    textures = TEXTURES[:n_keyed]
     has_key = _has_series_key(chart)
+    no_bars = _no_bars_note(chart)
+    if no_bars and show_series_key:
+        transcriber_notes = (*transcriber_notes, no_bars)
 
     usable = _usable_area()
     labels: list[BrailleLabel] = []
@@ -645,11 +659,12 @@ def _layout(chart: VerticalBarChart, mode: str, *,
     first_category_x = None
     for j, name in enumerate(chart.categories):
         group_x = plot_left + GROUP_GAP + j * (group_width + GROUP_GAP)
-        for s, series in enumerate(chart.series):
+        for slot, (s, series) in enumerate(
+                (s, series) for s, series in enumerate(chart.series) if series.has_bars):
             value = float(series.values[j])
             top = value_y(value)
             bar_x = (group_x + BAR_OUTLINE_WIDTH / 2
-                     + s * (bar_width + BAR_OUTLINE_WIDTH + BAR_GAP))
+                     + slot * (bar_width + BAR_OUTLINE_WIDTH + BAR_GAP))
             bars.append(Bar(f"bar-{s}-{j}", bar_x, top, bar_width,
                             axis_y - AXIS_WIDTH / 2 - top, textures[s], s, j, value))
         text = category_texts[j]
