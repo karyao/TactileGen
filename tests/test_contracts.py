@@ -28,6 +28,7 @@ from src.contracts import (
     VerticalBarChart,
     join_legend_assignments,
     join_text_regions,
+    validate_unit_interval,
 )
 from src.dataset.prepare_plotqa import CLASS_NAMES as ConverterClassNames
 
@@ -36,6 +37,17 @@ FIXTURES = Path(__file__).parent / "fixtures" / "contracts"
 
 
 class ContractTest(unittest.TestCase):
+    def test_unit_interval_validation_normalizes_and_rejects_invalid_values(self):
+        self.assertEqual(validate_unit_interval(0, "threshold"), 0.0)
+        self.assertEqual(validate_unit_interval(0.5, "threshold"), 0.5)
+        self.assertEqual(validate_unit_interval(1, "threshold"), 1.0)
+        for value in (True, "0.5", -0.1, 1.1, math.nan, math.inf, -math.inf):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError, "threshold must be a number from 0 to 1"
+                ):
+                    validate_unit_interval(value, "threshold")
+
     def test_legend_mapping_validates_statuses_and_exact_bar_coverage(self):
         frame = DetectionFrame("input/chart.png", 20, 20, (
             Detection("bar", "vertical_bar", Box(0, 0, 5, 10), 0.9),

@@ -70,7 +70,9 @@ belong to the model and end-to-end pipeline tasks.
 ## VerticalBarSpec (schema 0.2)
 
 `src/reconstruct.py` turns a `DetectionFrame`, OCR text and the image into a
-`VerticalBarSpec` with `reconstruct_vbar(frame, ocr_texts, image)`. Unlike
+`VerticalBarSpec`. Pass the in-memory legend result with
+`reconstruct_vbar(frame, ocr_texts, image, legend_mapping=mapping)`. When the
+mapping is omitted, reconstruction computes it from the same inputs. Unlike
 `VerticalBarChart`, titles may be `None`, series values may be `None`, and
 anything the interpreter could not resolve is listed in `flags` instead of
 raising. `ChartInterpretationError` is raised only when there are no bars, no

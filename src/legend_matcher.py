@@ -11,6 +11,7 @@ from src.contracts import (
     LegendBarAssignment,
     LegendMappingFrame,
     OCRFrame,
+    validate_unit_interval,
 )
 
 
@@ -292,15 +293,6 @@ def _candidate_error(bar, template) -> float:
     return min(1.0, max(0.0, error))
 
 
-def _validate_threshold(value: float, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be a number from 0 to 1")
-    value = float(value)
-    if not math.isfinite(value) or not 0 <= value <= 1:
-        raise ValueError(f"{name} must be a number from 0 to 1")
-    return value
-
-
 def _unavailable_scores(
     source_key: str, bars: list[Detection], status: str
 ) -> _LegendScores:
@@ -378,8 +370,8 @@ def _classify_legend_scores(
     scores: _LegendScores, *, max_error: float, min_margin: float
 ) -> LegendMappingFrame:
     """Apply acceptance thresholds to reusable color scores."""
-    max_error = _validate_threshold(max_error, "max_error")
-    min_margin = _validate_threshold(min_margin, "min_margin")
+    max_error = validate_unit_interval(max_error, "max_error")
+    min_margin = validate_unit_interval(min_margin, "min_margin")
     assignments = []
     for scored in scores.bars:
         if scored.unavailable_status is not None:

@@ -55,11 +55,18 @@ def validate_source_key(value: str) -> None:
         raise ValueError("source_key must be a relative, namespaced image path")
 
 
-def _confidence(value: float) -> None:
+def validate_unit_interval(value: float, name: str) -> float:
+    """Return a finite numeric value validated within the inclusive range 0 to 1."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("confidence must be a number from 0 to 1")
+        raise ValueError(f"{name} must be a number from 0 to 1")
+    value = float(value)
     if not math.isfinite(value) or not 0 <= value <= 1:
-        raise ValueError("confidence must be a number from 0 to 1")
+        raise ValueError(f"{name} must be a number from 0 to 1")
+    return value
+
+
+def _confidence(value: float) -> None:
+    validate_unit_interval(value, "confidence")
 
 
 @dataclass(frozen=True)

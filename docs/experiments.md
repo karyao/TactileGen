@@ -20,8 +20,12 @@ flowchart LR
     G --> DF["DetectionFrame"]
     DF -.-> H["OCR text regions"]
     F -.-> H
+    DF --> LM["Legend matcher"]
+    H --> LM
+    F --> LM
     DF -.-> I["Chart interpretation"]
     H -. "OCRFrame" .-> I
+    LM -. "LegendMappingFrame" .-> I
     I -. "VerticalBarChart" .-> J["Tactile renderer"]
     J -.-> K["Embosser-ready file"]
 ```

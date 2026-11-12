@@ -21,6 +21,7 @@ from src.contracts import (
     DetectionFrame,
     OCRFrame,
     RecognizedText,
+    validate_unit_interval,
 )
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
 from src.dataset.prepare_plotqa import png_size
@@ -378,15 +379,6 @@ def _backend(engine: str) -> OCRBackend:
     raise ValueError(f"Unsupported OCR engine: {engine}")
 
 
-def _unit_interval(value: float, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be a number from 0 to 1")
-    value = float(value)
-    if not math.isfinite(value) or not 0 <= value <= 1:
-        raise ValueError(f"{name} must be a number from 0 to 1")
-    return value
-
-
 def evaluate(
     *, annotations: Path, data_root: Path, split: str, output_dir: Path,
     track: str = "both", weights: Path = DEFAULT_WEIGHTS,
@@ -399,11 +391,11 @@ def evaluate(
         raise ValueError("track must be oracle, end_to_end, or both")
     if engine not in {"tesseract", "rapidocr"}:
         raise ValueError("engine must be tesseract or rapidocr")
-    confidence = _unit_interval(confidence, "confidence")
-    nms_iou = _unit_interval(nms_iou, "nms_iou")
-    match_iou = _unit_interval(match_iou, "match_iou")
-    max_error = _unit_interval(max_error, "max_error")
-    min_margin = _unit_interval(min_margin, "min_margin")
+    confidence = validate_unit_interval(confidence, "confidence")
+    nms_iou = validate_unit_interval(nms_iou, "nms_iou")
+    match_iou = validate_unit_interval(match_iou, "match_iou")
+    max_error = validate_unit_interval(max_error, "max_error")
+    min_margin = validate_unit_interval(min_margin, "min_margin")
     charts = load_truth_charts(annotations, data_root, split, limit)
     run_oracle = track in {"oracle", "both"}
     run_end = track in {"end_to_end", "both"}
