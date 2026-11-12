@@ -320,6 +320,35 @@ def test_mapping_keeps_nearly_identical_series_colours_separate():
     assert "series_ambiguous" not in spec.flags
 
 
+def test_mapped_close_colours_flow_to_tactile_svg():
+    from src.tactile.completeness import (
+        READY,
+        Overrides,
+        apply_overrides,
+        check_completeness,
+        spec_to_chart,
+    )
+    from src.tactile.layout import layout_vertical_bar_chart_pages
+    from src.tactile.svg import render_svg
+
+    chart = _grouped(((30, 40, 200), (34, 44, 203)))
+    frame, mapping = _matched_mapping(chart)
+    spec = reconstruct_vbar(
+        frame, chart.texts, chart.image, legend_mapping=mapping
+    )
+    spec, _ = apply_overrides(spec, Overrides(
+        title="Sales by group",
+        x_axis_title="Group",
+        y_axis_title="Sales",
+    ))
+
+    assert check_completeness(spec).status == READY
+    pages = layout_vertical_bar_chart_pages(spec_to_chart(spec))
+    assert len(pages) == 1
+    svg = render_svg(pages[0])
+    assert "<svg" in svg and "</svg>" in svg
+
+
 def test_mapping_remains_authoritative_for_low_confidence_swatches():
     chart = _grouped(((30, 40, 200), (60, 180, 60)))
     chart.detections = [

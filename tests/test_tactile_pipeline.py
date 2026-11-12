@@ -38,6 +38,36 @@ class Pipeline(unittest.TestCase):
         self.assertEqual((code, written), (0, True))
         self.assertIn("0: 2001", out)
 
+    def test_analyse_passes_legend_mapping_to_reconstruction(self):
+        image = mock.sentinel.image
+        frame = mock.sentinel.frame
+        ocr = mock.sentinel.ocr
+        mapping = mock.sentinel.mapping
+        reconstructed = make_spec()
+        backend = mock.sentinel.backend
+
+        with (
+            mock.patch("cv2.imread", return_value=image),
+            mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
+            mock.patch("src.detection.run_detection", return_value=frame),
+            mock.patch("src.ocr.run_ocr", return_value=ocr),
+            mock.patch("src.tesseract_ocr.TesseractBackend", return_value=backend),
+            mock.patch(
+                "src.legend_matcher.match_legend_to_bars", return_value=mapping
+            ) as matcher,
+            mock.patch(
+                "src.reconstruct.reconstruct_vbar", return_value=reconstructed
+            ) as reconstruct,
+            mock.patch.object(pipeline, "cut_off_flags", return_value=[]),
+        ):
+            result = pipeline.analyse(Path("chart.png"), Path("weights.pt"))
+
+        matcher.assert_called_once_with(image, frame, ocr)
+        reconstruct.assert_called_once_with(
+            frame, ocr, image, legend_mapping=mapping
+        )
+        self.assertEqual(result, (reconstructed, None, frame))
+
     def test_unconfirmed_non_tty_warns_and_continues(self):
         code, _, err, written = self.go(make_spec())
         self.assertEqual((code, written), (0, True))

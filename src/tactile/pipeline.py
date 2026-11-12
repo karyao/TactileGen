@@ -30,10 +30,14 @@ EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 
 
 
 def analyse(image_path: Path, weights: Path):
-    """Run YOLO, OCR and reconstruction. Returns ``(spec, None, frame)`` or ``(None, error, frame)``."""
+    """Run YOLO, OCR, legend matching and reconstruction.
+
+    Returns ``(spec, None, frame)`` or ``(None, error, frame)``.
+    """
     import cv2
 
     from src.detection import load_model, run_detection
+    from src.legend_matcher import match_legend_to_bars
     from src.ocr import run_ocr
     from src.reconstruct import reconstruct_vbar
     from src.tesseract_ocr import TesseractBackend
@@ -44,7 +48,10 @@ def analyse(image_path: Path, weights: Path):
     frame = run_detection(load_model(weights), image_path)
     ocr = run_ocr(image, frame, TesseractBackend(), "eng")
     try:
-        spec = reconstruct_vbar(frame, ocr, image)
+        legend_mapping = match_legend_to_bars(image, frame, ocr)
+        spec = reconstruct_vbar(
+            frame, ocr, image, legend_mapping=legend_mapping
+        )
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:
         return None, error, frame
