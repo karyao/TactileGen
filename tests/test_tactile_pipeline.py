@@ -202,6 +202,26 @@ class Pipeline(unittest.TestCase):
             self.assertEqual((code, written), (3, False))
             self.assertIn("decimal point may have been lost", out)
 
+    def test_single_series_key_follows_the_legend(self):
+        def svg(series):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "out.svg"
+                args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+                code = pipeline.run(args, analyse_fn=lambda *_: (make_spec(series=series), None, None),
+                                    input_fn=input, stdin_is_tty=False,
+                                    out=io.StringIO(), err=io.StringIO())
+                self.assertEqual(code, 0)
+                return path.read_text()
+
+        values = [10.0, 20.0, 30.0]
+        named = svg([SeriesSpec("Kenya", "#112233", values)])
+        unnamed = svg([SeriesSpec(None, "#112233", values)])
+        two = svg([SeriesSpec("A", "#112233", values), SeriesSpec("B", "#445566", values)])
+        self.assertIn("key-sample-0", named)
+        self.assertNotIn("key-sample", unnamed)
+        self.assertIn("key-sample-0", two)
+        self.assertIn("key-sample-1", two)
+
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
         self.assertEqual(code, 1)

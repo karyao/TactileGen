@@ -345,6 +345,12 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
     return [single]
 
 
+def _has_series_key(chart: VerticalBarChart) -> bool:
+    """Several series always need a key; a single series only when the source
+    chart had a legend naming it."""
+    return len(chart.series) > 1 or chart.series[0].name is not None
+
+
 def _split(count: int, parts: int) -> list[range]:
     """``parts`` consecutive ranges of near-equal size covering ``count`` items."""
     base, extra = divmod(count, parts)
@@ -369,10 +375,10 @@ def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
 
     division = (f"This graph is divided by category into {n} parts with the same "
                 "scale on each part.")
-    # With several series the key goes on its own page before the graph pages
+    # With a series key it goes on its own page before the graph pages
     # (§6.6.6.4), together with the title and the division note, so that the
     # graph pages keep their height for the plot.
-    key_page = len(chart.series) > 1
+    key_page = _has_series_key(chart)
 
     def notes(k: int, r: range) -> tuple[str, ...]:
         span = names[r[0]] if len(r) == 1 else f"{names[r[0]]} to {names[r[-1]]}"
@@ -515,7 +521,7 @@ def _key_page(chart: VerticalBarChart, transcriber_notes: tuple[str, ...]) -> Ta
     samples: list[KeySample] = []
     notes: list[str] = []
     y = _header(chart, usable, usable.y1, labels, samples, notes, show_title=True,
-                transcriber_notes=transcriber_notes, series_key=len(chart.series) > 1)
+                transcriber_notes=transcriber_notes, series_key=_has_series_key(chart))
     if y > usable.y2:
         raise ValueError("the key page does not fit on one page")
     return TactileLayout(
@@ -548,6 +554,7 @@ def _layout(chart: VerticalBarChart, mode: str, *,
         raise ValueError(f"BANA §3.2.2 allows at most {MAX_AREA_TEXTURES} area textures; "
                          "this chart needs an alphabetic key or several graphics")
     textures = TEXTURES[:n_series]
+    has_key = _has_series_key(chart)
 
     usable = _usable_area()
     labels: list[BrailleLabel] = []
@@ -556,7 +563,7 @@ def _layout(chart: VerticalBarChart, mode: str, *,
     notes: list[str] = []
     y = _header(chart, usable, usable.y1, labels, samples, notes,
                 show_title=show_title, transcriber_notes=transcriber_notes,
-                series_key=show_series_key and n_series > 1)
+                series_key=show_series_key and has_key)
     if keyed:
         # Keyed labels in the order they appear, left to right (§5.7.3).
         for j, (symbol, name) in enumerate(zip(category_texts, chart.categories)):
@@ -565,7 +572,7 @@ def _layout(chart: VerticalBarChart, mode: str, *,
                                      text, usable.x1 + (cell - 1) * CELL_PITCH, y,
                                      category_index=j))
                 y += LINE_PITCH
-    if (show_series_key and n_series > 1) or keyed:
+    if (show_series_key and has_key) or keyed:
         y += LINE_PITCH
 
     # Reserve the bottom: category labels, then the horizontal heading.
@@ -676,5 +683,5 @@ def _layout(chart: VerticalBarChart, mode: str, *,
         lines=tuple(lines), bars=tuple(bars), labels=tuple(labels),
         key_samples=tuple(samples), category_count=n_cat,
         series_textures=textures, x_label_mode=mode, notes=tuple(notes),
-        series_key_elsewhere=not show_series_key and n_series > 1,
+        series_key_elsewhere=not show_series_key and has_key,
     )

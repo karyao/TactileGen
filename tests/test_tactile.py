@@ -125,6 +125,21 @@ class LayoutTest(unittest.TestCase):
         self.assertEqual([s.series_index for s in layout.key_samples], [0, 1])
         self.assertTrue(all(s.bounds.y2 < layout.plot.y1 for s in layout.key_samples))
 
+    def test_single_series_with_a_name_gets_a_key(self):
+        chart = load("rainfall")
+        named = replace(chart, series=(replace(chart.series[0], name="Kenya"),))
+        layout = layout_vertical_bar_chart(named)
+        self.assertEqual([s.series_index for s in layout.key_samples], [0])
+        self.assertTrue(all(s.bounds.y2 < layout.plot.y1 for s in layout.key_samples))
+        self.assertEqual(layout.key_samples[0].texture, layout.bars[0].texture)
+        self.assertEqual([l.text for l in layout.labels if l.role == "key"], ["Kenya"])
+        self.assertEqual(rule_ids(layout), set())
+
+    def test_single_series_without_a_name_gets_no_key(self):
+        layout = layout_vertical_bar_chart(load("rainfall"))
+        self.assertEqual(layout.key_samples, ())
+        self.assertEqual([l for l in layout.labels if l.role == "key"], [])
+
     def test_crowded_chart_is_reported_not_dropped(self):
         layout = layout_vertical_bar_chart(load("crowded"))
         self.assertEqual(len(layout.bars), 36)
