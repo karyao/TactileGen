@@ -35,8 +35,8 @@ LABEL_GAP = LABEL_MIN_GAP
 # Clearance between the vertical heading and the top value label: the 1/8
 # inch label-to-component minimum (§3.4.3.12). §6.6.6.6 needs no blank line
 # after the heading.
-# changed it to 3/16  to get more room between the label and other values
-Y_HEADING_CLEARANCE = 3 / 16 * MM_PER_INCH
+# changed it to 1/4 inch  to get more room between the label and other values
+Y_HEADING_CLEARANCE = 1 / 4 * MM_PER_INCH
 # Gaps between bars in a set and between sets (and before the first set),
 # measured between the bars' raised outer edges.
 # Bars in a set are joined: §6.6.6.7 says bars are "separated or joined in

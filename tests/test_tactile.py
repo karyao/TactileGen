@@ -342,8 +342,8 @@ class YHeadingClearanceTest(unittest.TestCase):
             layout = layout_vertical_bar_chart(load("rainfall"))
         self.assertAlmostEqual(self.gap(layout), larger)
 
-    def test_clearance_is_the_bana_minimum(self):
-        self.assertEqual(constants.Y_HEADING_CLEARANCE, constants.LABEL_MIN_GAP)
+    def test_clearance_is_at_least_the_bana_minimum(self):
+        self.assertGreaterEqual(constants.Y_HEADING_CLEARANCE, constants.LABEL_MIN_GAP)
 
 
 class RuleTest(unittest.TestCase):
