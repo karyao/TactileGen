@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import json
 import logging
 import re
 import tempfile
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from src.borealis import BOREALIS_CSS, borealis_theme
 from src.contract_io import write_ocr_frame
-from src.contracts import DetectionFrame, LegendMappingFrame, OCRFrame
+from src.contracts import (
+    ChartInterpretationError,
+    DetectionFrame,
+    LegendMappingFrame,
+    OCRFrame,
+    VerticalBarSpec,
+)
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
 from src.legend_matcher import match_legend_to_bars
 from src.ocr import run_ocr
@@ -26,6 +33,13 @@ from src.presentation import (
     ocr_rows,
     render_detection_overlay,
     summarize_detections,
+)
+from src.reconstruct import reconstruct_vbar
+from src.tactile.completeness import (
+    Completeness,
+    check_completeness,
+    completeness_from_error,
+    cut_off_flags,
 )
 from src.tesseract_ocr import TesseractBackend
 
@@ -46,6 +60,10 @@ LEGEND_WARNING = (
     "Legend matching was unavailable. Detection and OCR results are still shown. "
     "Check the terminal for details."
 )
+RECONSTRUCTION_WARNING = (
+    "Chart reconstruction was unavailable. Detection, OCR, and legend results "
+    "that completed successfully are still shown. Check the terminal for details."
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -64,6 +82,9 @@ class AnalysisResult:
     ocr_warning: str | None
     legend_mapping: LegendMappingFrame | None = None
     legend_warning: str | None = None
+    spec: VerticalBarSpec | None = None
+    completeness: Completeness | None = None
+    reconstruction_warning: str | None = None
 
 
 def ready_status() -> str:
@@ -91,6 +112,27 @@ def complete_status(detection_count: int, ocr_count: int | None = None) -> str:
 
 def alert_message(message: str) -> str:
     return f'<div role="alert">{message}</div>'
+
+
+def completeness_summary(result: Completeness) -> str:
+    """Render a compact, readable reconstruction assessment."""
+    labels = {
+        "ready": "Ready",
+        "needs_input": "Needs input",
+        "cannot_build": "Cannot build",
+    }
+    lines = [f"### Reconstruction: {labels.get(result.status, result.status)}"]
+    if result.notes:
+        lines.extend(("", "**Notes**", *(f"- {note}" for note in result.notes)))
+    if result.missing:
+        lines.extend((
+            "",
+            "**Missing or unconfirmed text**",
+            *(f"- `{item.field}`: {item.reason}" for item in result.missing),
+        ))
+    if result.blockers:
+        lines.extend(("", "**Blockers**", *(f"- {item}" for item in result.blockers)))
+    return "\n".join(lines)
 
 
 def _import_gradio():
@@ -208,7 +250,30 @@ def analyze_image(
     except Exception:
         LOGGER.exception("Legend-to-bar matching failed")
         legend_warning = LEGEND_WARNING
-    _report_progress(progress, 0.90, "Rendering annotations")
+    _report_progress(progress, 0.90, "Reconstructing chart values")
+    spec = None
+    completeness = None
+    reconstruction_warning = None
+    if ocr_frame is None or legend_mapping is None:
+        reconstruction_warning = RECONSTRUCTION_WARNING
+    else:
+        try:
+            reconstructed = reconstruct_vbar(
+                frame, ocr_frame, image, legend_mapping=legend_mapping
+            )
+            candidate = replace(
+                reconstructed,
+                flags=[*reconstructed.flags, *cut_off_flags(frame, image)],
+            )
+            assessment = check_completeness(candidate)
+            spec = candidate
+            completeness = assessment
+        except ChartInterpretationError as exc:
+            completeness = completeness_from_error(exc, frame)
+        except Exception:
+            LOGGER.exception("Chart reconstruction failed")
+            reconstruction_warning = RECONSTRUCTION_WARNING
+    _report_progress(progress, 0.95, "Rendering annotations")
     overlay = render_detection_overlay(image, frame, legend_mapping=legend_mapping)
     rgb_overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
     _report_progress(progress, 1.0, "Analysis complete")
@@ -223,6 +288,9 @@ def analyze_image(
         ocr_warning=ocr_warning,
         legend_mapping=legend_mapping,
         legend_warning=legend_warning,
+        spec=spec,
+        completeness=completeness,
+        reconstruction_warning=reconstruction_warning,
     )
 
 
@@ -230,6 +298,15 @@ def _download_path(root: Path, image_path: str | Path, ocr: OCRFrame) -> Path:
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(image_path).stem).strip("._-")
     path = root / f"{stem or 'chart'}_ocr_{uuid.uuid4().hex}.json"
     write_ocr_frame(path, ocr)
+    return path
+
+
+def _spec_download_path(
+    root: Path, image_path: str | Path, spec: VerticalBarSpec
+) -> Path:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(image_path).stem).strip("._-")
+    path = root / f"{stem or 'chart'}_spec_{uuid.uuid4().hex}.json"
+    path.write_text(json.dumps(asdict(spec), indent=2) + "\n", encoding="utf-8")
     return path
 
 
@@ -250,8 +327,12 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
         ocr_table: list[list[Any]] | None = None,
         ocr_download_path: Path | None = None,
         legend_table: list[list[Any]] | None = None,
+        completeness_text: str | None = None,
+        spec_json: dict[str, Any] | None = None,
+        spec_download_path: Path | None = None,
         ocr_warning: str | None = None,
         legend_warning: str | None = None,
+        reconstruction_warning: str | None = None,
         error_message: str | None = None,
     ):
         return (
@@ -266,12 +347,26 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             ),
             gr.update(value=legend_table or [], visible=legend_table is not None),
             gr.update(
+                value=completeness_text or "",
+                visible=completeness_text is not None,
+            ),
+            gr.update(value=spec_json or {}, visible=spec_json is not None),
+            gr.update(
+                value=spec_download_path,
+                visible=spec_download_path is not None,
+            ),
+            gr.update(
                 value=alert_message(ocr_warning) if ocr_warning else "",
                 visible=ocr_warning is not None,
             ),
             gr.update(
                 value=alert_message(legend_warning) if legend_warning else "",
                 visible=legend_warning is not None,
+            ),
+            gr.update(
+                value=(alert_message(reconstruction_warning)
+                       if reconstruction_warning else ""),
+                visible=reconstruction_warning is not None,
             ),
             gr.update(
                 value=alert_message(error_message) if error_message else "",
@@ -317,6 +412,11 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 if result.legend_mapping is not None else []
             )
             show_mapping = result.legend_mapping is not None and bool(mapping_rows)
+            spec_data = asdict(result.spec) if result.spec is not None else None
+            spec_download = (
+                _spec_download_path(artifact_root, image_path, result.spec)
+                if result.spec is not None else None
+            )
             return result_updates(
                 complete_status(result.detection_count, ocr_count),
                 summary=result.summary,
@@ -324,8 +424,15 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 ocr_table=rows if result.ocr_frame is not None else None,
                 ocr_download_path=download,
                 legend_table=mapping_rows if show_mapping else None,
+                completeness_text=(
+                    completeness_summary(result.completeness)
+                    if result.completeness is not None else None
+                ),
+                spec_json=spec_data,
+                spec_download_path=spec_download,
                 ocr_warning=result.ocr_warning,
                 legend_warning=result.legend_warning,
+                reconstruction_warning=result.reconstruction_warning,
             )
         except UploadValidationError as exc:
             LOGGER.info("Rejected upload: %s", exc)
@@ -361,13 +468,14 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                     "# TactileGen\n\n"
                     "Inspect the regions detected by YOLO in a vertical categorical "
                     "bar chart, read detected text, and associate legend series "
-                    "with bars."
+                    "with bars. Reconstruct chart labels, series, and numeric values "
+                    "when the image contains enough information."
                 )
                 gr.Markdown(
                     "**Scope:** Vertical categorical bar charts only. The detector "
-                    "returns chart elements, bounding boxes, OCR text, and provisional "
-                    "legend-to-bar matches. It does not reconstruct numeric values "
-                    "or trends.",
+                    "returns chart elements, bounding boxes, OCR text, provisional "
+                    "legend-to-bar matches, and a completeness-checked reconstruction. "
+                    "Incomplete results remain available for inspection.",
                     elem_classes="borealis-scope",
                 )
 
@@ -494,10 +602,32 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         wrap=True,
                         elem_classes="borealis-legend-table",
                     )
+                    completeness_output = gr.Markdown(
+                        "",
+                        label="Reconstruction completeness",
+                        visible=False,
+                        elem_classes="borealis-summary",
+                    )
+                    spec_output = gr.JSON(
+                        value={},
+                        label="Reconstructed VerticalBarSpec",
+                        visible=False,
+                        elem_classes="borealis-spec-json",
+                    )
+                    spec_download = gr.DownloadButton(
+                        "Download VerticalBarSpec JSON",
+                        value=None,
+                        visible=False,
+                        variant="secondary",
+                        elem_classes="borealis-spec-download",
+                    )
                     ocr_warning_output = gr.HTML(
                         "", visible=False, elem_classes="borealis-error"
                     )
                     legend_warning_output = gr.HTML(
+                        "", visible=False, elem_classes="borealis-error"
+                    )
+                    reconstruction_warning_output = gr.HTML(
                         "", visible=False, elem_classes="borealis-error"
                     )
                     error_output = gr.HTML(
@@ -514,8 +644,12 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 ocr_output,
                 ocr_download,
                 legend_output,
+                completeness_output,
+                spec_output,
+                spec_download,
                 ocr_warning_output,
                 legend_warning_output,
+                reconstruction_warning_output,
                 error_output,
             ],
             queue=False,
@@ -533,8 +667,12 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             ocr_output,
             ocr_download,
             legend_output,
+            completeness_output,
+            spec_output,
+            spec_download,
             ocr_warning_output,
             legend_warning_output,
+            reconstruction_warning_output,
             error_output,
         ]
         start = analyze_button.click(

@@ -2,8 +2,10 @@
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -15,12 +17,16 @@ from src.borealis import BOREALIS_CSS
 from src.contract_io import load_ocr_frame
 from src.contracts import (
     Box,
+    ChartInterpretationError,
     Detection,
     DetectionFrame,
     LegendBarAssignment,
     LegendMappingFrame,
     OCRFrame,
     RecognizedText,
+    SeriesSpec,
+    VerticalBarSpec,
+    YAxisSpec,
 )
 from src.gradio_app import (
     AnalysisResult,
@@ -33,17 +39,43 @@ from src.gradio_app import (
     MAX_UPLOAD_BYTES,
     LEGEND_WARNING,
     OCR_WARNING,
+    RECONSTRUCTION_WARNING,
     UploadValidationError,
     alert_message,
     analyze_image,
     analyzing_status,
     build_app,
     complete_status,
+    completeness_summary,
     decode_upload,
     main,
     parse_args,
     ready_status,
 )
+from src.tactile.completeness import (
+    CANNOT_BUILD,
+    NEEDS_INPUT,
+    READY,
+    Completeness,
+    MissingItem,
+)
+
+
+def make_spec(**changes):
+    fields = dict(
+        source_key="input/chart.png",
+        title="Sales",
+        x_axis_title="Year",
+        y_axis_title="Revenue",
+        y_axis=YAxisSpec(0, 100, [0, 50, 100]),
+        categories=["2024"],
+        series=[SeriesSpec(None, "#112233", [50.0])],
+        bars_adjacent=False,
+        flags=[],
+        confidence={},
+    )
+    fields.update(changes)
+    return VerticalBarSpec(**fields)
 
 
 class GradioAppTest(unittest.TestCase):
@@ -122,7 +154,77 @@ class GradioAppTest(unittest.TestCase):
             self.assertIn("Detected 0 chart elements.", result.summary)
             self.assertIn("OCR attempted 0 text regions", result.summary)
             self.assertEqual(tuple(result.overlay_rgb[0, 0]), (30, 20, 10))
-            self.assertEqual(progress.call_count, 6)
+            self.assertEqual(progress.call_count, 7)
+
+    def test_reconstruction_reuses_results_and_applies_edge_completeness(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image_path = self._image(Path(temporary))
+            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            ocr = OCRFrame("input/chart.png", ())
+            mapping = LegendMappingFrame("input/chart.png", ())
+            reconstructed = make_spec()
+            with patch("src.gradio_app.run_detection", return_value=frame), \
+                 patch("src.gradio_app.run_ocr", return_value=ocr), \
+                 patch("src.gradio_app.match_legend_to_bars", return_value=mapping), \
+                 patch("src.gradio_app.reconstruct_vbar",
+                       return_value=reconstructed) as reconstruct, \
+                 patch("src.gradio_app.cut_off_flags",
+                       return_value=["title_cut_off"]) as edge_flags:
+                result = analyze_image(
+                    object(), image_path, 0.25, 0.70, ocr_backend=object()
+                )
+
+            args = reconstruct.call_args.args
+            self.assertEqual(args[:2], (frame, ocr))
+            self.assertEqual(reconstruct.call_args.kwargs, {"legend_mapping": mapping})
+            edge_flags.assert_called_once_with(frame, args[2])
+            self.assertEqual(result.spec.flags, ["title_cut_off"])
+            self.assertEqual(result.completeness.status, NEEDS_INPUT)
+            self.assertEqual(result.completeness.missing[0].field, "title")
+            self.assertIsNone(result.reconstruction_warning)
+
+    def test_interpretation_error_keeps_partial_results_and_explains_blocker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image_path = self._image(Path(temporary))
+            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            ocr = OCRFrame("input/chart.png", ())
+            mapping = LegendMappingFrame("input/chart.png", ())
+            with patch("src.gradio_app.run_detection", return_value=frame), \
+                 patch("src.gradio_app.run_ocr", return_value=ocr), \
+                 patch("src.gradio_app.match_legend_to_bars", return_value=mapping), \
+                 patch("src.gradio_app.reconstruct_vbar", side_effect=
+                       ChartInterpretationError("no x tick labels detected")):
+                result = analyze_image(
+                    object(), image_path, 0.25, 0.70, ocr_backend=object()
+                )
+
+            self.assertIsNone(result.spec)
+            self.assertEqual(result.completeness.status, CANNOT_BUILD)
+            self.assertIn("No x tick labels", result.completeness.blockers[0])
+            self.assertIsNotNone(result.overlay_rgb)
+            self.assertIsNone(result.reconstruction_warning)
+
+    def test_unexpected_completeness_failure_does_not_publish_unchecked_spec(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image_path = self._image(Path(temporary))
+            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            ocr = OCRFrame("input/chart.png", ())
+            mapping = LegendMappingFrame("input/chart.png", ())
+            with patch("src.gradio_app.run_detection", return_value=frame), \
+                 patch("src.gradio_app.run_ocr", return_value=ocr), \
+                 patch("src.gradio_app.match_legend_to_bars", return_value=mapping), \
+                 patch("src.gradio_app.reconstruct_vbar", return_value=make_spec()), \
+                 patch("src.gradio_app.check_completeness",
+                       side_effect=RuntimeError("classification failed")), \
+                 self.assertLogs("src.gradio_app", level="ERROR"):
+                result = analyze_image(
+                    object(), image_path, 0.25, 0.70, ocr_backend=object()
+                )
+
+            self.assertIsNone(result.spec)
+            self.assertIsNone(result.completeness)
+            self.assertEqual(result.reconstruction_warning, RECONSTRUCTION_WARNING)
+            self.assertIsNotNone(result.overlay_rgb)
 
     def test_ocr_failure_keeps_successful_detection_result(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -140,6 +242,7 @@ class GradioAppTest(unittest.TestCase):
             self.assertEqual(result.detection_frame, frame)
             self.assertIsNone(result.ocr_frame)
             self.assertEqual(result.ocr_warning, OCR_WARNING)
+            self.assertEqual(result.reconstruction_warning, RECONSTRUCTION_WARNING)
             self.assertIn("Detected 1 chart element.", result.summary)
             self.assertIsNotNone(result.overlay_rgb)
 
@@ -160,6 +263,7 @@ class GradioAppTest(unittest.TestCase):
                 )
             self.assertEqual(result.ocr_warning, OCR_WARNING)
             self.assertEqual(result.legend_warning, LEGEND_WARNING)
+            self.assertEqual(result.reconstruction_warning, RECONSTRUCTION_WARNING)
             self.assertIsNone(result.legend_mapping)
             self.assertNotIn("remained unmatched", result.summary)
 
@@ -228,6 +332,22 @@ class GradioAppTest(unittest.TestCase):
         self.assertIn("OCR attempted 2 text regions", complete_status(3, 2))
         self.assertIn('role="alert"', alert_message("Try again"))
 
+    def test_completeness_summary_covers_all_states_and_details(self):
+        self.assertIn("Reconstruction: Ready", completeness_summary(Completeness(READY)))
+        needs_input = completeness_summary(Completeness(
+            NEEDS_INPUT,
+            notes=["Check the inferred value."],
+            missing=[MissingItem("title", "No title was read.", "--title")],
+        ))
+        self.assertIn("Reconstruction: Needs input", needs_input)
+        self.assertIn("Check the inferred value", needs_input)
+        self.assertIn("`title`: No title was read", needs_input)
+        cannot_build = completeness_summary(Completeness(
+            CANNOT_BUILD, blockers=["The axis scale is unavailable."]
+        ))
+        self.assertIn("Reconstruction: Cannot build", cannot_build)
+        self.assertIn("The axis scale is unavailable", cannot_build)
+
     def test_app_factory_wires_controls_states_and_private_events(self):
         with patch("src.gradio_app.load_model") as load, \
              patch("gradio.Blocks.launch") as launch:
@@ -244,6 +364,8 @@ class GradioAppTest(unittest.TestCase):
         self.assertIn("Annotated detections", labels)
         self.assertIn("Recognized text", labels)
         self.assertIn("Legend mappings", labels)
+        self.assertIn("Reconstruction completeness", labels)
+        self.assertIn("Reconstructed VerticalBarSpec", labels)
 
         by_class = {}
         for component in components:
@@ -276,13 +398,13 @@ class GradioAppTest(unittest.TestCase):
 
         begin = next(fn.fn for fn in demo.fns.values() if fn.api_name == "begin_analysis")
         begin_updates = begin()
-        self.assertEqual(len(begin_updates), 16)
+        self.assertEqual(len(begin_updates), 20)
         self.assertTrue(all(update["interactive"] is False for update in begin_updates[:6]))
         finish = next(fn.fn for fn in demo.fns.values() if fn.api_name == "finish_analysis")
         self.assertTrue(all(update["interactive"] is True for update in finish()))
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
         ready_updates = ready()
-        self.assertEqual(len(ready_updates), 10)
+        self.assertEqual(len(ready_updates), 14)
         self.assertTrue(ready_updates[1]["visible"])
         self.assertFalse(ready_updates[2]["visible"])
         self.assertFalse(ready_updates[4]["visible"])
@@ -312,6 +434,10 @@ class GradioAppTest(unittest.TestCase):
         self.assertFalse(success_updates[7]["visible"])
         self.assertFalse(success_updates[8]["visible"])
         self.assertFalse(success_updates[9]["visible"])
+        self.assertFalse(success_updates[10]["visible"])
+        self.assertFalse(success_updates[11]["visible"])
+        self.assertFalse(success_updates[12]["visible"])
+        self.assertFalse(success_updates[13]["visible"])
 
         mapped_frame = DetectionFrame("input/chart.png", 20, 20, (
             Detection("bar", "vertical_bar", Box(0, 5, 5, 20), 0.9),
@@ -323,9 +449,11 @@ class GradioAppTest(unittest.TestCase):
                 "bar", "swatch", "label", "North", 0.98, "matched"
             ),
         ))
+        reconstructed = make_spec()
         mapped_result = AnalysisResult(
             "summary", np.zeros((20, 20, 3), dtype=np.uint8), 3,
             mapped_frame, None, None, mapped, None,
+            reconstructed, Completeness(READY), None,
         )
         with patch("src.gradio_app.analyze_image", return_value=mapped_result):
             mapped_updates = analyze("chart.png", 0.25, 0.70, "eng")
@@ -334,19 +462,32 @@ class GradioAppTest(unittest.TestCase):
             mapped_updates[6]["value"][0],
             ["bar", "North", 0.98, "swatch", "label", "matched"],
         )
+        self.assertTrue(mapped_updates[7]["visible"])
+        self.assertIn("Reconstruction: Ready", mapped_updates[7]["value"])
+        self.assertTrue(mapped_updates[8]["visible"])
+        self.assertEqual(mapped_updates[8]["value"], asdict(reconstructed))
+        self.assertTrue(mapped_updates[9]["visible"])
+        spec_path = Path(mapped_updates[9]["value"])
+        self.assertEqual(json.loads(spec_path.read_text(encoding="utf-8")),
+                         asdict(reconstructed))
+        self.assertRegex(spec_path.name, r"chart_spec_[0-9a-f]{32}\.json")
 
         warning = AnalysisResult(
             "summary", np.zeros((2, 2, 3), dtype=np.uint8), 1,
             display_frame, None, OCR_WARNING,
+            reconstruction_warning=RECONSTRUCTION_WARNING,
         )
         with patch("src.gradio_app.analyze_image", return_value=warning):
             warning_updates = analyze("chart.png", 0.25, 0.70, "eng")
         self.assertTrue(warning_updates[2]["visible"])
         self.assertTrue(warning_updates[3]["visible"])
         self.assertFalse(warning_updates[4]["visible"])
-        self.assertTrue(warning_updates[7]["visible"])
-        self.assertFalse(warning_updates[8]["visible"])
-        self.assertFalse(warning_updates[9]["visible"])
+        self.assertTrue(warning_updates[10]["visible"])
+        self.assertFalse(warning_updates[11]["visible"])
+        self.assertTrue(warning_updates[12]["visible"])
+        self.assertIn('role="alert"', warning_updates[12]["value"])
+        self.assertIn("reconstruction was unavailable", warning_updates[12]["value"])
+        self.assertFalse(warning_updates[13]["visible"])
         with patch(
             "src.gradio_app.analyze_image",
             side_effect=UploadValidationError("Upload a supported image."),
@@ -355,8 +496,8 @@ class GradioAppTest(unittest.TestCase):
         self.assertFalse(failure_updates[2]["visible"])
         self.assertFalse(failure_updates[3]["visible"])
         self.assertFalse(failure_updates[4]["visible"])
-        self.assertTrue(failure_updates[9]["visible"])
-        self.assertIn('role="alert"', failure_updates[9]["value"])
+        self.assertTrue(failure_updates[13]["visible"])
+        self.assertIn('role="alert"', failure_updates[13]["value"])
 
         private_path = "/private/tmp/gradio/secret-chart.png"
         with self.assertLogs("src.gradio_app", level="ERROR"), patch(
@@ -364,9 +505,9 @@ class GradioAppTest(unittest.TestCase):
             side_effect=RuntimeError(private_path),
         ):
             unexpected_updates = analyze("chart.png", 0.25, 0.70, "eng")
-        self.assertTrue(unexpected_updates[9]["visible"])
-        self.assertNotIn(private_path, unexpected_updates[9]["value"])
-        self.assertNotIn("RuntimeError", unexpected_updates[9]["value"])
+        self.assertTrue(unexpected_updates[13]["visible"])
+        self.assertNotIn(private_path, unexpected_updates[13]["value"])
+        self.assertNotIn("RuntimeError", unexpected_updates[13]["value"])
 
         change_events = [dependency for dependency in config["dependencies"]
                          if dependency["targets"] and dependency["targets"][0][1] == "change"]
