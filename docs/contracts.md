@@ -15,6 +15,7 @@ between every stage.
 | --- | --- | --- | --- |
 | `DetectionFrame` | Detector | OCR and interpreter | Image size and identified chart elements with role, pixel box, and confidence. |
 | `OCRFrame` | OCR | Interpreter | Text and confidence keyed by detection ID; role and location come from the matching detection. |
+| `LegendMappingFrame` | Legend matcher | Presentation and interpreter | One validated series-assignment result per detected vertical bar. |
 | `VerticalBarChart` | Interpreter | Tactile renderer | Title, axis titles, ordered categories, and one or more bar series with numeric values. |
 
 Every result has a `source_key` such as `val/22410.png`. PlotQA reuses numeric
@@ -28,6 +29,11 @@ and bottom edges. A frame's boxes must have positive area and lie within its
 declared width and height. Confidence is a finite number from 0 to 1. The
 role strings and their order match the existing `classes.txt` format; see
 `CLASS_NAMES` and `CHART_MARK_ROLE`.
+
+`LegendMappingFrame` temporarily stores legend-to-bar matches for one analysis.
+Assignments follow the detected bar order and reference validated bars, swatches,
+and labels. These matches are not written to JSON. `match_score` measures color
+similarity, not the probability that a match is correct.
 
 OCR may contain an empty text string when a crop was attempted but unreadable.
 The interpreter must either produce a complete `VerticalBarChart` or raise
@@ -64,7 +70,9 @@ belong to the model and end-to-end pipeline tasks.
 ## VerticalBarSpec (schema 0.2)
 
 `src/reconstruct.py` turns a `DetectionFrame`, OCR text and the image into a
-`VerticalBarSpec` with `reconstruct_vbar(frame, ocr_texts, image)`. Unlike
+`VerticalBarSpec`. Pass the in-memory legend result with
+`reconstruct_vbar(frame, ocr_texts, image, legend_mapping=mapping)`. When the
+mapping is omitted, reconstruction computes it from the same inputs. Unlike
 `VerticalBarChart`, titles may be `None`, series values may be `None`, and
 anything the interpreter could not resolve is listed in `flags` instead of
 raising. `ChartInterpretationError` is raised only when there are no bars, no

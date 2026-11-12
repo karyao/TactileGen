@@ -21,10 +21,14 @@ from src.contracts import (
     Box,
     Detection,
     DetectionFrame,
+    LegendBarAssignment,
+    LegendMappingFrame,
     OCRFrame,
     RecognizedText,
     VerticalBarChart,
+    join_legend_assignments,
     join_text_regions,
+    validate_unit_interval,
 )
 from src.dataset.prepare_plotqa import CLASS_NAMES as ConverterClassNames
 
@@ -33,6 +37,38 @@ FIXTURES = Path(__file__).parent / "fixtures" / "contracts"
 
 
 class ContractTest(unittest.TestCase):
+    def test_unit_interval_validation_normalizes_and_rejects_invalid_values(self):
+        self.assertEqual(validate_unit_interval(0, "threshold"), 0.0)
+        self.assertEqual(validate_unit_interval(0.5, "threshold"), 0.5)
+        self.assertEqual(validate_unit_interval(1, "threshold"), 1.0)
+        for value in (True, "0.5", -0.1, 1.1, math.nan, math.inf, -math.inf):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError, "threshold must be a number from 0 to 1"
+                ):
+                    validate_unit_interval(value, "threshold")
+
+    def test_legend_mapping_validates_statuses_and_exact_bar_coverage(self):
+        frame = DetectionFrame("input/chart.png", 20, 20, (
+            Detection("bar", "vertical_bar", Box(0, 0, 5, 10), 0.9),
+            Detection("swatch", "legend_swatch", Box(10, 0, 15, 5), 0.9),
+            Detection("label", "legend_label", Box(15, 0, 20, 5), 0.9),
+        ))
+        mapping = LegendMappingFrame("input/chart.png", (
+            LegendBarAssignment(
+                "bar", "swatch", "label", "North", 0.9, "matched"
+            ),
+        ))
+        self.assertEqual(join_legend_assignments(frame, mapping)[0][0].id, "bar")
+        with self.assertRaisesRegex(ValueError, "detection order"):
+            join_legend_assignments(
+                frame, LegendMappingFrame("input/chart.png", ())
+            )
+        with self.assertRaises(ValueError):
+            LegendBarAssignment("bar", status="unknown")
+        with self.assertRaises(ValueError):
+            LegendBarAssignment("bar", match_score=True, status="weak_match")
+
     def test_existing_class_order_and_box_are_shared(self):
         self.assertEqual(CLASS_NAMES, (
             "horizontal_bar", "vertical_bar", "dot", "line_segment",

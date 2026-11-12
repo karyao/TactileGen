@@ -1,9 +1,18 @@
 """Reconstruction from hand-built detections; no detector or OCR engine runs."""
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
-from src.contracts import Box, ChartInterpretationError, Detection, DetectionFrame
+from src.contracts import (
+    Box,
+    ChartInterpretationError,
+    Detection,
+    DetectionFrame,
+    LegendBarAssignment,
+    LegendMappingFrame,
+)
 from src.reconstruct import parse_tick_value, reconstruct_vbar
 
 W, H = 600, 400
@@ -254,13 +263,148 @@ def _grouped(colours, legend=True):
 SIMILAR = ((0, 165, 255), (0, 140, 255))
 
 
-def test_legend_swatches_keep_similar_colours_apart():
+def _matched_mapping(chart, identities=((0, 0, "Alpha"), (1, 1, "Beta"))):
+    frame = chart.frame()
+    bars = [item for item in frame.detections if item.role == "vertical_bar"]
+    swatches = [item for item in frame.detections if item.role == "legend_swatch"]
+    labels = [item for item in frame.detections if item.role == "legend_label"]
+    return frame, LegendMappingFrame(frame.source_key, tuple(
+        LegendBarAssignment(
+            bar.id,
+            swatches[identities[index % len(identities)][0]].id,
+            labels[identities[index % len(identities)][1]].id,
+            identities[index % len(identities)][2],
+            0.99,
+            "matched",
+        )
+        for index, bar in enumerate(bars)
+    ))
+
+
+def test_similar_legend_colours_safely_remain_unnamed():
     spec = _grouped(SIMILAR).run()
-    assert [s.name for s in spec.series] == ["Alpha", "Beta"]
+    assert [s.name for s in spec.series] == [None, None]
     assert_values(spec, [100, 150, 40], series=0)
     assert_values(spec, [50, 80, 120], series=1)
     assert "category_count_mismatch" not in spec.flags
+    assert "series_ambiguous" in spec.flags
+
+
+def test_supplied_legend_mapping_names_series_without_rerunning_matcher():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    frame, mapping = _matched_mapping(chart)
+
+    with patch("src.reconstruct.match_legend_to_bars") as matcher:
+        spec = reconstruct_vbar(
+            frame, chart.texts, chart.image, legend_mapping=mapping
+        )
+
+    matcher.assert_not_called()
+    assert [series.name for series in spec.series] == ["Alpha", "Beta"]
     assert "series_ambiguous" not in spec.flags
+
+
+def test_mapping_keeps_nearly_identical_series_colours_separate():
+    chart = _grouped(((30, 40, 200), (34, 44, 203)))
+    frame, mapping = _matched_mapping(chart)
+
+    spec = reconstruct_vbar(
+        frame, chart.texts, chart.image, legend_mapping=mapping
+    )
+
+    assert [series.name for series in spec.series] == ["Alpha", "Beta"]
+    assert_values(spec, [100, 150, 40], series=0)
+    assert_values(spec, [50, 80, 120], series=1)
+    assert "category_count_mismatch" not in spec.flags
+    assert "category_ambiguous" not in spec.flags
+    assert "series_ambiguous" not in spec.flags
+
+
+def test_mapping_remains_authoritative_for_low_confidence_swatches():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    chart.detections = [
+        Detection(item.id, item.role, item.box, 0.29)
+        if item.role == "legend_swatch" else item
+        for item in chart.detections
+    ]
+    frame, mapping = _matched_mapping(chart)
+
+    spec = reconstruct_vbar(
+        frame, chart.texts, chart.image, legend_mapping=mapping
+    )
+
+    assert [series.name for series in spec.series] == ["Alpha", "Beta"]
+    assert "series_ambiguous" not in spec.flags
+
+
+def test_incomplete_mapping_keeps_affected_series_unnamed():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    frame = chart.frame()
+    bars = [item for item in frame.detections if item.role == "vertical_bar"]
+    swatches = [item for item in frame.detections if item.role == "legend_swatch"]
+    labels = [item for item in frame.detections if item.role == "legend_label"]
+    assignments = []
+    for index, bar in enumerate(bars):
+        series_index = index % 2
+        if index == 2:
+            assignments.append(LegendBarAssignment(
+                bar.id, swatches[0].id, labels[0].id, None, 0.95, "ambiguous"
+            ))
+        else:
+            assignments.append(LegendBarAssignment(
+                bar.id,
+                swatches[series_index].id,
+                labels[series_index].id,
+                ("Alpha", "Beta")[series_index],
+                0.99,
+                "matched",
+            ))
+
+    spec = reconstruct_vbar(
+        frame,
+        chart.texts,
+        chart.image,
+        legend_mapping=LegendMappingFrame(frame.source_key, tuple(assignments)),
+    )
+
+    assert [series.name for series in spec.series] == ["Alpha", "Beta", None]
+    assert spec.series[0].values == pytest.approx([100, None, 40])
+    assert spec.series[1].values == pytest.approx([50, 80, 120])
+    assert spec.series[2].values == pytest.approx([None, 150, None])
+    assert all(not any(series.value_rescued) for series in spec.series)
+    assert "category_count_mismatch" in spec.flags
+    assert "series_ambiguous" in spec.flags
+
+
+def test_conflicting_identities_preserve_bars_but_suppress_names():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    frame = chart.frame()
+    bars = [item for item in frame.detections if item.role == "vertical_bar"]
+    swatches = [item for item in frame.detections if item.role == "legend_swatch"]
+    labels = [item for item in frame.detections if item.role == "legend_label"]
+    assignments = []
+    for index, bar in enumerate(bars):
+        if index % 2:
+            identity = (swatches[1].id, labels[1].id, "Beta")
+        elif index == 2:
+            identity = (swatches[0].id, labels[1].id, "Other")
+        else:
+            identity = (swatches[0].id, labels[0].id, "Alpha")
+        assignments.append(LegendBarAssignment(
+            bar.id, *identity, 0.99, "matched"
+        ))
+
+    spec = reconstruct_vbar(
+        frame,
+        chart.texts,
+        chart.image,
+        legend_mapping=LegendMappingFrame(frame.source_key, tuple(assignments)),
+    )
+
+    assert [series.name for series in spec.series] == [None, "Beta", None]
+    assert spec.series[0].values == pytest.approx([100, None, 40])
+    assert spec.series[2].values == pytest.approx([None, 150, None])
+    assert "series_ambiguous" in spec.flags
 
 
 def test_similar_colours_without_legend_fall_back_to_one_cluster():
