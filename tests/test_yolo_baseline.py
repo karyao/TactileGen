@@ -146,6 +146,52 @@ class YoloBaselineTest(unittest.TestCase):
             self.assertEqual(model.validation_args["split"], "test")
             self.assertEqual(json.loads((root / "map/metrics.json").read_text())["images"], 1)
 
+    def test_evaluation_scores_horizontal_bars_on_hbar_charts_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for image_id in ("1", "2"):
+                (root / "images/test").mkdir(parents=True, exist_ok=True)
+                (root / "labels/test").mkdir(parents=True, exist_ok=True)
+                (root / f"images/test/{image_id}.png").write_bytes(b"")
+            # Image 1 is a horizontal-bar chart (class 0), image 2 a vertical one.
+            (root / "labels/test/1.txt").write_text("0 0.5 0.5 0.4 0.2\n", encoding="utf-8")
+            (root / "labels/test/2.txt").write_text("1 0.5 0.5 0.2 0.4\n", encoding="utf-8")
+            (root / "chart_types_test.csv").write_text(
+                "image_id,chart_type\n1,hbar_categorical\n2,vbar_categorical\n", encoding="utf-8")
+            (root / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
+            result = fake_result(root / "images/test/1.png", [[30, 40, 70, 60]], [0], [0.9])
+            model = FakeModel([result])
+            with patch("src.baseline.yolo_bars.read_image", return_value=None), \
+                 patch("src.baseline.yolo_bars._write_overlay"):
+                report = evaluate(model, Path("best.pt"), root, "test", root / "hbar",
+                                  role="horizontal_bar")
+            self.assertEqual(report["class"], "horizontal_bar")
+            self.assertEqual(report["images"], 1)
+            self.assertEqual((report["true_positive"], report["false_positive"],
+                              report["false_negative"]), (1, 0, 0))
+
+    def test_unknown_bar_role_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "bar role"):
+                evaluate(FakeModel([]), Path("best.pt"), root, "test", root / "out", role="dot")
+
+    def test_validation_reports_each_present_chart_part(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "images/test").mkdir(parents=True)
+            (root / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
+            (root / "data.yaml").write_text("test: images/test\n", encoding="utf-8")
+            model = FakeModel([])
+            metrics = SimpleNamespace(box=SimpleNamespace(
+                map50=0.8, map=0.6, maps=[0.65, 0.7] + [0.5] * 13, ap_class_index=[0, 1, 4]))
+            model.val = lambda **kwargs: metrics
+            report = validate(model, Path("best.pt"), root, "test", root / "map")
+            self.assertEqual(report["per_class_map50_95"],
+                             {"horizontal_bar": 0.65, "vertical_bar": 0.7, "chart_title": 0.5})
+            self.assertEqual(report["horizontal_bar_map50_95"], 0.65)
+
     def test_evaluation_limits_inference_input_to_one_batch(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
