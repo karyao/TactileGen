@@ -406,8 +406,7 @@ class GradioAppTest(unittest.TestCase):
         ready_updates = ready()
         self.assertEqual(len(ready_updates), 14)
         self.assertTrue(ready_updates[1]["visible"])
-        self.assertFalse(ready_updates[2]["visible"])
-        self.assertFalse(ready_updates[4]["visible"])
+        self.assertTrue(all(not update["visible"] for update in ready_updates[2:]))
 
         analyze = inference_fn.fn
         display_frame = DetectionFrame("input/chart.png", 2, 2, (
@@ -471,6 +470,30 @@ class GradioAppTest(unittest.TestCase):
         self.assertEqual(json.loads(spec_path.read_text(encoding="utf-8")),
                          asdict(reconstructed))
         self.assertRegex(spec_path.name, r"chart_spec_[0-9a-f]{32}\.json")
+
+        blocked_ocr = OCRFrame("input/chart.png", (
+            RecognizedText("label", "North", 0.9),
+        ))
+        blocked_result = AnalysisResult(
+            "summary", np.zeros((20, 20, 3), dtype=np.uint8), 3,
+            mapped_frame, blocked_ocr, None, mapped, None, None,
+            Completeness(
+                CANNOT_BUILD,
+                blockers=["No x tick labels were found. Try a clearer image."],
+            ),
+            None,
+        )
+        with patch("src.gradio_app.analyze_image", return_value=blocked_result):
+            blocked_updates = analyze("chart.png", 0.25, 0.70, "eng")
+        self.assertIn("Analysis complete", blocked_updates[0]["value"])
+        for index in (2, 3, 4, 5, 6, 7):
+            self.assertTrue(blocked_updates[index]["visible"])
+        self.assertIn("Reconstruction: Cannot build", blocked_updates[7]["value"])
+        self.assertIn("No x tick labels", blocked_updates[7]["value"])
+        self.assertFalse(blocked_updates[8]["visible"])
+        self.assertFalse(blocked_updates[9]["visible"])
+        self.assertTrue(all(not blocked_updates[index]["visible"]
+                            for index in (10, 11, 12, 13)))
 
         warning = AnalysisResult(
             "summary", np.zeros((2, 2, 3), dtype=np.uint8), 1,
