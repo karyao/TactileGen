@@ -46,7 +46,9 @@ per category in the same order, except a series with `has_bars=False`: a legend
 entry whose bars are not visible in the source chart (for example bars below an
 axis that starts at zero). It must have a name and has no values, because
 nothing was measured and "zero" would be wrong. A chart needs at least one
-series with bars. In JSON, `has_bars` is written only when it is `false`.
+series with bars. In JSON, `has_bars` is written only when it is `false`. `rescued` (optional, one bool per value) marks values measured from pixels instead of a detected bar
+(`SeriesSpec.value_rescued`, which includes inferred zeros); the tactile layout draws no value label for them. It is written
+to JSON only when some value is rescued.
 
 ## Example fixtures
 

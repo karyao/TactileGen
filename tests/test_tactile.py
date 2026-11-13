@@ -113,7 +113,7 @@ class LayoutTest(unittest.TestCase):
         values = [l for l in layout.labels if l.role == "y_value"]
         self.assertEqual(values[0].text, "0")
         self.assertTrue(all(l.numeric for l in values))
-        grid_ys = sorted(l.y1 for l in layout.lines if l.kind == "grid")
+        grid_ys = sorted({l.y1 for l in layout.lines if l.kind == "grid"})   # lines may be cut in pieces
         # Dots 2-5 (the middle row) sit on each grid line.
         middles = sorted(l.bounds.y1 + (l.bounds.y2 - l.bounds.y1) / 2 for l in values[1:])
         for middle, grid_y in zip(middles, grid_ys):
@@ -354,7 +354,7 @@ class YHeadingClearanceTest(unittest.TestCase):
     def test_clearance_constant_is_applied(self):
         larger = constants.LINE_PITCH
         with patch("src.tactile.layout.Y_HEADING_CLEARANCE", larger):
-            layout = layout_vertical_bar_chart(load("rainfall"))
+            layout = layout_vertical_bar_chart(load("rainfall"), value_labels=False)
         self.assertAlmostEqual(self.gap(layout), larger)
 
     def test_clearance_is_at_least_the_bana_minimum(self):
@@ -688,7 +688,7 @@ class NoVisibleBarsTest(unittest.TestCase):
         self.assertEqual(layout.bars[1].texture, layout.series_textures[1])
 
     def test_the_transcribers_note_names_the_entries_without_saying_zero(self):
-        layout = layout_vertical_bar_chart(self.chart())
+        layout = layout_vertical_bar_chart(self.chart(), value_labels=False)
         note = self.note_text(layout)
         self.assertEqual(note, "No bars are visible for: Low & middle income, Vietnam.")
         self.assertNotIn("zero", note.lower())
@@ -705,15 +705,16 @@ class NoVisibleBarsTest(unittest.TestCase):
     def test_a_chart_with_bars_for_every_series_is_laid_out_as_before(self):
         plain = VerticalBarChart("demo/p.png", "T", "X", "Y", ("a", "b", "c"),
                                  (BarSeries("A", (1.0, 2.0, 3.0)), BarSeries("B", (3.0, 2.0, 1.0))))
-        layout = layout_vertical_bar_chart(plain)
+        layout = layout_vertical_bar_chart(plain, value_labels=False)
         self.assertEqual(len(layout.bars), 6)
         self.assertNotIn("note", {l.role for l in layout.labels})
         self.assertEqual(layout, layout_vertical_bar_chart(replace(
-            plain, series=tuple(replace(s, has_bars=True) for s in plain.series))))
+            plain, series=tuple(replace(s, has_bars=True) for s in plain.series)),
+            value_labels=False))
 
     def test_a_single_unnamed_series_still_gets_no_key_and_no_note(self):
         unnamed = VerticalBarChart("demo/u.png", "T", "X", "Y", ("a", "b"), (BarSeries(None, (1.0, 2.0)),))
-        layout = layout_vertical_bar_chart(unnamed)
+        layout = layout_vertical_bar_chart(unnamed, value_labels=False)
         self.assertEqual(layout.key_samples, ())
         self.assertNotIn("note", {l.role for l in layout.labels})
         self.assertFalse([l for l in layout.labels if str(l.owner_id).startswith("key-sample")])
@@ -773,7 +774,7 @@ class MinimumPlotHeightTest(unittest.TestCase):
         self.assertIn("No bars are visible for: Low & middle income, Vietnam.",
                       " ".join(l.text for l in key_page.labels if l.role == "note"))
         self.assertEqual(graph.key_samples, ())
-        self.assertNotIn("note", {l.role for l in graph.labels})
+        self.assertNotIn("No bars are visible", " ".join(l.text for l in graph.labels))
         self.assertGreaterEqual(self.height(graph), constants.MIN_PLOT_HEIGHT)
         self.assertEqual({bar.series_index for bar in graph.bars}, {1})
         self.assertEqual(len(graph.bars), 4)

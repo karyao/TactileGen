@@ -32,6 +32,12 @@ LABEL_MIN_GAP = 1 / 8 * MM_PER_INCH   # labels to any component, minimum, §3.4.
 LABEL_MAX_GAP = 1 / 4 * MM_PER_INCH   # label to its own component, maximum, §3.4.3.12, §5.10.5
 # Labels are placed at the minimum distance; anything between the two is allowed.
 LABEL_GAP = LABEL_MIN_GAP
+# A label that cannot sit within the maximum distance of its component is placed
+# "far enough away to allow a 3/4 inch (2 centimeter) lead line" (§3.4.3.12); used
+# for staggered bar value labels.
+LEAD_LINE_LENGTH = 3 / 4 * MM_PER_INCH
+# Bar value labels show at least this many significant digits, more if the y ticks do.
+VALUE_LABEL_SIG_DIGITS = 3
 # Clearance between the vertical heading and the top value label: the 1/8
 # inch label-to-component minimum (§3.4.3.12). §6.6.6.6 needs no blank line
 # after the heading.

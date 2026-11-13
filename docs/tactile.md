@@ -49,6 +49,7 @@ Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 | Textures | At most five area textures; the dot fill uses 0.8 mm dots, smaller than braille dots | §3.2.2, §6.8.3.3 |
 | Vertical values | Right-justified, numeric indicator, dots 2-5 level with the grid line, 4 mm from the axis | §6.6.6.2, §6.6.6.6 |
 | Grid | Horizontal grid lines (least distinct, dashed) instead of tick marks; at least 3/8 inch apart | §6.6.6.3, §6.6.6.5, §3.4.3.9 |
+| Bar values | Braille value centred above each bar, 1/8 inch above it (§3.4.3.12); decimals of the y tick step, at most 3 significant digits (more if the ticks need them); wider than its bar: fewer decimals (the same for every label on the page, never turning a nonzero value into 0), then a 3/4 inch lead line, then omitted and named in a transcriber's note. Not shown for series with no visible bars or for bars whose height was rescued from pixels (`BarSeries.rescued`). Grid lines are cut around labels. Transcriber's note: "Bar values are estimated from the print." Labels are the layout's choice, not a BANA requirement for graphs that I could verify (§6.6 text not read) | §3.4.3.12 |
 | Bars | 3/8 to 1 inch wide, sized from the number of categories and series; bars in a set are joined (as in print); 1/8 inch between sets (BANA gives no number for this gap, so the §3.4.3.12 spacing is reused); distinct textures per series | §6.6.6.7, §3.4.3.12 |
 | Category labels | Centred under each set of bars. Overflow order when they do not fit: (1) full names; (2) alphabetic keys of 2-3 letters from the name, with a dot 3 or 6 letter, never aa/ac/cc/ca; (3) numeric keys with the numeric indicator and no period; (4) flag the page for review. Keyed names are listed in the key in left-to-right order: symbol in cell 1, a blank cell, the name, runovers in cell 3 | §6.6.6.6, §5.8.1, §5.7.3, §5.8.4.5 |
 | Headings | Vertical heading above the values (≤ 20 cells per line), at least 1/8 inch above the top value label (`Y_HEADING_CLEARANCE`; no blank line needed); horizontal heading below the values, left-justified with the first one | §6.6.6.6, §3.4.3.12 |
@@ -102,6 +103,8 @@ also works on layouts built another way.
 | `tick_length` | Tick marks cross the axis 1/4 inch each side | §6.6.6.5 |
 | `numeric_indicator` | Numeric values use the numeric indicator | §6.6.6.2 |
 | `all_bars_labeled` | No bar label omitted | §6.6.1.3 |
+| `value_label_clearance` | Value label centred on its bar, 1/8 to 1/4 inch above it, or on a 3/4 inch lead line | §3.4.3.12 |
+| `value_label_fit` | Value label no wider than its bar unless raised on a lead line | not from BANA |
 | `key_before_graph`, `key_order` | Key above the graph, in bar order | §6.6.6.4 |
 | `distinct_textures` | One texture per series, matching its key sample | §6.6.6.7 |
 | `key_sample_size` | Key samples 1 x 1/2 inch | §3.4.3.14 |
@@ -156,3 +159,10 @@ on the development machine.
   <https://www.brailleauthority.org/guidelines-and-standards-tactile-graphics>
 - BANA, Size and Spacing of Braille Characters (quoting Library of Congress
   Specification 800): <https://www.brailleauthority.org/node/63>
+
+## Bar value labels
+
+`layout_vertical_bar_chart(chart, value_labels=True)` (default) labels every bar. The headroom for the tallest
+bar's label (9 mm, or 29 mm when some label needs a lead line) comes off the plot, so plots are shorter than
+without labels; a chart with no room for it keeps the layout it had before and the layout notes say so.
+Negative values are formatted (`-13`) but not placed: the layout still rejects negative bars.

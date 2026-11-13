@@ -313,10 +313,17 @@ class BarSeries:
     name: str | None
     values: tuple[float, ...]
     has_bars: bool = True
+    # ``rescued[i]`` is True when ``values[i]`` was measured from pixels, not from a
+    # detected bar (SeriesSpec.value_rescued, which includes inferred zeros); the
+    # tactile layout draws no value label for it. Empty means none.
+    rescued: tuple[bool, ...] = ()
 
     def __post_init__(self) -> None:
         if self.name is not None and (not isinstance(self.name, str) or not self.name):
             raise ValueError("series name must be nonempty or absent")
+        if self.rescued and (len(self.rescued) != len(self.values)
+                             or not all(isinstance(flag, bool) for flag in self.rescued)):
+            raise ValueError("rescued must hold one bool per value")
         if not self.has_bars:
             if self.name is None:
                 raise ValueError("a series with no visible bars needs its legend name")

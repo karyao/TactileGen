@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from src.contracts import BarSeries, VerticalBarChart
 from src.tactile.braille import BLANK, TN_CLOSE, TN_OPEN, Cell, to_braille
 from src.tactile.keys import abbreviation_keys, numeric_keys
+from src.tactile.value_labels import plan_value_labels
 from src.tactile.constants import (  # noqa: F401  (re-exported for callers and tests)
     AXIS_STRENGTH,
     AXIS_WIDTH,
@@ -42,6 +43,8 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     LABEL_HEIGHT,
     LABEL_MAX_GAP,
     LABEL_MIN_GAP,
+    LEAD_LINE_LENGTH,
+    LEAD_STRENGTH,
     LETTER_KEY_RUNOVER_CELL,
     LINE_PITCH,
     LINES_PER_PAGE,
@@ -281,7 +284,8 @@ X_LABEL_MODES = ("full", "abbreviation", "number")
 
 def layout_vertical_bar_chart(chart: VerticalBarChart, *,
                               x_labels: str = "auto",
-                              key_on_page: bool = False) -> TactileLayout:
+                              key_on_page: bool = False,
+                              value_labels: bool = True) -> TactileLayout:
     """Build a one-page tactile layout for ``chart``.
 
     The layout never silently drops content: if the chart breaks a BANA
@@ -289,9 +293,10 @@ def layout_vertical_bar_chart(chart: VerticalBarChart, *,
     produced and the rule checker reports the problem. ``x_labels`` is
     ``"auto"`` (follow the overflow order) or one mode from ``X_LABEL_MODES``.
     ``key_on_page`` leaves the title, notes and series key off the page, for a
-    graph page that follows a key page.
+    graph page that follows a key page. ``value_labels=False`` draws no bar values.
     """
     extra = {"show_title": False, "show_series_key": False} if key_on_page else {}
+    extra["value_labels"] = value_labels
     if x_labels != "auto":
         if x_labels not in X_LABEL_MODES:
             raise ValueError(f"x_labels must be 'auto' or one of {X_LABEL_MODES}")
@@ -316,7 +321,8 @@ def layout_vertical_bar_chart(chart: VerticalBarChart, *,
 
 
 def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
-                                    x_labels: str = "auto") -> list[TactileLayout]:
+                                    x_labels: str = "auto",
+                                    value_labels: bool = True) -> list[TactileLayout]:
     """One page when it passes every rule; otherwise sections (BANA §3.9).
 
     A series key that would leave the plot under ``MIN_PLOT_HEIGHT`` goes on a
@@ -334,11 +340,12 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
     """
     from src.tactile.rules import check_layout   # rules imports this module
 
-    single = layout_vertical_bar_chart(chart, x_labels=x_labels)
+    single = layout_vertical_bar_chart(chart, x_labels=x_labels, value_labels=value_labels)
     if _has_series_key(chart) and _plot_height(single) < MIN_PLOT_HEIGHT:
         # The key, notes and title leave too little plot: move them to a key
         # page before the graph page (§6.6.6.4), as for a divided graph.
-        graph = layout_vertical_bar_chart(chart, x_labels=x_labels, key_on_page=True)
+        graph = layout_vertical_bar_chart(chart, x_labels=x_labels, key_on_page=True,
+                                          value_labels=value_labels)
         if _plot_height(graph) > _plot_height(single) and not check_layout(graph):
             if _plot_height(graph) < MIN_PLOT_HEIGHT:
                 graph = replace(graph, needs_review=graph.needs_review + (
@@ -355,7 +362,7 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
         for mode in modes:
             try:
                 texts = _category_texts(chart.categories, mode)
-                pages = _sections(chart, mode, texts, chunks, value_max)
+                pages = _sections(chart, mode, texts, chunks, value_max, value_labels)
             except ValueError:
                 continue
             if all(v.rule.id == "overview_first" for page in pages for v in check_layout(page)):
@@ -391,7 +398,8 @@ def _split(count: int, parts: int) -> list[range]:
 
 
 def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
-              chunks: list[range], value_max: float) -> list[TactileLayout]:
+              chunks: list[range], value_max: float,
+              value_labels: bool = True) -> list[TactileLayout]:
     n = len(chunks)
     names = chart.categories
 
@@ -400,7 +408,8 @@ def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
             chart.source_key, chart.title, chart.x_axis_title, chart.y_axis_title,
             tuple(names[i] for i in r),
             tuple(BarSeries(s.name, tuple(s.values[i] for i in r) if s.has_bars else (),
-                            s.has_bars) for s in chart.series))
+                            s.has_bars, tuple(s.rescued[i] for i in r) if s.rescued else ())
+                  for s in chart.series))
 
     division = (f"This graph is divided by category into {n} parts with the same "
                 "scale on each part.")
@@ -418,7 +427,8 @@ def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
         return [_layout(section_chart(r), mode, category_texts=[texts[i] for i in r],
                         show_title=k == 1 and not key_page, transcriber_notes=notes(k, r),
                         show_series_key=not key_page,
-                        heading_y_min=heading_y_min, value_max=value_max)
+                        heading_y_min=heading_y_min, value_max=value_max,
+                        value_labels=value_labels)
                 for k, r in enumerate(chunks, 1)]
 
     first = build(None)
@@ -563,14 +573,89 @@ def _key_page(chart: VerticalBarChart, transcriber_notes: tuple[str, ...]) -> Ta
         notes=tuple(notes), page_kind="key")
 
 
-def _layout(chart: VerticalBarChart, mode: str, *,
-            category_texts: list[str] | None = None,
-            show_title: bool = True,
-            transcriber_notes: tuple[str, ...] = (),
-            show_series_key: bool = True,
-            heading_y_min: float | None = None,
-            value_max: float | None = None) -> TactileLayout:
-    """One page. The keyword arguments are used for sections of a split graph:
+# Room above the plot for the value label of the tallest bar: the label, the 1/8 inch
+# clearance and the bar outline; with a lead line, its length and half width too.
+VALUE_HEADROOM = LABEL_HEIGHT + LABEL_MIN_GAP + BAR_OUTLINE_WIDTH / 2 + 0.02
+VALUE_HEADROOM_RAISED = VALUE_HEADROOM + LEAD_LINE_LENGTH + GRID_WIDTH / 2
+
+
+def _layout(chart: VerticalBarChart, mode: str, *, value_labels: bool = True,
+            **page) -> TactileLayout:
+    """One page. Bar value labels change the header (their notes) and so the plot, which
+    changes how many labels fit; so the page is built again, with the omitted bars
+    forced, until the note naming them matches what was omitted. Labels that need a
+    lead line need more headroom, so that is tried only when some bar had no room."""
+    if not value_labels or not any(series.has_bars for series in chart.series):
+        return _layout_pass(chart, mode, **page)[0]
+    best = None
+    for headroom in (VALUE_HEADROOM, VALUE_HEADROOM_RAISED):
+        forced, estimate = frozenset(), True
+        try:
+            for _ in range(8):
+                result = _layout_pass(chart, mode, value_labels=True, value_headroom=headroom,
+                                      forced_omit=forced, estimate_note=estimate, **page)
+                omitted, drawn = frozenset(result[1]), result[2]
+                if omitted == forced and (drawn > 0) == estimate:
+                    break
+                forced, estimate = forced | omitted, drawn > 0
+            else:
+                result = _layout_pass(chart, mode, value_labels=True, value_headroom=headroom,
+                                      forced_omit=forced | omitted, estimate_note=True, **page)
+        except ValueError:
+            break                       # no room for the labels' headroom and notes
+        if best is None:
+            best = result
+        elif len(result[1]) < len(best[1]) and (
+                result[0].plot.y2 - result[0].plot.y1 >= MIN_PLOT_HEIGHT):
+            best = result               # a lead line freed bars, without squashing the plot
+        if not result[1]:
+            break
+    if best is None:
+        # The chart fits without value labels (it did before they existed): keep it so.
+        layout = _layout_pass(chart, mode, **page)[0]
+        return replace(layout, notes=layout.notes + (
+            "bar values are not labelled: no room on the page for them",))
+    return best[0]
+
+
+def _bar_names(chart: VerticalBarChart, bar_ids) -> str:
+    """"2004, 2005 (Kenya)" style list of bars for a note; long lists are cut."""
+    many = len(chart.series) > 1
+    names = []
+    for bar_id in sorted(bar_ids, key=lambda b: tuple(map(int, b.split("-")[1:]))[::-1]):
+        s, j = map(int, bar_id.split("-")[1:])
+        label = chart.categories[j]
+        if many:
+            label += f" ({chart.series[s].name or f'series {s + 1}'})"
+        names.append(label)
+    return ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+
+
+def _value_notes(chart, rescued, omitted, estimate) -> tuple[str, ...]:
+    notes = []
+    if estimate:
+        notes.append("Bar values are estimated from the print.")
+    if rescued:
+        notes.append("No value is shown for bars whose height was measured without a "
+                     f"detected bar: {_bar_names(chart, rescued)}.")
+    if omitted:
+        notes.append(f"No value is shown for bars too narrow for it: {_bar_names(chart, omitted)}.")
+    return tuple(notes)
+
+
+def _layout_pass(chart: VerticalBarChart, mode: str, *,
+                 category_texts: list[str] | None = None,
+                 show_title: bool = True,
+                 transcriber_notes: tuple[str, ...] = (),
+                 show_series_key: bool = True,
+                 heading_y_min: float | None = None,
+                 value_max: float | None = None,
+                 value_labels: bool = False,
+                 value_headroom: float = 0.0,
+                 forced_omit: frozenset = frozenset(),
+                 estimate_note: bool = False):
+    """One page, as ``(layout, ids of bars with no room for a value, labels drawn)``.
+    The keyword arguments are used for sections of a split graph:
     keys chosen across the whole graph, notes, the series key moved to a key
     page, and a shared vertical layout and value maximum so every section has
     the same scale."""
@@ -591,6 +676,11 @@ def _layout(chart: VerticalBarChart, mode: str, *,
     no_bars = _no_bars_note(chart)
     if no_bars and show_series_key:
         transcriber_notes = (*transcriber_notes, no_bars)
+    rescued_ids = frozenset(f"bar-{s}-{j}" for s, series in enumerate(chart.series)
+                            for j, flag in enumerate(series.rescued) if flag)
+    if value_labels:
+        transcriber_notes = (*transcriber_notes,
+                             *_value_notes(chart, rescued_ids, forced_omit, estimate_note))
 
     usable = _usable_area()
     labels: list[BrailleLabel] = []
@@ -626,7 +716,7 @@ def _layout(chart: VerticalBarChart, mode: str, *,
     # than Y_HEADING_CLEARANCE below the heading.
     top_label_y = max(y + LINE_PITCH * len(y_heading), heading_bottom + Y_HEADING_CLEARANCE)
     # Its dots 2-5 sit on the top grid line (§6.6.6.6).
-    plot_top = top_label_y + DOT_DIAMETER / 2 + DOT_PITCH
+    plot_top = top_label_y + DOT_DIAMETER / 2 + DOT_PITCH + value_headroom
 
     plot_height = axis_y - plot_top
     max_intervals = min(MAX_GRID_INTERVALS, int(plot_height // GRID_MIN_SPACING))
@@ -710,11 +800,26 @@ def _layout(chart: VerticalBarChart, mode: str, *,
         labels.append(_label(f"x-heading-{k}", "x_heading", text, heading_x,
                              category_y + (k + 1) * LINE_PITCH))
 
+    omitted: tuple = ()
+    drawn = 0
+    if value_labels and bars:
+        plan = plan_value_labels(
+            bars, rescued_ids, forced_omit, labels, [l for l in lines if l.kind != "grid"],
+            samples, usable, step, tick_texts,
+            lambda lid, text, x, y, owner: _label(lid, "value", text, x, y, owner_id=owner,
+                                                  numeric=True,
+                                                  category_index=int(lid.split("-")[-1])),
+            lambda lid, x, y1, y2: Line(lid, "lead", x, y1, x, y2, GRID_WIDTH, LEAD_STRENGTH))
+        labels += plan.labels
+        lines += plan.leads
+        lines = _cut_grid(lines, plan.labels)
+        omitted, drawn = plan.omitted, len(plan.labels)
+
     if any(b.height <= 0 for b in bars):
         notes.append("zero-height bars have no raised area; consider a transcriber's note")
     if keyed:
         notes.append(f"category labels are keyed ({mode} keys, BANA §5.8)")
-    return TactileLayout(
+    layout = TactileLayout(
         source_key=chart.source_key, page_width=PAGE_WIDTH, page_height=PAGE_HEIGHT,
         usable=usable, plot=Rect(axis_x, plot_top, plot_right, axis_y),
         lines=tuple(lines), bars=tuple(bars), labels=tuple(labels),
@@ -722,3 +827,30 @@ def _layout(chart: VerticalBarChart, mode: str, *,
         series_textures=textures, x_label_mode=mode, notes=tuple(notes),
         series_key_elsewhere=not show_series_key and has_key,
     )
+    return layout, omitted, drawn
+
+
+def _cut_grid(lines: list[Line], labels) -> list[Line]:
+    """Remove the stretch of each grid line that passes within the label clearance of a
+    value label (grid lines are least distinct, §6.6.6.5, and labels need 1/8 inch, §3.4.3.12)."""
+    out: list[Line] = []
+    for line in lines:
+        if line.kind != "grid":
+            out.append(line)
+            continue
+        reach = LABEL_MIN_GAP + line.width / 2 + 0.02
+        cuts = sorted((l.bounds.x1 - reach, l.bounds.x2 + reach) for l in labels
+                      if l.bounds.y1 - reach < line.y1 < l.bounds.y2 + reach)
+        start, pieces = line.x1, []
+        for x1, x2 in cuts:
+            if x1 > start:
+                pieces.append((start, x1))
+            start = max(start, x2)
+        if start < line.x2:
+            pieces.append((start, line.x2))
+        if not cuts:
+            pieces = [(line.x1, line.x2)]
+        for k, (x1, x2) in enumerate(pieces):
+            if x2 - x1 >= LABEL_MIN_GAP:
+                out.append(replace(line, id=line.id if k == 0 else f"{line.id}-{k}", x1=x1, x2=x2))
+    return out
