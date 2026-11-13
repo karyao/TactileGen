@@ -539,7 +539,9 @@ def spec_to_chart_with_notes(
             if axis_from_zero and value < 0:
                 value, zeroed = 0.0, zeroed + 1
             values.append(float(value))
-        series_out.append(BarSeries(series.name or None, tuple(values)))
+        rescued = tuple(bool(flag) for flag in series.value_rescued)
+        series_out.append(BarSeries(series.name or None, tuple(values),
+                                    rescued=rescued if any(rescued) else ()))
     notes = []
     if zeroed:
         notes.append(f"Values below the axis minimum were set to 0 ({zeroed} value(s)).")

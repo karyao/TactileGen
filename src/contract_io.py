@@ -95,7 +95,7 @@ def load_bar_chart(path: Path) -> VerticalBarChart | HorizontalBarChart:
     try:
         series = tuple(
             BarSeries(item["name"], tuple(_array(item["values"], "values")),
-                      item.get("has_bars", True))
+                      item.get("has_bars", True), tuple(item.get("rescued", ())))
             for item in _array(data["series"], "series")
         )
         return chart_type(
@@ -116,6 +116,8 @@ def write_bar_chart(path: Path, chart: VerticalBarChart | HorizontalBarChart) ->
     for series in data["series"]:  # written only for a series with no visible bars
         if series["has_bars"]:
             del series["has_bars"]
+        if not any(series["rescued"]):    # written only when some value was rescued
+            del series["rescued"]
     _write(path, {
         "schema_version": SCHEMA_VERSION,
         "chart_type": chart_type,
