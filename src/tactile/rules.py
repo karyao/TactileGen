@@ -59,7 +59,8 @@ RULES = {rule.id: rule for rule in (
     Rule("label_clearance", "§3.4.3.12, §6.6.6.6",
          "Labels are at least 1/8 inch (3 mm) from every other component."),
     Rule("label_owner_distance", "§3.4.3.12, §5.10.5",
-         "A label is at most 1/4 inch (6 mm) from the component it belongs to."),
+         "A label is at most 1/4 inch (6 mm) from the component it belongs to; a series key "
+         "entry is measured by its first line (runovers go in cell 8, §5.8.4.3)."),
     Rule("fits_page", "§3.4.2", "The graphic fits 40 cells by 25 lines."),
     Rule("grid_spacing", "§3.4.3.9, §6.6.1.1", "Grid lines are at least 3/8 inch apart."),
     Rule("line_hierarchy", "§6.6.6.5, §3.4.3.8",
@@ -220,8 +221,20 @@ def _label_clearance(layout):
 
 
 def _label_owner_distance(layout):
+    # A series key entry is measured by its first line only. BANA §5.8.4.3: the texture
+    # sample starts in cell 1, the explanation in cell 6 and its runovers in cell 8, which
+    # is further than 1/4 inch from the 1 inch sample. The 1/4 inch limit is for labels
+    # placed on the graphic (§5.10.5, §3.4.3.12), so runover lines of a key entry are
+    # exempt; the first line still has to be close to its sample.
+    first_key_line = {}
+    for label in layout.labels:
+        if label.role == "key" and label.owner_id is not None:
+            if label.owner_id not in first_key_line or label.y < first_key_line[label.owner_id].y:
+                first_key_line[label.owner_id] = label
     for label in layout.labels:
         if label.owner_id is None:
+            continue
+        if label.role == "key" and first_key_line[label.owner_id] is not label:
             continue
         owner = layout.by_id(label.owner_id)
         if owner is None:

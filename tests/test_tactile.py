@@ -454,6 +454,51 @@ class RuleTest(unittest.TestCase):
         self.assertAlmostEqual(LABEL_MAX_GAP, 6.35)
 
 
+class KeyOwnerDistanceTest(unittest.TestCase):
+    """label_owner_distance: a key entry is measured by its first line (BANA §5.8.4.3 puts
+    runovers in cell 8, further than 1/4 inch from the sample); graphic labels by every label."""
+
+    NAME = "Net savings(excluding particulate emission damage)"   # wraps to two key lines
+
+    def setUp(self):
+        self.layout = layout_vertical_bar_chart(VerticalBarChart(
+            "demo/key.png", "Savings", "Years", "Savings", ("2003", "2004", "2005"),
+            (BarSeries(self.NAME, (1.0, 2.0, 3.0)), BarSeries("Net National savings", (3.0, 2.0, 1.0)))))
+
+    def owner_ids(self, layout):
+        return [v.element_ids for v in check_layout(layout) if v.rule.id == "label_owner_distance"]
+
+    def key_lines(self, layout, series=0):
+        return sorted((l for l in layout.labels if l.owner_id == f"key-sample-{series}"),
+                      key=lambda l: l.y)
+
+    def test_a_wrapped_key_entry_with_a_cell_8_runover_passes(self):
+        lines = self.key_lines(self.layout)
+        self.assertEqual(len(lines), 2)
+        sample = self.layout.by_id("key-sample-0")
+        self.assertGreater(lines[1].bounds.gap(sample.bounds), LABEL_MAX_GAP)   # runover is far
+        self.assertEqual(self.owner_ids(self.layout), [])
+
+    def test_a_key_entry_whose_first_line_is_too_far_from_its_sample_still_fails(self):
+        first = self.key_lines(self.layout)[0]
+        moved = tuple(replace(l, x=l.x + 2 * LABEL_MAX_GAP) if l is first else l
+                      for l in self.layout.labels)
+        self.assertEqual(self.owner_ids(replace(self.layout, labels=moved)),
+                         [(first.id, "key-sample-0")])
+
+    def test_a_graphic_label_too_far_from_its_owner_still_fails(self):
+        category = next(l for l in self.layout.labels if l.role == "category")
+        moved = tuple(replace(l, y=l.y + 2 * LABEL_MAX_GAP) if l is category else l
+                      for l in self.layout.labels)
+        self.assertIn((category.id, "axis-x"), self.owner_ids(replace(self.layout, labels=moved)))
+
+    def test_every_line_of_a_graphic_label_is_still_measured(self):
+        heading = [l for l in self.layout.labels if l.role == "y_value"]
+        moved = tuple(replace(l, x=l.x - LABEL_MAX_GAP) if l.role == "y_value" else l
+                      for l in self.layout.labels)
+        self.assertEqual(len(self.owner_ids(replace(self.layout, labels=moved))), len(heading))
+
+
 class ConstantsTest(unittest.TestCase):
     """Spacing constants equal the inch values BANA states."""
 

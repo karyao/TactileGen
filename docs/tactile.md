@@ -91,7 +91,7 @@ also works on layouts built another way.
 | `bar_width` | Bars 3/8 to 1 inch wide | §6.6.6.7 |
 | `bar_spacing` | Bars in a set do not overlap; at least 1/8 inch between sets | §6.6.6.7, §3.4.3.12 |
 | `label_clearance` | Labels at least 1/8 inch (3 mm) from every other component | §3.4.3.12, §6.6.6.6 |
-| `label_owner_distance` | A label at most 1/4 inch (6 mm) from its component | §3.4.3.12, §5.10.5 |
+| `label_owner_distance` | A label at most 1/4 inch (6 mm) from its component; a series key entry is measured by its first line, since its runovers sit in cell 8 (§5.8.4.3) | §3.4.3.12, §5.10.5 |
 | `fits_page` | Everything inside 40 cells x 25 lines | §3.4.2 |
 | `grid_spacing` | Grid lines at least 3/8 inch apart | §3.4.3.9, §6.6.1.1 |
 | `line_hierarchy` | Grid and lead lines weaker than axis lines | §6.6.6.5, §3.4.3.8 |
