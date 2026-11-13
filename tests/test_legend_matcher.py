@@ -8,7 +8,9 @@ import cv2
 import numpy as np
 
 from src.contract_io import load_detection_frame, load_ocr_frame
-from src.contracts import Box, Detection, DetectionFrame, OCRFrame, RecognizedText
+from src.contracts import (
+    Box, Detection, DetectionFrame, LegendEntry, OCRFrame, RecognizedText,
+)
 from src.legend_matcher import (
     _classify_legend_scores,
     _crop,
@@ -287,3 +289,51 @@ class LegendMatcherTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LegendEntriesTest(unittest.TestCase):
+    """The mapping keeps every legend pair, including those no bar matched."""
+
+    def three_entries(self):
+        image = np.full((90, 80, 3), 255, dtype=np.uint8)
+        colours = ((200, 30, 30), (30, 200, 30), (30, 30, 200))
+        items = []
+        for row, colour in enumerate(colours):
+            top = 10 + 20 * row
+            image[top + 1:top + 9, 11:19] = colour
+            items += [detection(f"sw{row}", "legend_swatch", (10, top, 20, top + 10)),
+                      detection(f"lb{row}", "legend_label", (22, top, 35, top + 10))]
+        image[11:79, 51:69] = colours[1]          # only the middle colour has a bar
+        items.append(detection("bar", "vertical_bar", (50, 10, 70, 80)))
+        ocr = OCRFrame("input/chart.png", tuple(
+            RecognizedText(f"lb{row}", name, 0.95)
+            for row, name in enumerate(("Alpha", "Beta", "Gamma"))))
+        return image, frame(*items, height=90), ocr
+
+    def test_entries_list_every_pair_in_legend_order_including_unmatched(self):
+        image, detections, ocr = self.three_entries()
+        mapping = match_legend_to_bars(image, detections, ocr)
+        self.assertEqual(
+            [(a.bar_id, a.series_name, a.status) for a in mapping.assignments],
+            [("bar", "Beta", "matched")])
+        self.assertEqual(mapping.entries, (
+            LegendEntry("sw0", "lb0", "Alpha"),
+            LegendEntry("sw1", "lb1", "Beta"),
+            LegendEntry("sw2", "lb2", "Gamma"),
+        ))
+
+    def test_unreadable_label_text_gives_an_entry_without_a_name(self):
+        image, detections, _ = self.three_entries()
+        ocr = OCRFrame("input/chart.png", (RecognizedText("lb0", "Alpha", 0.95),
+                                           RecognizedText("lb1", "Beta", 0.95),
+                                           RecognizedText("lb2", "  ", 0.1)))
+        entries = match_legend_to_bars(image, detections, ocr).entries
+        self.assertEqual([entry.name for entry in entries], ["Alpha", "Beta", None])
+
+    def test_no_entries_without_a_legend_or_without_ocr(self):
+        image = np.zeros((60, 80, 3), dtype=np.uint8)
+        detections = frame(detection("bar", "vertical_bar", (5, 5, 15, 50)))
+        self.assertEqual(match_legend_to_bars(
+            image, detections, OCRFrame("input/chart.png", ())).entries, ())
+        self.assertEqual(match_legend_to_bars(image, detections, None).entries, ())
+

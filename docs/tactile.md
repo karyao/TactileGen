@@ -45,13 +45,18 @@ Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 | Element | Placement | BANA |
 | --- | --- | --- |
 | Title | Centred heading at the top, then a blank line | §5.3.1 |
-| Key | Before the graph, in left-to-right bar order; 1 x 1/2 inch texture samples from cell 1; explanation in cell 6 level with the sample top, runovers in cell 8 | §6.6.6.4, §3.4.3.14, §5.8.4.3-4 |
+| Key | Before the graph, in left-to-right bar order, with every legend entry in legend order (an entry whose bars are not visible gets a sample and name but draws no bars); 1 x 1/2 inch texture samples from cell 1; explanation in cell 6 level with the sample top, runovers in cell 8 | §6.6.6.4, §3.4.3.14, §5.8.4.3-4 |
 | Textures | At most five area textures; the dot fill uses 0.8 mm dots, smaller than braille dots | §3.2.2, §6.8.3.3 |
 | Vertical values | Right-justified, numeric indicator, dots 2-5 level with the grid line, 4 mm from the axis | §6.6.6.2, §6.6.6.6 |
 | Grid | Horizontal grid lines (least distinct, dashed) instead of tick marks; at least 3/8 inch apart | §6.6.6.3, §6.6.6.5, §3.4.3.9 |
 | Bars | 3/8 to 1 inch wide, sized from the number of categories and series; bars in a set are joined (as in print); 1/8 inch between sets (BANA gives no number for this gap, so the §3.4.3.12 spacing is reused); distinct textures per series | §6.6.6.7, §3.4.3.12 |
 | Category labels | Centred under each set of bars. Overflow order when they do not fit: (1) full names; (2) alphabetic keys of 2-3 letters from the name, with a dot 3 or 6 letter, never aa/ac/cc/ca; (3) numeric keys with the numeric indicator and no period; (4) flag the page for review. Keyed names are listed in the key in left-to-right order: symbol in cell 1, a blank cell, the name, runovers in cell 3 | §6.6.6.6, §5.8.1, §5.7.3, §5.8.4.5 |
 | Headings | Vertical heading above the values (≤ 20 cells per line), at least 1/8 inch above the top value label (`Y_HEADING_CLEARANCE`; no blank line needed); horizontal heading below the values, left-justified with the first one | §6.6.6.6, §3.4.3.12 |
+
+A legend entry with no visible bars (`BarSeries.has_bars` false) is keyed like any other series
+and takes no bar slot. The page gets a transcriber's note before the key, "No bars are visible for:
+<names>." (never "zero": the data may be below the axis), on the page that carries the key. Because the key and
+note take space, the plot is shorter than for the same chart without them.
 
 The layout never drops content to make a chart fit. If a chart breaks a
 limit (for example 36 bars on one page), the page is still produced and the

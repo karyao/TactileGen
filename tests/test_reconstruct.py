@@ -11,6 +11,7 @@ from src.contracts import (
     Detection,
     DetectionFrame,
     LegendBarAssignment,
+    LegendEntry,
     LegendMappingFrame,
 )
 from src.reconstruct import parse_tick_value, reconstruct_vbar
@@ -594,3 +595,148 @@ def test_guard_off_only_flags_empty_text():
 
     assert "category_unreadable" not in off("|", 0.95).flags
     assert "category_unreadable" in off("", 0.0).flags
+
+
+# --- legend entries whose series has no visible bars ---------------------------------
+
+BAR_BGR = (200, 100, 30)          # the colour base_chart paints its bars
+RED, GREEN = (30, 30, 200), (30, 200, 30)
+
+
+def _legend_chart(entries, values=(120, 60, 180), legend_box=True):
+    """base_chart plus a legend at the right edge. ``entries`` are
+    ``(text, bgr, swatch_conf, ocr_conf)`` rows, listed top to bottom."""
+    chart = base_chart(values)
+    top = 50
+    if legend_box:
+        chart.add("legend", (563, top - 4, 600, top + 25 * len(entries)))
+    for row, (text, colour, swatch_conf, ocr_conf) in enumerate(entries):
+        y = top + 25 * row
+        chart.add("legend_swatch", (566, y, 576, y + 10), conf=swatch_conf)
+        chart.paint((566, y, 576, y + 10), colour)
+        chart.add("legend_label", (578, y, 598, y + 10), text=text, ocr_conf=ocr_conf)
+    return chart
+
+
+def _row(text, colour, swatch_conf=0.9, ocr_conf=0.95):
+    return (text, colour, swatch_conf, ocr_conf)
+
+
+def test_unmatched_legend_entries_become_series_with_no_visible_bars():
+    # Chart 24811 in miniature: three legend entries, bars only for the middle one.
+    spec = _legend_chart([_row("Low", RED), _row("Kenya", BAR_BGR), _row("Vietnam", GREEN)]).run()
+
+    assert [s.name for s in spec.series] == ["Low", "Kenya", "Vietnam"]      # legend order
+    assert [s.no_visible_bars for s in spec.series] == [True, False, True]
+    assert_values(spec, [120, 60, 180], series=1)
+    for series in (spec.series[0], spec.series[2]):
+        assert series.values == [None, None, None]          # nothing measured, and not zero
+        assert series.value_rescued == [] and series.value_confidence == []
+    assert [s.source_color for s in spec.series] == ["#c81e1e", "#1e64c8", "#1ec81e"]
+    assert "series_ambiguous" not in spec.flags and spec.flags == []
+
+
+def test_normal_multi_series_chart_has_no_extra_series():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    spec = chart.run()
+    assert [s.name for s in spec.series] == ["Alpha", "Beta"]
+    assert not any(s.no_visible_bars for s in spec.series)
+    assert not [f for f in spec.flags if f.startswith(("legend_", "series_"))]
+
+
+def test_single_series_without_a_legend_is_unchanged():
+    spec = base_chart().run()
+    assert len(spec.series) == 1 and spec.series[0].name is None
+    assert not spec.series[0].no_visible_bars and spec.flags == []
+
+
+def test_single_matched_entry_adds_nothing():
+    spec = _legend_chart([_row("Kenya", BAR_BGR)]).run()
+    assert [s.name for s in spec.series] == ["Kenya"] and spec.flags == []
+
+
+def _skipped(spec):
+    return [flag for flag in spec.flags if flag.startswith("legend_entry_skipped")]
+
+
+def test_low_confidence_entries_are_reported_and_not_added():
+    for swatch_conf, ocr_conf in ((0.4, 0.95), (0.9, 0.3)):
+        spec = _legend_chart([_row("Kenya", BAR_BGR), _row("Ghost", GREEN, swatch_conf, ocr_conf)]).run()
+        assert [s.name for s in spec.series] == ["Kenya"]
+        assert _skipped(spec) == ["legend_entry_skipped:low_confidence:Ghost"]
+
+
+def test_unreadable_legend_text_is_reported_and_not_added():
+    spec = _legend_chart([_row("Kenya", BAR_BGR), _row("", GREEN)]).run()
+    assert [s.name for s in spec.series] == ["Kenya"]
+    assert len(_skipped(spec)) == 1 and _skipped(spec)[0].startswith("legend_entry_skipped:unreadable_text:")
+
+
+def test_a_repeated_name_is_not_added_twice():
+    spec = _legend_chart([_row("Kenya", BAR_BGR), _row("kenya", GREEN)]).run()
+    assert [s.name for s in spec.series] == ["Kenya"]
+    assert _skipped(spec) == ["legend_entry_skipped:duplicate_name:kenya"]
+
+
+def test_a_swatch_outside_the_legend_box_is_not_added():
+    chart = _legend_chart([_row("Kenya", BAR_BGR), _row("Ghost", GREEN)])
+    legend = next(d for d in chart.detections if d.role == "legend")
+    chart.detections[chart.detections.index(legend)] = type(legend)(
+        legend.id, legend.role, Box(563, 46, 600, 70), legend.confidence)    # covers the first row only
+    spec = chart.run()
+    assert [s.name for s in spec.series] == ["Kenya"]
+    assert _skipped(spec) == ["legend_entry_skipped:outside_legend:Ghost"]
+
+
+def test_no_series_are_added_while_bars_are_not_all_matched():
+    # The bars match no swatch (a colour not in the legend): the grouping is not settled, so
+    # an entry could still own bars that were merely hard to match. Report it, never guess.
+    chart = _legend_chart([_row("Alpha", RED), _row("Beta", GREEN)])
+    spec = chart.run()          # bars are (200, 100, 30): weak match to both swatches
+    assert not any(s.no_visible_bars for s in spec.series)
+    assert sorted(_skipped(spec)) == ["legend_entry_skipped:bars_not_settled:Alpha",
+                                      "legend_entry_skipped:bars_not_settled:Beta"]
+
+
+def _custom_entries(chart, order):
+    """The matcher's assignments for ``chart`` with entries in ``order`` (indices into the legend)."""
+    frame, mapping = _matched_mapping(chart)
+    swatches = [d for d in frame.detections if d.role == "legend_swatch"]
+    labels = [d for d in frame.detections if d.role == "legend_label"]
+    names = ("Alpha", "Beta", "Gamma")
+    entries = tuple(LegendEntry(swatches[i].id, labels[i].id, names[i]) for i in order)
+    return frame, LegendMappingFrame(frame.source_key, mapping.assignments, entries)
+
+
+def _grouped_with_third_entry():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    chart.add("legend_swatch", (200, 365, 214, 379))
+    chart.paint((200, 365, 214, 379), (200, 100, 30))
+    chart.add("legend_label", (220, 365, 280, 379), text="Gamma")
+    return chart
+
+
+def test_bar_less_series_slots_into_the_legend_order():
+    chart = _grouped_with_third_entry()
+    frame, mapping = _custom_entries(chart, order=(0, 2, 1))     # Alpha, Gamma (no bars), Beta
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
+    assert [(s.name, s.no_visible_bars) for s in spec.series] == [
+        ("Alpha", False), ("Gamma", True), ("Beta", False)]
+    assert "legend_order_differs" not in spec.flags
+
+
+def test_bar_order_wins_when_it_disagrees_with_the_legend_order():
+    chart = _grouped_with_third_entry()
+    frame, mapping = _custom_entries(chart, order=(1, 0, 2))     # legend lists Beta before Alpha
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
+    assert [s.name for s in spec.series] == ["Alpha", "Beta", "Gamma"]
+    assert spec.series[2].no_visible_bars and "legend_order_differs" in spec.flags
+
+
+def test_a_hand_built_mapping_without_entries_adds_nothing():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    frame, mapping = _matched_mapping(chart)
+    assert mapping.entries == ()
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
+    assert [s.name for s in spec.series] == ["Alpha", "Beta"]
+

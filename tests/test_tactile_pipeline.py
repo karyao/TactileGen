@@ -230,3 +230,25 @@ class Pipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_series_with_no_visible_bars_are_keyed_noted_and_do_not_stop_the_build(self):
+        series = [SeriesSpec("Low & middle income", "#aa0000", [None, None, None], no_visible_bars=True),
+                  SeriesSpec("Kenya", "#112233", [10.0, 20.0, 30.0]),
+                  SeriesSpec("Vietnam", "#00aa00", [None, None, None], no_visible_bars=True)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            out, err = io.StringIO(), io.StringIO()
+            code = pipeline.run(args, analyse_fn=lambda *_: (make_spec(series=series), None, None),
+                                input_fn=input, stdin_is_tty=False, out=out, err=err)
+            svg = path.read_text()
+        self.assertEqual(code, 0)
+        shown = out.getvalue()
+        self.assertIn("0: Low & middle income (no visible bars)", shown)
+        self.assertIn("1: Kenya\n", shown)
+        self.assertIn("2: Vietnam (no visible bars)", shown)
+        self.assertIn("Note: No bars are visible for: Low & middle income, Vietnam", shown)
+        for sample in ("key-sample-0", "key-sample-1", "key-sample-2"):
+            self.assertIn(sample, svg)
+        self.assertEqual(svg.count('id="bar-'), 3)           # Kenya's three bars only
+

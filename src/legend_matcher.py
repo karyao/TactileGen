@@ -9,6 +9,7 @@ from src.contracts import (
     Detection,
     DetectionFrame,
     LegendBarAssignment,
+    LegendEntry,
     LegendMappingFrame,
     OCRFrame,
     validate_unit_interval,
@@ -35,6 +36,7 @@ class _BarScore:
 class _LegendScores:
     source_key: str
     bars: tuple[_BarScore, ...]
+    entries: tuple[LegendEntry, ...] = ()
 
 
 @dataclass
@@ -331,6 +333,10 @@ def _score_legend_to_bars(
         _LegendCandidate(swatch, label, text_by_id.get(label.id) or None)
         for swatch, label in pairs
     ]
+    entries = tuple(
+        LegendEntry(candidate.swatch.id, candidate.label.id, candidate.name)
+        for candidate in candidates
+    )
     candidate_crops = [
         _crop(image, candidate.swatch) for candidate in candidates
     ]
@@ -363,7 +369,7 @@ def _score_legend_to_bars(
             best_error=best_error,
             runner_up_error=ranked[1][0] if len(ranked) > 1 else None,
         ))
-    return _LegendScores(detections.source_key, tuple(scores))
+    return _LegendScores(detections.source_key, tuple(scores), entries)
 
 
 def _classify_legend_scores(
@@ -407,7 +413,9 @@ def _classify_legend_scores(
             match_score=1.0 - scored.best_error,
             status=status,
         ))
-    return LegendMappingFrame(scores.source_key, tuple(assignments))
+    return LegendMappingFrame(
+        scores.source_key, tuple(assignments), scores.entries
+    )
 
 
 def match_legend_to_bars(

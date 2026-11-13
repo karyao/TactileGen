@@ -200,11 +200,39 @@ class LegendBarAssignment:
 
 
 @dataclass(frozen=True)
+class LegendEntry:
+    """One legend swatch and label pair, whether or not any bar matched it.
+
+    ``name`` is the stripped OCR text of the label, or ``None`` when it was
+    unreadable.
+    """
+
+    swatch_id: str
+    label_id: str
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("swatch_id", "label_id"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field_name} must be nonempty")
+        if self.name is not None and not isinstance(self.name, str):
+            raise ValueError("name must be a string or absent")
+
+
+@dataclass(frozen=True)
 class LegendMappingFrame:
-    """Validated, ephemeral legend-to-bar assignments for one source image."""
+    """Validated, ephemeral legend-to-bar assignments for one source image.
+
+    ``assignments`` has one row per detected bar. ``entries`` lists every
+    legend swatch and label pair in legend order (top to bottom, then left to
+    right), including pairs no bar matched. It is empty when the matcher could
+    not pair a legend at all.
+    """
 
     source_key: str
     assignments: tuple[LegendBarAssignment, ...]
+    entries: tuple[LegendEntry, ...] = ()
 
     def __post_init__(self) -> None:
         validate_source_key(self.source_key)
@@ -215,6 +243,14 @@ class LegendMappingFrame:
             if assignment.bar_id in ids:
                 raise ValueError(f"Duplicate legend mapping bar ID: {assignment.bar_id}")
             ids.add(assignment.bar_id)
+        used: set[str] = set()
+        for entry in self.entries:
+            if not isinstance(entry, LegendEntry):
+                raise ValueError("entries must contain LegendEntry objects")
+            for identifier in (entry.swatch_id, entry.label_id):
+                if identifier in used:
+                    raise ValueError(f"Duplicate legend entry detection: {identifier}")
+                used.add(identifier)
 
 
 def join_text_regions(
@@ -271,12 +307,21 @@ def join_legend_assignments(
 
 @dataclass(frozen=True)
 class BarSeries:
+    """One series. ``has_bars=False`` is a legend entry whose bars are not
+    visible in the source chart; it has a name and no values (not zero)."""
+
     name: str | None
     values: tuple[float, ...]
+    has_bars: bool = True
 
     def __post_init__(self) -> None:
         if self.name is not None and (not isinstance(self.name, str) or not self.name):
             raise ValueError("series name must be nonempty or absent")
+        if not self.has_bars:
+            if self.name is None:
+                raise ValueError("a series with no visible bars needs its legend name")
+            if self.values:
+                raise ValueError("a series with no visible bars has no values")
         if any(isinstance(value, bool) or not isinstance(value, (int, float))
                or not math.isfinite(value) for value in self.values):
             raise ValueError("series values must be finite numbers")
@@ -301,7 +346,10 @@ class VerticalBarChart:
             raise ValueError("categories must be nonempty strings")
         if not self.series or any(not isinstance(item, BarSeries) for item in self.series):
             raise ValueError("chart must contain at least one BarSeries")
-        if any(len(item.values) != len(self.categories) for item in self.series):
+        if not any(item.has_bars for item in self.series):
+            raise ValueError("chart must contain at least one series with bars")
+        if any(item.has_bars and len(item.values) != len(self.categories)
+               for item in self.series):
             raise ValueError("series values must match category count")
 
 
@@ -330,6 +378,10 @@ class SeriesSpec:
     because no bar was detected (a rescued 0.0 means no bar pixels were found).
     ``value_confidence[i]`` is the detector confidence, or a low fixed value
     for rescued values. Both are empty when not provided.
+
+    ``no_visible_bars`` marks a legend entry with no bars in the chart. Its
+    ``values`` are all ``None`` (nothing was measured, which is not zero), and
+    it is not an unresolved series: it needs no bar-colour pairing.
     """
 
     name: str | None
@@ -337,6 +389,7 @@ class SeriesSpec:
     values: list[float | None]
     value_rescued: list[bool] = field(default_factory=list)
     value_confidence: list[float | None] = field(default_factory=list)
+    no_visible_bars: bool = False
 
 
 @dataclass(frozen=True)
@@ -380,6 +433,11 @@ class VerticalBarSpec:
                 raise ValueError("source_color must be #rrggbb or None")
             if len(item.values) != len(self.categories):
                 raise ValueError("series values must match category count")
+            if item.no_visible_bars and (
+                not item.name or any(v is not None for v in item.values)
+                or item.value_rescued or item.value_confidence
+            ):
+                raise ValueError("a series with no visible bars has a name and no values")
             if any(v is not None and not math.isfinite(v) for v in item.values):
                 raise ValueError("series values must be finite or None")
             for extra in (item.value_rescued, item.value_confidence):
