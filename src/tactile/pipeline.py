@@ -30,7 +30,8 @@ from src.tactile.layout_hbar import layout_horizontal_bar_chart_pages
 from src.tactile.rules import check_layout, format_report
 from src.tactile.svg import render_svg
 
-DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
+# Fine-tuned on vertical and horizontal bars (notebooks/kaggle_train_bars.ipynb).
+DEFAULT_WEIGHTS = Path("models/yolo_bars_hv/best.pt")
 OVERVIEW_RULE = "overview_first"
 EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 1, 2, 3, 4
 
