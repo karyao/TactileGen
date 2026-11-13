@@ -56,7 +56,10 @@ Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 A legend entry with no visible bars (`BarSeries.has_bars` false) is keyed like any other series
 and takes no bar slot. The page gets a transcriber's note before the key, "No bars are visible for:
 <names>." (never "zero": the data may be below the axis), on the page that carries the key. Because the key and
-note take space, the plot is shorter than for the same chart without them.
+note take space, the plot is shorter than for the same chart without them. When that leaves less than
+`MIN_PLOT_HEIGHT` (5 × `GRID_MIN_SPACING`, 47.6 mm: room for 5 grid intervals; not from BANA), the title, notes and
+series key go on a key page before the graph page, the same key page a divided graph uses, and the
+graph page keeps the height. A single graph page with a short plot and no series key is unchanged.
 
 The layout never drops content to make a chart fit. If a chart breaks a
 limit (for example 36 bars on one page), the page is still produced and the

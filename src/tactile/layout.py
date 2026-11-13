@@ -47,6 +47,7 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     LINES_PER_PAGE,
     MAX_AREA_TEXTURES,
     MAX_GRID_INTERVALS,
+    MIN_PLOT_HEIGHT,
     PAGE_HEIGHT,
     PAGE_WIDTH,
     TEXTURES,
@@ -279,24 +280,28 @@ X_LABEL_MODES = ("full", "abbreviation", "number")
 
 
 def layout_vertical_bar_chart(chart: VerticalBarChart, *,
-                              x_labels: str = "auto") -> TactileLayout:
+                              x_labels: str = "auto",
+                              key_on_page: bool = False) -> TactileLayout:
     """Build a one-page tactile layout for ``chart``.
 
     The layout never silently drops content: if the chart breaks a BANA
     limit (for example bars narrower than 3/8 inch), the page is still
     produced and the rule checker reports the problem. ``x_labels`` is
     ``"auto"`` (follow the overflow order) or one mode from ``X_LABEL_MODES``.
+    ``key_on_page`` leaves the title, notes and series key off the page, for a
+    graph page that follows a key page.
     """
+    extra = {"show_title": False, "show_series_key": False} if key_on_page else {}
     if x_labels != "auto":
         if x_labels not in X_LABEL_MODES:
             raise ValueError(f"x_labels must be 'auto' or one of {X_LABEL_MODES}")
-        return _layout(chart, x_labels)
+        return _layout(chart, x_labels, **extra)
 
     built: TactileLayout | None = None
     tried: list[str] = []
     for mode in X_LABEL_MODES:
         try:
-            layout = _layout(chart, mode)
+            layout = _layout(chart, mode, **extra)
         except ValueError as exc:
             tried.append(f"{mode}: {exc}")
             continue
@@ -314,6 +319,9 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
                                     x_labels: str = "auto") -> list[TactileLayout]:
     """One page when it passes every rule; otherwise sections (BANA §3.9).
 
+    A series key that would leave the plot under ``MIN_PLOT_HEIGHT`` goes on a
+    key page before a single graph page instead.
+
     The categories are divided into the fewest consecutive sections whose
     pages each pass every rule except ``overview_first``, trying the x-label
     modes in overflow order for each section count. Every section uses the
@@ -327,6 +335,16 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
     from src.tactile.rules import check_layout   # rules imports this module
 
     single = layout_vertical_bar_chart(chart, x_labels=x_labels)
+    if _has_series_key(chart) and _plot_height(single) < MIN_PLOT_HEIGHT:
+        # The key, notes and title leave too little plot: move them to a key
+        # page before the graph page (§6.6.6.4), as for a divided graph.
+        graph = layout_vertical_bar_chart(chart, x_labels=x_labels, key_on_page=True)
+        if _plot_height(graph) > _plot_height(single) and not check_layout(graph):
+            if _plot_height(graph) < MIN_PLOT_HEIGHT:
+                graph = replace(graph, needs_review=graph.needs_review + (
+                    f"the plot is {_plot_height(graph):.0f} mm high even with the key on its "
+                    f"own page (minimum {MIN_PLOT_HEIGHT:.0f} mm)",))
+            return [_key_page(chart, ()), graph]
     if not check_layout(single):
         return [single]
     modes = X_LABEL_MODES if x_labels == "auto" else (x_labels,)
@@ -343,6 +361,10 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
             if all(v.rule.id == "overview_first" for page in pages for v in check_layout(page)):
                 return pages
     return [single]
+
+
+def _plot_height(layout: TactileLayout) -> float:
+    return layout.plot.y2 - layout.plot.y1
 
 
 def _no_bars_note(chart: VerticalBarChart) -> str | None:

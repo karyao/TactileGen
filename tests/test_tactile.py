@@ -737,3 +737,59 @@ class NoVisibleBarsTest(unittest.TestCase):
             BarSeries("with bars", (1.0, 2.0)),)
         with self.assertRaises(ValueError):
             layout_vertical_bar_chart(VerticalBarChart("demo/m.png", "T", "X", "Y", ("a", "b"), series))
+
+
+class MinimumPlotHeightTest(unittest.TestCase):
+    """A key that leaves the plot too short goes on a key page before the graph page."""
+
+    def short(self):
+        """24811-like: three keyed series, numbered categories and a long y title."""
+        return VerticalBarChart(
+            "demo/short.png", "Net energy imports of a country", "Years",
+            "Net energy imports % of energy use", ("2003", "2004", "2005", "2006"),
+            (BarSeries("Low & middle income", (), has_bars=False),
+             BarSeries("Kenya", (13.0, 14.0, 15.0, 16.0)),
+             BarSeries("Vietnam", (), has_bars=False)))
+
+    def roomy(self):
+        return VerticalBarChart("demo/roomy.png", "T", "X", "Y", ("a", "b", "c"),
+                                (BarSeries("A", (1.0, 2.0, 3.0)), BarSeries("B", (3.0, 2.0, 1.0))))
+
+    def height(self, layout):
+        return layout.plot.y2 - layout.plot.y1
+
+    def test_the_minimum_holds_five_grid_intervals(self):
+        self.assertAlmostEqual(constants.MIN_PLOT_HEIGHT, 5 * GRID_MIN_SPACING)
+
+    def test_the_example_really_is_too_short_on_one_page(self):
+        self.assertLess(self.height(layout_vertical_bar_chart(self.short())),
+                        constants.MIN_PLOT_HEIGHT)
+
+    def test_a_short_plot_moves_the_key_and_note_to_a_key_page(self):
+        pages = layout_vertical_bar_chart_pages(self.short())
+        self.assertEqual([p.page_kind for p in pages], ["key", "graph"])
+        key_page, graph = pages
+        self.assertEqual(len(key_page.key_samples), 3)
+        self.assertIn("No bars are visible for: Low & middle income, Vietnam.",
+                      " ".join(l.text for l in key_page.labels if l.role == "note"))
+        self.assertEqual(graph.key_samples, ())
+        self.assertNotIn("note", {l.role for l in graph.labels})
+        self.assertGreaterEqual(self.height(graph), constants.MIN_PLOT_HEIGHT)
+        self.assertEqual({bar.series_index for bar in graph.bars}, {1})
+        self.assertEqual(len(graph.bars), 4)
+
+    def test_both_pages_pass_every_rule(self):
+        for page in layout_vertical_bar_chart_pages(self.short()):
+            self.assertEqual(check_layout(page), [])
+
+    def test_a_chart_with_enough_plot_stays_on_one_page(self):
+        pages = layout_vertical_bar_chart_pages(self.roomy())
+        self.assertEqual(len(pages), 1)
+        self.assertGreaterEqual(self.height(pages[0]), constants.MIN_PLOT_HEIGHT)
+        self.assertEqual(pages[0], layout_vertical_bar_chart(self.roomy()))
+        self.assertEqual(len(pages[0].key_samples), 2)
+
+    def test_a_single_unnamed_series_has_no_key_to_move(self):
+        unnamed = VerticalBarChart("demo/u.png", "T", "X", "A very long y axis title " * 3,
+                                   tuple(str(j) for j in range(4)), (BarSeries(None, (1.0, 2.0, 3.0, 4.0)),))
+        self.assertEqual(len(layout_vertical_bar_chart_pages(unnamed)), 1)
