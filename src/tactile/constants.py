@@ -68,6 +68,9 @@ MAX_AREA_TEXTURES = 5                   # §3.2.2
 
 # --- Labels --------------------------------------------------------------------------
 Y_HEADING_MAX_CELLS = 20                # §6.6.6.6
+# Horizontal bars: one blank cell, then at least two unspaced guide dots
+# (dot 5s) between a descriptive label and the vertical axis, §6.6.6.6.
+GUIDE_DOTS_MIN = 2
 TN_FIRST_CELL = 7                       # transcriber's note starts in cell 7, §5.6.2
 TN_RUNOVER_CELL = 5                     # and runs over in cell 5, §5.6.2
 
@@ -90,5 +93,9 @@ DOT_TEXTURE_DIAMETER = 0.8
 # Upper limit on grid intervals, to keep the grid sparse. A count, not a
 # spacing; BANA only says some grid lines may be omitted (§6.6.1.1).
 MAX_GRID_INTERVALS = 8
+# Horizontal bars: widest category-label column (label, blank cell and guide
+# dots), so at least 24 of the 40 cells stay for the bars. A count, not a
+# spacing; BANA only says long labels run over (§6.6.6.6) or are keyed (§5.8).
+CATEGORY_COLUMN_MAX_CELLS = 16
 
 TEXTURES = ("diagonal", "dots", "horizontal", "crosshatch", "vertical")
