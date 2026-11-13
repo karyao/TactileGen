@@ -36,12 +36,21 @@ from src.presentation import (
 )
 from src.reconstruct import reconstruct_vbar
 from src.tactile.completeness import (
+    READY,
     Completeness,
     Overrides,
+    apply_overrides,
     check_completeness,
     completeness_from_error,
     cut_off_flags,
 )
+from src.tactile.generation import (
+    GenerationError,
+    GenerationResult,
+    cleanup_generation,
+    generate_tactile_artifacts,
+)
+from src.tactile.rules import format_report
 from src.tesseract_ocr import TesseractBackend
 
 
@@ -106,6 +115,25 @@ class ReviewModel:
     spec: VerticalBarSpec
     bindings: tuple[ReviewFieldBinding, ...]
     draft_values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ManualGenerationResult:
+    """A corrected review draft committed by successful artifact generation."""
+
+    review_model: ReviewModel
+    completeness: Completeness
+    generation: GenerationResult
+    override_notes: tuple[str, ...]
+
+
+class ManualGenerationBlocked(ValueError):
+    """A valid review draft whose corrected specification is not ready."""
+
+    def __init__(self, review_model: ReviewModel, completeness: Completeness) -> None:
+        super().__init__("The corrected specification is not ready for generation.")
+        self.review_model = review_model
+        self.completeness = completeness
 
 
 def build_review_model(spec: VerticalBarSpec, completeness: Completeness) -> ReviewModel:
@@ -216,6 +244,70 @@ def review_overrides(model: ReviewModel) -> Overrides:
         categories=categories,
         series_names=series_names,
     )
+
+
+def generate_review_submission(
+    model: ReviewModel,
+    rows: Any,
+    artifact_root: Path | str,
+) -> ManualGenerationResult:
+    """Validate the latest review table, apply text, and generate ready artifacts."""
+    draft = update_review_draft(model, rows)
+    corrected, notes = apply_overrides(model.spec, review_overrides(draft))
+    completeness = check_completeness(corrected)
+    if completeness.status != READY:
+        raise ManualGenerationBlocked(draft, completeness)
+    committed_review = build_review_model(corrected, completeness)
+    generation = generate_tactile_artifacts(corrected, artifact_root)
+    return ManualGenerationResult(
+        review_model=committed_review,
+        completeness=completeness,
+        generation=generation,
+        override_notes=tuple(notes),
+    )
+
+
+def generation_report(result: ManualGenerationResult) -> str:
+    """Format generated-page metadata as an in-page review report."""
+    lines = [
+        "### Tactile generation complete",
+        "",
+        "The gallery contains annotated review copies. The ZIP contains only "
+        "clean SVG pages for embossing.",
+        "",
+        "**Applied corrections**",
+    ]
+    if result.override_notes:
+        lines.extend(f"- {note}" for note in result.override_notes)
+    else:
+        lines.append("- No text corrections were needed.")
+    if result.generation.notes:
+        lines.extend(("", "**Generation notes**"))
+        lines.extend(f"- {note}" for note in result.generation.notes)
+
+    transcriber_review = False
+    for page in result.generation.pages:
+        lines.extend(("", f"#### {page.caption}"))
+        if page.notes:
+            lines.extend(f"- Note: {note}" for note in page.notes)
+        if page.needs_review:
+            transcriber_review = True
+            lines.extend(f"- Needs review: {note}" for note in page.needs_review)
+        if page.violations:
+            transcriber_review = True
+        lines.extend(("", "```text", format_report(list(page.violations)), "```"))
+    if transcriber_review:
+        lines.extend((
+            "",
+            "**Transcriber review is required before production.**",
+        ))
+    else:
+        lines.extend((
+            "",
+            "Automated checks found no rule violations; this does not replace "
+            "professional transcriber review.",
+        ))
+    return "\n".join(lines)
 
 
 def ready_status() -> str:
@@ -460,8 +552,12 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
         legend_table: list[list[Any]] | None = None,
         completeness_text: str | None = None,
         review_model: ReviewModel | None = None,
+        generate_enabled: bool = False,
         spec_json: dict[str, Any] | None = None,
         spec_download_path: Path | None = None,
+        generation_gallery: list[tuple[str, str]] | None = None,
+        generation_report_text: str | None = None,
+        generation_zip_path: Path | None = None,
         ocr_warning: str | None = None,
         legend_warning: str | None = None,
         reconstruction_warning: str | None = None,
@@ -492,11 +588,25 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 value=review_value_rows(review_model.spec) if review_model else [],
             ),
             gr.update(value="", visible=False),
+            gr.update(interactive=generate_enabled),
             gr.update(value=spec_json or {}, visible=spec_json is not None),
             gr.update(
                 value=spec_download_path,
                 visible=spec_download_path is not None,
             ),
+            gr.update(
+                value=generation_gallery or [],
+                visible=generation_gallery is not None,
+            ),
+            gr.update(
+                value=generation_report_text or "",
+                visible=generation_report_text is not None,
+            ),
+            gr.update(
+                value=generation_zip_path,
+                visible=generation_zip_path is not None,
+            ),
+            gr.update(value="", visible=False),
             gr.update(
                 value=alert_message(ocr_warning) if ocr_warning else "",
                 visible=ocr_warning is not None,
@@ -575,6 +685,10 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                     if result.completeness is not None else None
                 ),
                 review_model=review,
+                generate_enabled=(
+                    result.completeness is not None
+                    and result.completeness.status != "cannot_build"
+                ),
                 spec_json=spec_data,
                 spec_download_path=spec_download,
                 ocr_warning=result.ocr_warning,
@@ -605,6 +719,91 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             gr.update(value=review_text_rows(updated)),
             gr.update(value="", visible=False),
         )
+
+    def generate_event(model, rows):
+        unchanged = gr.update()
+        if model is None:
+            return (
+                unchanged, unchanged, unchanged, unchanged, unchanged,
+                unchanged, unchanged, unchanged, unchanged, unchanged,
+                gr.update(
+                    value=alert_message("Analyze a chart before generating."),
+                    visible=True,
+                ),
+            )
+        submitted = None
+        try:
+            submitted = generate_review_submission(model, rows, artifact_root)
+            corrected = submitted.review_model.spec
+            spec_path = _spec_download_path(
+                artifact_root, corrected.source_key, corrected
+            )
+            gallery = [
+                (str(page.review_svg), page.caption)
+                for page in submitted.generation.pages
+            ]
+            return (
+                gr.update(value=completeness_summary(submitted.completeness)),
+                submitted.review_model,
+                gr.update(value=review_text_rows(submitted.review_model)),
+                gr.update(value=review_value_rows(corrected)),
+                gr.update(value="", visible=False),
+                gr.update(value=asdict(corrected), visible=True),
+                gr.update(value=spec_path, visible=True),
+                gr.update(value=gallery, visible=True),
+                gr.update(value=generation_report(submitted), visible=True),
+                gr.update(value=submitted.generation.zip_path, visible=True),
+                gr.update(value="", visible=False),
+            )
+        except ManualGenerationBlocked as exc:
+            return (
+                gr.update(value=completeness_summary(exc.completeness), visible=True),
+                exc.review_model,
+                gr.update(value=review_text_rows(exc.review_model)),
+                unchanged,
+                unchanged,
+                unchanged,
+                unchanged,
+                unchanged,
+                unchanged,
+                unchanged,
+                gr.update(value=alert_message(str(exc)), visible=True),
+            )
+        except ValueError as exc:
+            if submitted is not None:
+                try:
+                    cleanup_generation(submitted.generation, artifact_root)
+                except Exception:
+                    LOGGER.exception("Could not clean up unpublished tactile artifacts")
+            return (
+                unchanged, model, unchanged, unchanged,
+                gr.update(value=alert_message(str(exc)), visible=True),
+                unchanged, unchanged, unchanged, unchanged, unchanged, unchanged,
+            )
+        except GenerationError as exc:
+            LOGGER.exception("Tactile artifact generation failed at %s", exc.stage)
+            return (
+                unchanged, model, unchanged, unchanged, unchanged,
+                unchanged, unchanged, unchanged, unchanged, unchanged,
+                gr.update(value=alert_message(str(exc)), visible=True),
+            )
+        except Exception:
+            if submitted is not None:
+                try:
+                    cleanup_generation(submitted.generation, artifact_root)
+                except Exception:
+                    LOGGER.exception("Could not clean up unpublished tactile artifacts")
+            LOGGER.exception("Manual tactile generation failed")
+            return (
+                unchanged, model, unchanged, unchanged, unchanged,
+                unchanged, unchanged, unchanged, unchanged, unchanged,
+                gr.update(
+                    value=alert_message(
+                        "Tactile generation failed. Check the terminal and try again."
+                    ),
+                    visible=True,
+                ),
+            )
 
     def finish_analysis():
         return tuple(gr.update(interactive=True) for _ in range(6))
@@ -815,6 +1014,12 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         review_error_output = gr.HTML(
                             "", visible=False, elem_classes="borealis-error"
                         )
+                        generate_button = gr.Button(
+                            "Generate tactile graphic",
+                            variant="primary",
+                            interactive=False,
+                            elem_classes="borealis-generate",
+                        )
                     spec_output = gr.JSON(
                         value={},
                         label="Reconstructed VerticalBarSpec",
@@ -827,6 +1032,31 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         visible=False,
                         variant="secondary",
                         elem_classes="borealis-spec-download",
+                    )
+                    generation_gallery = gr.Gallery(
+                        value=[],
+                        label="Tactile review pages",
+                        visible=False,
+                        columns=2,
+                        object_fit="contain",
+                        buttons=["fullscreen"],
+                        elem_classes="borealis-tactile-gallery",
+                    )
+                    generation_report_output = gr.Markdown(
+                        "",
+                        label="Tactile generation report",
+                        visible=False,
+                        elem_classes="borealis-summary",
+                    )
+                    generation_download = gr.DownloadButton(
+                        "Download clean tactile SVGs (ZIP)",
+                        value=None,
+                        visible=False,
+                        variant="primary",
+                        elem_classes="borealis-tactile-download",
+                    )
+                    generation_error_output = gr.HTML(
+                        "", visible=False, elem_classes="borealis-error"
                     )
                     ocr_warning_output = gr.HTML(
                         "", visible=False, elem_classes="borealis-error"
@@ -857,8 +1087,13 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 review_fields,
                 review_values,
                 review_error_output,
+                generate_button,
                 spec_output,
                 spec_download,
+                generation_gallery,
+                generation_report_output,
+                generation_download,
+                generation_error_output,
                 ocr_warning_output,
                 legend_warning_output,
                 reconstruction_warning_output,
@@ -885,8 +1120,13 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             review_fields,
             review_values,
             review_error_output,
+            generate_button,
             spec_output,
             spec_download,
+            generation_gallery,
+            generation_report_output,
+            generation_download,
+            generation_error_output,
             ocr_warning_output,
             legend_warning_output,
             reconstruction_warning_output,
@@ -923,6 +1163,30 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             outputs=[review_state, review_fields, review_error_output],
             queue=False,
             api_name="update_review",
+            api_visibility="private",
+        )
+        generate_button.click(
+            generate_event,
+            inputs=[review_state, review_fields],
+            outputs=[
+                completeness_output,
+                review_state,
+                review_fields,
+                review_values,
+                review_error_output,
+                spec_output,
+                spec_download,
+                generation_gallery,
+                generation_report_output,
+                generation_download,
+                generation_error_output,
+            ],
+            show_progress="full",
+            show_progress_on=generation_gallery,
+            concurrency_limit=1,
+            concurrency_id="tactilegen-generation",
+            api_name="generate_tactile",
+            api_description="Generate reviewed tactile SVG artifacts.",
             api_visibility="private",
         )
         clear_button.click(

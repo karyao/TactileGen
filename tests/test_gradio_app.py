@@ -40,6 +40,7 @@ from src.gradio_app import (
     LEGEND_WARNING,
     OCR_WARNING,
     RECONSTRUCTION_WARNING,
+    ManualGenerationBlocked,
     ReviewModel,
     UploadValidationError,
     alert_message,
@@ -50,6 +51,8 @@ from src.gradio_app import (
     complete_status,
     completeness_summary,
     decode_upload,
+    generate_review_submission,
+    generation_report,
     main,
     parse_args,
     ready_status,
@@ -441,6 +444,62 @@ class GradioAppTest(unittest.TestCase):
         self.assertEqual(model.spec.title, "Sales")
         self.assertEqual(model.draft_values[0], "Sales")
 
+    def test_manual_generation_applies_and_commits_review_text(self):
+        spec = make_spec(flags=["title_cut_off"])
+        assessment = Completeness(
+            NEEDS_INPUT,
+            missing=[MissingItem("title", "Confirm title.", "--title")],
+        )
+        model = build_review_model(spec, assessment)
+        rows = review_text_rows(model)
+        rows[0][1] = "Confirmed sales"
+        rows[3][1] = "FY 2024"
+
+        with tempfile.TemporaryDirectory() as root:
+            result = generate_review_submission(model, rows, root)
+            self.assertEqual(result.completeness.status, READY)
+            self.assertEqual(result.review_model.spec.title, "Confirmed sales")
+            self.assertEqual(result.review_model.spec.categories, ["FY 2024"])
+            self.assertNotIn("title_cut_off", result.review_model.spec.flags)
+            self.assertTrue(result.generation.zip_path.is_file())
+            report = generation_report(result)
+
+        self.assertIn("chart title supplied by user", report)
+        self.assertIn("category 0 supplied by user", report)
+        self.assertIn("Tactile graphic", report)
+        self.assertIn("Checked", report)
+        self.assertIn("annotated review copies", report)
+
+    def test_manual_generation_blocks_invalid_text_and_structural_uncertainty(self):
+        model = build_review_model(make_spec(), Completeness(READY))
+        rows = review_text_rows(model)
+        rows[0][1] = "Sales 😀"
+        with tempfile.TemporaryDirectory() as root, self.assertRaises(
+            ManualGenerationBlocked
+        ) as raised:
+            generate_review_submission(model, rows, root)
+        self.assertEqual(raised.exception.completeness.status, NEEDS_INPUT)
+        self.assertIn("cannot be written in braille",
+                      raised.exception.completeness.missing[0].reason)
+
+        blocked_spec = make_spec(flags=["category_ambiguous"])
+        blocked = build_review_model(
+            blocked_spec,
+            Completeness(CANNOT_BUILD, blockers=["Ambiguous categories."]),
+        )
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(ManualGenerationBlocked) as raised:
+                generate_review_submission(blocked, review_text_rows(blocked), root)
+            self.assertEqual(raised.exception.completeness.status, CANNOT_BUILD)
+            self.assertFalse(any(Path(root).iterdir()))
+
+        blank = review_text_rows(model)
+        blank[1][1] = "   "
+        with tempfile.TemporaryDirectory() as root, self.assertRaisesRegex(
+            ValueError, "X-axis title cannot be blank"
+        ):
+            generate_review_submission(model, blank, root)
+
     def test_app_factory_wires_controls_states_and_private_events(self):
         with patch("src.gradio_app.load_model") as load, \
              patch("gradio.Blocks.launch") as launch:
@@ -461,6 +520,8 @@ class GradioAppTest(unittest.TestCase):
         self.assertIn("Reconstructed text", labels)
         self.assertIn("Reconstructed values (read-only)", labels)
         self.assertIn("Reconstructed VerticalBarSpec", labels)
+        self.assertIn("Tactile review pages", labels)
+        self.assertIn("Tactile generation report", labels)
 
         by_class = {}
         for component in components:
@@ -493,18 +554,20 @@ class GradioAppTest(unittest.TestCase):
 
         begin = next(fn.fn for fn in demo.fns.values() if fn.api_name == "begin_analysis")
         begin_updates = begin()
-        self.assertEqual(len(begin_updates), 25)
+        self.assertEqual(len(begin_updates), 30)
         self.assertTrue(all(update["interactive"] is False for update in begin_updates[:6]))
         finish = next(fn.fn for fn in demo.fns.values() if fn.api_name == "finish_analysis")
         self.assertTrue(all(update["interactive"] is True for update in finish()))
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
         ready_updates = ready()
-        self.assertEqual(len(ready_updates), 19)
+        self.assertEqual(len(ready_updates), 24)
         self.assertTrue(ready_updates[1]["visible"])
         self.assertIsNone(ready_updates[8])
         self.assertTrue(all(not update["visible"] for update in ready_updates[2:8]))
         self.assertFalse(ready_updates[9]["visible"])
-        self.assertTrue(all(not update["visible"] for update in ready_updates[12:]))
+        self.assertFalse(ready_updates[12]["visible"])
+        self.assertFalse(ready_updates[13]["interactive"])
+        self.assertTrue(all(not update["visible"] for update in ready_updates[14:]))
 
         analyze = inference_fn.fn
         display_frame = DetectionFrame("input/chart.png", 2, 2, (
@@ -531,8 +594,10 @@ class GradioAppTest(unittest.TestCase):
         self.assertFalse(success_updates[7]["visible"])
         self.assertIsNone(success_updates[8])
         self.assertFalse(success_updates[9]["visible"])
+        self.assertFalse(success_updates[12]["visible"])
+        self.assertFalse(success_updates[13]["interactive"])
         self.assertTrue(all(not success_updates[index]["visible"]
-                            for index in range(12, 19)))
+                            for index in range(14, 24)))
 
         mapped_frame = DetectionFrame("input/chart.png", 20, 20, (
             Detection("bar", "vertical_bar", Box(0, 5, 5, 20), 0.9),
@@ -564,10 +629,11 @@ class GradioAppTest(unittest.TestCase):
         self.assertEqual(mapped_updates[10]["value"][0], ["Chart title", "Sales"])
         self.assertEqual(mapped_updates[11]["value"],
                          [[0, "2024", 0, "(unnamed)", 50.0]])
-        self.assertTrue(mapped_updates[13]["visible"])
-        self.assertEqual(mapped_updates[13]["value"], asdict(reconstructed))
+        self.assertTrue(mapped_updates[13]["interactive"])
         self.assertTrue(mapped_updates[14]["visible"])
-        spec_path = Path(mapped_updates[14]["value"])
+        self.assertEqual(mapped_updates[14]["value"], asdict(reconstructed))
+        self.assertTrue(mapped_updates[15]["visible"])
+        spec_path = Path(mapped_updates[15]["value"])
         self.assertEqual(json.loads(spec_path.read_text(encoding="utf-8")),
                          asdict(reconstructed))
         self.assertRegex(spec_path.name, r"chart_spec_[0-9a-f]{32}\.json")
@@ -581,6 +647,7 @@ class GradioAppTest(unittest.TestCase):
             spec_blocked_updates = analyze("chart.png", 0.25, 0.70, "eng")
         self.assertIsInstance(spec_blocked_updates[8], ReviewModel)
         self.assertTrue(spec_blocked_updates[9]["visible"])
+        self.assertFalse(spec_blocked_updates[13]["interactive"])
         self.assertEqual(spec_blocked_updates[11]["value"],
                          [[0, "2024", 0, "(unnamed)", 50.0]])
 
@@ -605,10 +672,10 @@ class GradioAppTest(unittest.TestCase):
         self.assertIn("No x tick labels", blocked_updates[7]["value"])
         self.assertIsNone(blocked_updates[8])
         self.assertFalse(blocked_updates[9]["visible"])
-        self.assertFalse(blocked_updates[13]["visible"])
         self.assertFalse(blocked_updates[14]["visible"])
+        self.assertFalse(blocked_updates[15]["visible"])
         self.assertTrue(all(not blocked_updates[index]["visible"]
-                            for index in (15, 16, 17, 18)))
+                            for index in (20, 21, 22, 23)))
 
         warning = AnalysisResult(
             "summary", np.zeros((2, 2, 3), dtype=np.uint8), 1,
@@ -620,12 +687,12 @@ class GradioAppTest(unittest.TestCase):
         self.assertTrue(warning_updates[2]["visible"])
         self.assertTrue(warning_updates[3]["visible"])
         self.assertFalse(warning_updates[4]["visible"])
-        self.assertTrue(warning_updates[15]["visible"])
-        self.assertFalse(warning_updates[16]["visible"])
-        self.assertTrue(warning_updates[17]["visible"])
-        self.assertIn('role="alert"', warning_updates[17]["value"])
-        self.assertIn("reconstruction was unavailable", warning_updates[17]["value"])
-        self.assertFalse(warning_updates[18]["visible"])
+        self.assertTrue(warning_updates[20]["visible"])
+        self.assertFalse(warning_updates[21]["visible"])
+        self.assertTrue(warning_updates[22]["visible"])
+        self.assertIn('role="alert"', warning_updates[22]["value"])
+        self.assertIn("reconstruction was unavailable", warning_updates[22]["value"])
+        self.assertFalse(warning_updates[23]["visible"])
         with patch(
             "src.gradio_app.analyze_image",
             side_effect=UploadValidationError("Upload a supported image."),
@@ -634,8 +701,8 @@ class GradioAppTest(unittest.TestCase):
         self.assertFalse(failure_updates[2]["visible"])
         self.assertFalse(failure_updates[3]["visible"])
         self.assertFalse(failure_updates[4]["visible"])
-        self.assertTrue(failure_updates[18]["visible"])
-        self.assertIn('role="alert"', failure_updates[18]["value"])
+        self.assertTrue(failure_updates[23]["visible"])
+        self.assertIn('role="alert"', failure_updates[23]["value"])
 
         private_path = "/private/tmp/gradio/secret-chart.png"
         with self.assertLogs("src.gradio_app", level="ERROR"), patch(
@@ -643,9 +710,9 @@ class GradioAppTest(unittest.TestCase):
             side_effect=RuntimeError(private_path),
         ):
             unexpected_updates = analyze("chart.png", 0.25, 0.70, "eng")
-        self.assertTrue(unexpected_updates[18]["visible"])
-        self.assertNotIn(private_path, unexpected_updates[18]["value"])
-        self.assertNotIn("RuntimeError", unexpected_updates[18]["value"])
+        self.assertTrue(unexpected_updates[23]["visible"])
+        self.assertNotIn(private_path, unexpected_updates[23]["value"])
+        self.assertNotIn("RuntimeError", unexpected_updates[23]["value"])
 
         change_events = [dependency for dependency in config["dependencies"]
                          if dependency["targets"] and dependency["targets"][0][1] == "change"]
@@ -668,6 +735,28 @@ class GradioAppTest(unittest.TestCase):
         self.assertEqual(valid_review[0].draft_values[0], "Updated title")
         self.assertEqual(valid_review[1]["value"][0][0], "Chart title")
         self.assertFalse(valid_review[2]["visible"])
+
+        generation_events = [
+            dependency for dependency in config["dependencies"]
+            if dependency.get("api_name") == "generate_tactile"
+        ]
+        self.assertEqual(len(generation_events), 1)
+        self.assertEqual(generation_events[0]["api_visibility"], "private")
+        generate_fn = next(
+            fn for fn in demo.fns.values() if fn.api_name == "generate_tactile"
+        )
+        self.assertEqual(generate_fn.concurrency_limit, 1)
+        self.assertEqual(generate_fn.concurrency_id, "tactilegen-generation")
+        generated_rows = review_text_rows(review_model)
+        generated_rows[0][1] = "Updated sales"
+        generated = generate_fn.fn(review_model, generated_rows)
+        self.assertEqual(generated[1].spec.title, "Updated sales")
+        self.assertEqual(generated[2]["value"][0], ["Chart title", "Updated sales"])
+        self.assertTrue(generated[5]["visible"])
+        self.assertTrue(generated[7]["visible"])
+        self.assertTrue(generated[8]["visible"])
+        self.assertTrue(generated[9]["visible"])
+        self.assertFalse(generated[10]["visible"])
         demo.close(verbose=False)
 
     def test_main_loads_once_and_uses_private_styled_launch(self):
