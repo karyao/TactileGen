@@ -160,8 +160,8 @@ class GradioAppTest(unittest.TestCase):
             recognize.assert_called_once()
             self.assertIs(recognize.call_args.args[2], backend)
             self.assertEqual(recognize.call_args.args[3], "eng")
-            self.assertIn("Detected 0 chart elements.", result.summary)
-            self.assertIn("OCR attempted 0 text regions", result.summary)
+            self.assertIn("**Detected 0 chart elements**", result.summary)
+            self.assertIn("- OCR: 0 of 0 text regions readable", result.summary)
             self.assertEqual(tuple(result.overlay_rgb[0, 0]), (30, 20, 10))
             self.assertEqual(tuple(result.source_rgb[0, 0]), (30, 20, 10))
             self.assertEqual(progress.call_count, 7)
@@ -253,7 +253,7 @@ class GradioAppTest(unittest.TestCase):
             self.assertIsNone(result.ocr_frame)
             self.assertEqual(result.ocr_warning, OCR_WARNING)
             self.assertEqual(result.reconstruction_warning, RECONSTRUCTION_WARNING)
-            self.assertIn("Detected 1 chart element.", result.summary)
+            self.assertIn("**Detected 1 chart element**", result.summary)
             self.assertIsNotNone(result.overlay_rgb)
 
     def test_matcher_failure_is_independent_and_can_coexist_with_ocr_warning(self):
@@ -275,7 +275,7 @@ class GradioAppTest(unittest.TestCase):
             self.assertEqual(result.legend_warning, LEGEND_WARNING)
             self.assertEqual(result.reconstruction_warning, RECONSTRUCTION_WARNING)
             self.assertIsNone(result.legend_mapping)
-            self.assertNotIn("remained unmatched", result.summary)
+            self.assertNotIn("Legend matching:", result.summary)
 
     def test_invalid_upload_never_calls_model_and_mismatched_frame_fails(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -336,10 +336,9 @@ class GradioAppTest(unittest.TestCase):
     def test_accessible_status_helpers_cover_ready_busy_success_zero_and_error(self):
         self.assertIn('role="status"', ready_status())
         self.assertIn('aria-live="polite"', analyzing_status())
-        self.assertIn("No detections found", complete_status(0))
-        self.assertIn("1 detection found", complete_status(1))
-        self.assertIn("3 detections found", complete_status(3))
-        self.assertIn("OCR attempted 2 text regions", complete_status(3, 2))
+        self.assertIn("Analysis result ready", complete_status())
+        self.assertIn("Analysis result ready", complete_status(0))
+        self.assertIn("Analysis result ready", complete_status(3, 2))
         self.assertIn('role="alert"', alert_message("Try again"))
 
     def test_completeness_summary_covers_all_states_and_details(self):
@@ -675,7 +674,7 @@ class GradioAppTest(unittest.TestCase):
         )
         with patch("src.gradio_app.analyze_image", return_value=blocked_result):
             blocked_updates = analyze("chart.png", 0.25, 0.70, "eng")
-        self.assertIn("Analysis complete", blocked_updates[0]["value"])
+        self.assertIn("Analysis result ready", blocked_updates[0]["value"])
         for index in (2, 3, 4, 5, 6, 7):
             self.assertTrue(blocked_updates[index]["visible"])
         self.assertIn("Reconstruction: Cannot build", blocked_updates[7]["value"])

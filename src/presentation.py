@@ -52,44 +52,48 @@ def summarize_detections(
     ocr: OCRFrame | None = None,
     legend_mapping: LegendMappingFrame | None = None,
 ) -> str:
-    """Return a plain-language summary of one detection frame."""
+    """Return a Markdown summary of one detection frame."""
     total = len(frame.detections)
     counts = Counter(detection.role for detection in frame.detections)
-    parts = [f"Detected {total} chart element{'s' if total != 1 else ''}."]
+    headline = f"**Detected {total} chart element{'s' if total != 1 else ''}**"
     if counts:
-        grouped = "; ".join(
-            f"{_display_role(role)}: {counts[role]}"
+        confidences = [detection.confidence for detection in frame.detections]
+        headline += (
+            f" · Confidence range: {min(confidences):.1%} to {max(confidences):.1%}."
+        )
+    else:
+        headline += "."
+
+    sections = [headline]
+    if counts:
+        role_lines = "\n".join(
+            f"- {_display_role(role).capitalize()}: {counts[role]}"
             for role in CLASS_NAMES
             if role in counts
         )
-        confidences = [detection.confidence for detection in frame.detections]
-        parts.append(f"By role: {grouped}.")
-        parts.append(
-            f"Confidence range: {min(confidences):.1%} to {max(confidences):.1%}."
-        )
+        sections.append(f"**Elements by role**\n{role_lines}")
     else:
-        parts.append("No roles were detected.")
-    parts.append(f"Vertical bars: {counts['vertical_bar']}.")
+        sections.append("**Elements by role**\n- No roles were detected.")
+
+    status_lines = []
     if ocr is None:
-        parts.append("Chart text and numeric values have not been read.")
+        status_lines.append("- Chart text has not been read.")
     else:
         readable = sum(bool(region.text.strip()) for region in ocr.regions)
-        parts.append(
-            f"OCR attempted {len(ocr.regions)} text region"
-            f"{'s' if len(ocr.regions) != 1 else ''}; "
-            f"{readable} returned readable text."
+        status_lines.append(
+            f"- OCR: {readable} of {len(ocr.regions)} text regions readable"
         )
     if legend_mapping is not None:
         assignments = [assignment for _, assignment in
                        join_legend_assignments(frame, legend_mapping)]
         matched = sum(item.status == "matched" for item in assignments)
-        parts.append(
-            f"Legend matching associated {matched} vertical bar"
-            f"{'s' if matched != 1 else ''}; "
-            f"{len(assignments) - matched} remained unmatched."
+        status_lines.append(
+            f"- Legend matching: {matched} of {len(assignments)} vertical "
+            f"bars matched; {len(assignments) - matched} unmatched"
         )
-    parts.append("Numeric bar values are not reconstructed.")
-    return " ".join(parts)
+    status_lines.append("- Numeric bar values are not reconstructed.")
+    sections.append("**Text & legend**\n" + "\n".join(status_lines))
+    return "\n\n".join(sections)
 
 
 def ocr_rows(frame: DetectionFrame, ocr: OCRFrame) -> list[list[Any]]:

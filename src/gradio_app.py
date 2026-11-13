@@ -318,19 +318,10 @@ def analyzing_status() -> str:
     return '<div role="status" aria-live="polite">Analyzing chart.</div>'
 
 
-def complete_status(detection_count: int, ocr_count: int | None = None) -> str:
-    if detection_count == 0:
-        message = "Analysis complete. No detections found."
-    elif detection_count == 1:
-        message = "Analysis complete. 1 detection found."
-    else:
-        message = f"Analysis complete. {detection_count} detections found."
-    if ocr_count is not None:
-        message += (
-            f" OCR attempted {ocr_count} text region"
-            f"{'s' if ocr_count != 1 else ''}."
-        )
-    return f'<div role="status" aria-live="polite">{message}</div>'
+def complete_status(detection_count: int = 0, ocr_count: int | None = None) -> str:
+    return (
+        '<div role="status" aria-live="polite">Analysis result ready.</div>'
+    )
 
 
 def alert_message(message: str) -> str:
@@ -499,7 +490,7 @@ def analyze_image(
     _report_progress(progress, 0.95, "Rendering annotations")
     overlay = render_detection_overlay(image, frame, legend_mapping=legend_mapping)
     rgb_overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-    _report_progress(progress, 1.0, "Analysis complete")
+    _report_progress(progress, 1.0, "Analysis result ready")
     return AnalysisResult(
         summary=summarize_detections(
             frame, ocr=ocr_frame, legend_mapping=legend_mapping
