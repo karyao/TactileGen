@@ -39,6 +39,7 @@ from src.presentation import (
     summarize_detections,
 )
 from src.reconstruct import reconstruct_vbar
+from src.reconstruct_hbar import bar_orientation, match_legend_to_hbars, reconstruct_hbar
 from src.tactile.completeness import (
     READY,
     Completeness,
@@ -58,7 +59,8 @@ from src.tactile.rules import format_report
 from src.tesseract_ocr import TesseractBackend
 
 
-DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
+# Fine-tuned on vertical and horizontal bars (notebooks/kaggle_train_bars.ipynb).
+DEFAULT_WEIGHTS = Path("models/yolo_bars_hv/best.pt")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7860
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -381,6 +383,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", help="Ultralytics device, e.g. cpu or mps")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=_port, default=DEFAULT_PORT)
+    parser.add_argument("--ocr", choices=("tesseract", "rapidocr"), default="tesseract",
+                        help="OCR engine (default tesseract; rapidocr needs no system install)")
     return parser.parse_args(argv)
 
 
@@ -496,12 +500,17 @@ def analyze_image(
             LOGGER.exception("Chart text recognition failed")
         ocr_warning = OCR_WARNING
     _report_progress(progress, 0.80, "Matching legend series")
+    horizontal = bar_orientation(frame) == "horizontal"
     legend_mapping = None
     legend_warning = None
     try:
         with stage("legend_matching"):
-            legend_mapping = match_legend_to_bars(image, frame, ocr_frame,
-                **({"diagnostics": diagnostics} if diagnostics is not None else {}))
+            match_legend = match_legend_to_hbars if horizontal else match_legend_to_bars
+            legend_mapping = match_legend(
+                image, frame, ocr_frame,
+                **({"diagnostics": diagnostics}
+                   if diagnostics is not None and not horizontal else {}),
+            )
             if diagnostics is not None:
                 diagnostics.snapshot("legend", legend_mapping)
     except Exception:
@@ -524,9 +533,11 @@ def analyze_image(
     else:
         try:
             with stage("reconstruction", blocked_errors=(ChartInterpretationError,)):
-                reconstructed = reconstruct_vbar(
+                reconstruct = reconstruct_hbar if horizontal else reconstruct_vbar
+                reconstructed = reconstruct(
                     frame, ocr_frame, image, legend_mapping=legend_mapping,
-                    **({"diagnostics": diagnostics} if diagnostics is not None else {})
+                    **({"diagnostics": diagnostics}
+                       if diagnostics is not None and not horizontal else {})
                 )
                 candidate = replace(
                     reconstructed,
@@ -944,7 +955,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         sources=["upload"],
                         image_mode=None,
                         format="png",
-                        label="Vertical bar chart image",
+                        label="Bar chart image",
                         placeholder="Upload a chart image",
                         buttons=["fullscreen"],
                         alt_text="Preview of the uploaded chart",
@@ -1296,7 +1307,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         _import_gradio()
         model = load_model(args.weights)
-        ocr_backend = TesseractBackend()
+        if args.ocr == "rapidocr":
+            from src.rapidocr_ocr import RapidOCRBackend
+            ocr_backend = RapidOCRBackend()
+        else:
+            ocr_backend = TesseractBackend()
         demo = build_app(model, ocr_backend=ocr_backend, device=args.device)
         theme = borealis_theme()
     except Exception as exc:

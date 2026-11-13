@@ -5,7 +5,7 @@ import io
 import json
 import tempfile
 import unittest
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -28,6 +28,7 @@ from src.contracts import (
     VerticalBarSpec,
     YAxisSpec,
 )
+from src.diagnostics import AnalysisDiagnostics
 from src.gradio_app import (
     AnalysisResult,
     DEFAULT_CONFIDENCE,
@@ -107,6 +108,8 @@ class GradioAppTest(unittest.TestCase):
         self.assertEqual(args.host, DEFAULT_HOST)
         self.assertEqual(args.port, DEFAULT_PORT)
         self.assertIsNone(args.device)
+        self.assertEqual(args.ocr, "tesseract")
+        self.assertEqual(parse_args(["--ocr", "rapidocr"]).ocr, "rapidocr")
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 parse_args(["--port", "0"])
@@ -191,6 +194,43 @@ class GradioAppTest(unittest.TestCase):
             self.assertEqual(result.completeness.status, NEEDS_INPUT)
             self.assertEqual(result.completeness.missing[0].field, "title")
             self.assertIsNone(result.reconstruction_warning)
+
+    def test_horizontal_chart_uses_the_horizontal_matcher_and_reconstruction(self):
+        for diagnostics_enabled in (False, True):
+            with self.subTest(diagnostics=diagnostics_enabled), tempfile.TemporaryDirectory() as temporary:
+                image_path = self._image(Path(temporary))
+                frame = DetectionFrame("input/chart.png", 100, 80, ())
+                ocr = OCRFrame("input/chart.png", ())
+                mapping = LegendMappingFrame("input/chart.png", ())
+                spec = replace(make_spec(), orientation="horizontal")
+                diagnostics = AnalysisDiagnostics(settings={}) if diagnostics_enabled else None
+                with (
+                    patch("src.gradio_app.run_detection", return_value=frame),
+                    patch("src.gradio_app.run_ocr", return_value=ocr),
+                    patch("src.gradio_app.bar_orientation", return_value="horizontal"),
+                    patch("src.gradio_app.match_legend_to_bars") as vertical_match,
+                    patch("src.gradio_app.reconstruct_vbar") as vertical,
+                    patch("src.gradio_app.match_legend_to_hbars", autospec=True,
+                          return_value=mapping) as horizontal_match,
+                    patch("src.gradio_app.reconstruct_hbar", autospec=True,
+                          return_value=spec) as horizontal,
+                    patch("src.gradio_app.cut_off_flags", return_value=[]),
+                ):
+                    result = analyze_image(
+                        object(), image_path, 0.25, 0.70, ocr_backend=object(),
+                        diagnostics=diagnostics,
+                    )
+
+                vertical_match.assert_not_called()
+                vertical.assert_not_called()
+                self.assertEqual(horizontal_match.call_args.args[1:], (frame, ocr))
+                self.assertEqual(horizontal.call_args.kwargs, {"legend_mapping": mapping})
+                self.assertEqual(result.spec.orientation, "horizontal")
+                self.assertIsNone(result.legend_warning)
+                self.assertIsNone(result.reconstruction_warning)
+                if diagnostics is not None:
+                    for stage in ("legend_matching", "reconstruction"):
+                        self.assertEqual(diagnostics.record["stages"][stage]["outcome"], "succeeded")
 
     def test_interpretation_error_keeps_partial_results_and_explains_blocker(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -587,7 +627,7 @@ class GradioAppTest(unittest.TestCase):
         analyze = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
         config = demo.get_config_file()
         image = next(component for component in config["components"]
-                     if component["props"].get("label") == "Vertical bar chart image")
+                     if component["props"].get("label") == "Bar chart image")
         event = next(dependency for dependency in config["dependencies"]
                      if any(tuple(target) == (image["id"], "change")
                             for target in dependency["targets"]))
@@ -613,7 +653,7 @@ class GradioAppTest(unittest.TestCase):
         config = demo.get_config_file()
         components = config["components"]
         labels = {component["props"].get("label") for component in components}
-        self.assertIn("Vertical bar chart image", labels)
+        self.assertIn("Bar chart image", labels)
         self.assertIn("Minimum detection confidence", labels)
         self.assertIn("NMS IoU for duplicate suppression", labels)
         self.assertIn("OCR language", labels)

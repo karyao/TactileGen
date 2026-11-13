@@ -88,9 +88,10 @@ bars run left to right.
 
 - **Which way the bars run.** `bar_orientation(frame)` says `horizontal` when
   most confident bar detections are `horizontal_bar`; ties stay vertical. The
-  image pipeline uses it to pick the reconstruction and the layout. Only a
-  detector trained on horizontal bars finds them: the fine-tuned checkpoint
-  from `notebooks/kaggle_train_bars.ipynb` scored F1 0.947 on horizontal bars
+  image pipeline and the Gradio app use it to pick the reconstruction and the
+  layout. Only a detector trained on horizontal bars finds them: the default
+  checkpoint `models/yolo_bars_hv/best.pt`, fine-tuned from
+  `models/yolo_vbars/best.pt` with `notebooks/kaggle_train_bars.ipynb`, scored F1 0.947 on horizontal bars
   and 0.965 on vertical bars (old model 0.966) on the PlotQA test split, IoU 0.5.
 - **Reconstruction.** The detections and image are transposed so the bars
   stand upright, and `reconstruct_vbar` reads them; legend matching runs on
@@ -110,8 +111,8 @@ bars run left to right.
 ```bash
 python -m src.tactile --chart tests/fixtures/tactile/rainfall_hbar.json \
   --output output/tactile/rainfall_hbar.svg --show-print
-python -m src.tactile.pipeline --image chart.png --output out.svg \
-  --weights path/to/best_bars_hv.pt --ocr rapidocr
+python -m src.tactile.pipeline --image chart.png --output out.svg --ocr rapidocr
+python -m src.gradio_app --ocr rapidocr
 ```
 
 Not done for horizontal bars yet: staggering values onto extra lines with lead

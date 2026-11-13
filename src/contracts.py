@@ -274,15 +274,20 @@ def join_text_regions(
 def join_legend_assignments(
     detections: DetectionFrame, mapping: LegendMappingFrame
 ) -> tuple[tuple[Detection, LegendBarAssignment], ...]:
-    """Validate and join one legend assignment to every vertical bar."""
+    """Validate and join one legend assignment to every bar.
+
+    The assignments cover every vertical bar, or, for a horizontal bar chart
+    (``src.reconstruct_hbar.match_legend_to_hbars``), every horizontal bar.
+    """
     if detections.source_key != mapping.source_key:
         raise ValueError("Legend mapping and detections refer to different source images")
     by_id = {detection.id: detection for detection in detections.detections}
-    bars = [detection for detection in detections.detections
-            if detection.role == "vertical_bar"]
-    expected = [bar.id for bar in bars]
     actual = [assignment.bar_id for assignment in mapping.assignments]
-    if actual != expected:
+    for role in ("vertical_bar", "horizontal_bar"):
+        bars = [detection for detection in detections.detections if detection.role == role]
+        if actual == [bar.id for bar in bars] and (bars or role == "vertical_bar"):
+            break
+    else:
         raise ValueError(
             "Legend assignments must cover vertical bars in detection order"
         )
