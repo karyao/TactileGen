@@ -59,6 +59,7 @@ class Pipeline(unittest.TestCase):
                 "src.reconstruct.reconstruct_vbar", return_value=reconstructed
             ) as reconstruct,
             mock.patch.object(pipeline, "cut_off_flags", return_value=[]),
+            mock.patch("src.reconstruct_hbar.bar_orientation", return_value="vertical"),
         ):
             result = pipeline.analyse(Path("chart.png"), Path("weights.pt"))
 
@@ -221,6 +222,46 @@ class Pipeline(unittest.TestCase):
         self.assertNotIn("key-sample", unnamed)
         self.assertIn("key-sample-0", two)
         self.assertIn("key-sample-1", two)
+
+    def test_analyse_sends_horizontal_charts_to_the_horizontal_reconstruction(self):
+        image, frame, ocr = mock.sentinel.image, mock.sentinel.frame, mock.sentinel.ocr
+        reconstructed = make_spec(orientation="horizontal")
+        with (
+            mock.patch("cv2.imread", return_value=image),
+            mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
+            mock.patch("src.detection.run_detection", return_value=frame),
+            mock.patch("src.ocr.run_ocr", return_value=ocr),
+            mock.patch("src.tesseract_ocr.TesseractBackend"),
+            mock.patch("src.legend_matcher.match_legend_to_bars") as vertical_matcher,
+            mock.patch("src.reconstruct_hbar.bar_orientation", return_value="horizontal"),
+            mock.patch("src.reconstruct_hbar.reconstruct_hbar",
+                       return_value=reconstructed) as reconstruct,
+            mock.patch.object(pipeline, "cut_off_flags", return_value=[]),
+        ):
+            result = pipeline.analyse(Path("chart.png"), Path("weights.pt"))
+        reconstruct.assert_called_once_with(frame, ocr, image)
+        vertical_matcher.assert_not_called()
+        self.assertEqual(result, (reconstructed, None, frame))
+
+    def test_horizontal_spec_gets_the_horizontal_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            out = io.StringIO()
+            code = pipeline.run(
+                args, analyse_fn=lambda *_: (make_spec(orientation="horizontal"), None, None),
+                input_fn=input, stdin_is_tty=False, out=out, err=io.StringIO())
+            svg = path.read_text()
+        self.assertEqual(code, 0)
+        self.assertIn("x-value-0", svg)
+        self.assertNotIn("y-value-0", svg)
+        self.assertIn("all passed", out.getvalue())
+
+    def test_ocr_engine_defaults_to_tesseract(self):
+        args = pipeline.parse_args(["--image", "a.png", "--output", "o.svg"])
+        self.assertEqual(args.ocr, "tesseract")
+        args = pipeline.parse_args(["--image", "a.png", "--output", "o.svg", "--ocr", "rapidocr"])
+        self.assertEqual(args.ocr, "rapidocr")
 
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])

@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from src.contracts import VerticalBarSpec
 from src.tactile.completeness import READY, check_completeness, spec_to_chart_with_notes
 from src.tactile.layout import layout_vertical_bar_chart_pages
+from src.tactile.layout_hbar import layout_horizontal_bar_chart_pages
 from src.tactile.rules import Violation, check_layout
 from src.tactile.svg import render_svg
 
@@ -134,7 +135,10 @@ def generate_tactile_artifacts(
 
     try:
         chart, conversion_notes = spec_to_chart_with_notes(spec)
-        layouts = layout_vertical_bar_chart_pages(chart, x_labels="auto")
+        if spec.orientation == "horizontal":
+            layouts = layout_horizontal_bar_chart_pages(chart, labels="auto")
+        else:
+            layouts = layout_vertical_bar_chart_pages(chart, x_labels="auto")
         page_violations = [tuple(check_layout(layout)) for layout in layouts]
     except Exception as exc:
         _failure("layout", "Could not lay out the tactile graphic.", exc, job_dir)

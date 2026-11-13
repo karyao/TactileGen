@@ -71,8 +71,11 @@ python3.12 -m src.gradio_app
 ```
 
 With the Tesseract executable installed, this starts the frontend with YOLO
-detection and Tesseract OCR. Gradio remains optional for users who only need
-the command-line detector.
+detection and Tesseract OCR. Without Tesseract (for example on Windows), add
+`--ocr rapidocr` after `pip install -r requirements-ocr.txt`. The frontend and
+`src.tactile.pipeline` use [`models/yolo_bars_hv/best.pt`](models/yolo_bars_hv/best.pt),
+fine-tuned on vertical and horizontal bars, and handle both. Gradio remains
+optional for users who only need the command-line detector.
 
 ## Read detected text with Tesseract
 

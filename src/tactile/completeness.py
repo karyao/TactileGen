@@ -26,6 +26,7 @@ from src.contracts import (
     BarSeries,
     DetectionFrame,
     ChartInterpretationError,
+    HorizontalBarChart,
     VerticalBarChart,
     VerticalBarSpec,
 )
@@ -389,12 +390,16 @@ def apply_overrides(spec: VerticalBarSpec,
 NEGATIVE_NOISE_FRACTION = 0.005
 
 
-def spec_to_chart(spec: VerticalBarSpec) -> VerticalBarChart:
-    """Build the layout's chart from a spec whose status is ``ready``."""
+def spec_to_chart(spec: VerticalBarSpec) -> VerticalBarChart | HorizontalBarChart:
+    """Build the layout's chart from a spec whose status is ``ready``.
+
+    A spec with ``orientation="horizontal"`` gives a ``HorizontalBarChart``.
+    """
     return spec_to_chart_with_notes(spec)[0]
 
 
-def spec_to_chart_with_notes(spec: VerticalBarSpec) -> tuple[VerticalBarChart, list[str]]:
+def spec_to_chart_with_notes(
+        spec: VerticalBarSpec) -> tuple[VerticalBarChart | HorizontalBarChart, list[str]]:
     """Like ``spec_to_chart``, also returning notes about values it had to adjust.
 
     Negative values under 0.5% of the chart maximum become 0.0. Larger
@@ -424,7 +429,8 @@ def spec_to_chart_with_notes(spec: VerticalBarSpec) -> tuple[VerticalBarChart, l
     if zeroed:
         notes.append(f"{zeroed} value(s) slightly below zero (under 0.5% of the chart maximum) "
                      "were treated as 0.")
-    chart = VerticalBarChart(
+    chart_type = HorizontalBarChart if spec.orientation == "horizontal" else VerticalBarChart
+    chart = chart_type(
         spec.source_key, spec.title, spec.x_axis_title, spec.y_axis_title,
         tuple(spec.categories), tuple(series_out))
     return chart, notes

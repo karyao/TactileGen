@@ -1,6 +1,10 @@
-"""PlotQA vertical-bar chart image in, tactile SVG out.
+"""PlotQA bar chart image (vertical or horizontal bars) in, tactile SVG out.
 
     python -m src.tactile.pipeline --image chart.png --output output/tactile/chart.svg
+
+The bar direction is read from the detections: when most bars are
+horizontal, the horizontal reconstruction and layout are used. Detecting
+horizontal bars needs a checkpoint trained on them (``--weights``).
 
 Exit status: 0 written, 1 error, 2 text still needed, 3 chart cannot be
 built, 4 categories not confirmed.
@@ -12,6 +16,7 @@ import argparse
 import json
 import sys
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 from src.contracts import ChartInterpretationError, VerticalBarSpec
@@ -21,15 +26,29 @@ from src.tactile.completeness import (
     spec_to_chart_with_notes,
 )
 from src.tactile.layout import X_LABEL_MODES, layout_vertical_bar_chart_pages
+from src.tactile.layout_hbar import layout_horizontal_bar_chart_pages
 from src.tactile.rules import check_layout, format_report
 from src.tactile.svg import render_svg
 
-DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
+# Fine-tuned on vertical and horizontal bars (notebooks/kaggle_train_bars.ipynb).
+DEFAULT_WEIGHTS = Path("models/yolo_bars_hv/best.pt")
 OVERVIEW_RULE = "overview_first"
 EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 1, 2, 3, 4
 
 
-def analyse(image_path: Path, weights: Path):
+OCR_ENGINES = ("tesseract", "rapidocr")
+
+
+def _ocr_backend(name: str):
+    """The OCR backend and its language code."""
+    if name == "rapidocr":
+        from src.rapidocr_ocr import RapidOCRBackend
+        return RapidOCRBackend(), "en"
+    from src.tesseract_ocr import TesseractBackend
+    return TesseractBackend(), "eng"
+
+
+def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract"):
     """Run YOLO, OCR, legend matching and reconstruction.
 
     Returns ``(spec, None, frame)`` or ``(None, error, frame)``.
@@ -40,18 +59,22 @@ def analyse(image_path: Path, weights: Path):
     from src.legend_matcher import match_legend_to_bars
     from src.ocr import run_ocr
     from src.reconstruct import reconstruct_vbar
-    from src.tesseract_ocr import TesseractBackend
+    from src.reconstruct_hbar import bar_orientation, reconstruct_hbar
 
     image = cv2.imread(str(image_path))
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
     frame = run_detection(load_model(weights), image_path)
-    ocr = run_ocr(image, frame, TesseractBackend(), "eng")
+    backend, language = _ocr_backend(ocr_engine)
+    ocr = run_ocr(image, frame, backend, language)
     try:
-        legend_mapping = match_legend_to_bars(image, frame, ocr)
-        spec = reconstruct_vbar(
-            frame, ocr, image, legend_mapping=legend_mapping
-        )
+        if bar_orientation(frame) == "horizontal":
+            spec = reconstruct_hbar(frame, ocr, image)
+        else:
+            legend_mapping = match_legend_to_bars(image, frame, ocr)
+            spec = reconstruct_vbar(
+                frame, ocr, image, legend_mapping=legend_mapping
+            )
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:
         return None, error, frame
@@ -206,7 +229,10 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
 
     try:
         chart, adapter_notes = spec_to_chart_with_notes(spec)
-        pages = layout_vertical_bar_chart_pages(chart, x_labels=args.x_labels)
+        if spec.orientation == "horizontal":
+            pages = layout_horizontal_bar_chart_pages(chart, labels=args.x_labels)
+        else:
+            pages = layout_vertical_bar_chart_pages(chart, x_labels=args.x_labels)
     except ValueError as exc:
         print(f"The tactile layout rejected this chart: {exc}", file=err)
         return EXIT_ERROR
@@ -246,7 +272,8 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--image", type=Path, required=True, help="PlotQA vertical-bar chart image")
+    parser.add_argument("--image", type=Path, required=True,
+                        help="PlotQA bar chart image, vertical or horizontal bars")
     parser.add_argument("--output", type=Path, required=True, help="SVG file to write")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS,
                         help=f"YOLO checkpoint (default {DEFAULT_WEIGHTS})")
@@ -268,12 +295,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "is reported separately and does not count)")
     parser.add_argument("--show-print", action="store_true",
                         help="add small print text under each braille label")
-    parser.add_argument("--x-labels", choices=("auto", *X_LABEL_MODES), default="auto")
+    parser.add_argument("--x-labels", choices=("auto", *X_LABEL_MODES), default="auto",
+                        help="category labels (beside the bars for horizontal charts)")
+    parser.add_argument("--ocr", choices=OCR_ENGINES, default="tesseract",
+                        help="OCR engine (default tesseract)")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    return run(parse_args(argv))
+    args = parse_args(argv)
+    return run(args, analyse_fn=partial(analyse, ocr_engine=args.ocr))
 
 
 if __name__ == "__main__":

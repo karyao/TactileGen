@@ -186,6 +186,8 @@ class TactileLayout:
     page_kind: str = "graph"
     # True when the series key is on a key page before this graph (§6.6.6.4).
     series_key_elsewhere: bool = False
+    # "vertical" bars on a horizontal axis, or "horizontal" bars (layout_hbar.py).
+    orientation: str = "vertical"
 
     @property
     def categories_keyed(self) -> bool:
@@ -467,6 +469,19 @@ def _note_labels(note_id: str, text: str, x0: float, y: float) -> list[BrailleLa
     return out
 
 
+def _category_key(names, symbols: list[str], usable: Rect, y: float,
+                  labels: list) -> float:
+    """Keyed category labels, listed in the order they appear on the graph
+    (§5.7.3); returns the next free y."""
+    for j, (symbol, name) in enumerate(zip(symbols, names)):
+        for k, (text, cell) in enumerate(_key_entry_lines(symbol, name)):
+            labels.append(_label(f"key-category-{j}" + (f"-{k}" if k else ""), "key",
+                                 text, usable.x1 + (cell - 1) * CELL_PITCH, y,
+                                 category_index=j))
+            y += LINE_PITCH
+    return y
+
+
 def _usable_area() -> Rect:
     return Rect((PAGE_WIDTH - CELLS_PER_LINE * CELL_PITCH) / 2,
                 (PAGE_HEIGHT - LINES_PER_PAGE * LINE_PITCH) / 2,
@@ -579,13 +594,7 @@ def _layout(chart: VerticalBarChart, mode: str, *,
                 show_title=show_title, transcriber_notes=transcriber_notes,
                 series_key=show_series_key and has_key)
     if keyed:
-        # Keyed labels in the order they appear, left to right (§5.7.3).
-        for j, (symbol, name) in enumerate(zip(category_texts, chart.categories)):
-            for k, (text, cell) in enumerate(_key_entry_lines(symbol, name)):
-                labels.append(_label(f"key-category-{j}" + (f"-{k}" if k else ""), "key",
-                                     text, usable.x1 + (cell - 1) * CELL_PITCH, y,
-                                     category_index=j))
-                y += LINE_PITCH
+        y = _category_key(chart.categories, category_texts, usable, y, labels)
     if (show_series_key and has_key) or keyed:
         y += LINE_PITCH
 
