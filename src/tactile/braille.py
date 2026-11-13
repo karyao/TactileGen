@@ -30,6 +30,8 @@ NUMERIC_INDICATOR = Cell({3, 4, 5, 6})
 CAPITAL_LETTER = Cell({6})
 GRADE1_SYMBOL = Cell({5, 6})
 BLANK = Cell()
+# Guide dot (dot 5) leading from a row label to the graph, BANA §6.6.6.6 and §6.7.6.
+GUIDE_DOT = Cell({5})
 
 # Punctuation and signs in UEB. Multi-cell symbols are listed cell by cell.
 _SYMBOLS = {
