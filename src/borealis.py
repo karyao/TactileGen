@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
-from urllib.parse import quote
 
 
 BOREALIS_COLORS: Mapping[str, str] = MappingProxyType({
@@ -60,7 +58,7 @@ def borealis_theme():
     secondary = gr.themes.Color(*_GLOW_RAMP, name="borealis_glow")
     neutral = gr.themes.Color(*_NAVY_RAMP, name="borealis_navy")
     spacing = gr.themes.Size("2px", "4px", "8px", "16px", "24px", "32px", "48px")
-    radius = gr.themes.Size("2px", "4px", "8px", "10px", "12px", "16px", "20px")
+    radius = gr.themes.Size("0px", "2px", "4px", "4px", "4px", "4px", "4px")
     colors = BOREALIS_COLORS
     return gr.themes.Base(
         primary_hue=primary,
@@ -84,9 +82,9 @@ def borealis_theme():
         block_background_fill_dark=colors["panel"],
         block_border_color=colors["deep_sky"],
         block_border_color_dark=colors["deep_sky"],
-        block_radius="12px",
-        block_shadow="0 6px 18px rgba(0, 19, 34, 0.18)",
-        block_shadow_dark="0 6px 18px rgba(0, 19, 34, 0.18)",
+        block_radius="4px",
+        block_shadow="none",
+        block_shadow_dark="none",
         panel_background_fill=colors["panel"],
         panel_background_fill_dark=colors["panel"],
         panel_border_color=colors["deep_sky"],
@@ -101,11 +99,11 @@ def borealis_theme():
         input_border_color_focus_dark=colors["sun"],
         input_placeholder_color=colors["muted"],
         input_placeholder_color_dark=colors["muted"],
-        input_radius="10px",
+        input_radius="4px",
         accordion_text_color=colors["text"],
         accordion_text_color_dark=colors["text"],
-        slider_color=colors["sun"],
-        slider_color_dark=colors["sun"],
+        slider_color=colors["aurora"],
+        slider_color_dark=colors["aurora"],
         table_text_color=colors["text"],
         table_text_color_dark=colors["text"],
         table_border_color=colors["deep_sky"],
@@ -144,117 +142,8 @@ def borealis_theme():
         error_text_color_dark=colors["text"],
         error_icon_color=colors["glow"],
         error_icon_color_dark=colors["glow"],
-        loader_color=colors["sun"],
-        loader_color_dark=colors["sun"],
-    )
-
-
-def _background_art_svg() -> str:
-    """Build the decorative Braille-inspired chart background artwork."""
-    marks: list[str] = []
-
-    def add_dot(x: float, y: float, radius: float) -> None:
-        marks.append(f'<circle cx="{x:g}" cy="{y:g}" r="{radius:g}"/>')
-
-    def add_bar_graph(x: float, bottom: float, heights: tuple[int, ...]) -> None:
-        step, pitch, pair_gap, radius = 11.0, 26.0, 8.0, 3.6
-        for index, cells in enumerate(heights):
-            left = x + index * pitch
-            for row in range(cells):
-                y = bottom - (row + 0.5) * step
-                add_dot(left, y, radius)
-                add_dot(left + pair_gap, y, radius)
-        width = (len(heights) - 1) * pitch + pair_gap + 12
-        marks.append(
-            f'<rect x="{x - 6:g}" y="{bottom + 5:g}" '
-            f'width="{width:g}" height="1.6"/>'
-        )
-
-    def add_line_graph(points: list[tuple[float, float]]) -> None:
-        spacing = 16.0
-        for index, (x, y) in enumerate(points):
-            add_dot(x - 4, y, 4.4)
-            add_dot(x + 4, y, 4.4)
-            if index + 1 == len(points):
-                continue
-            next_x, next_y = points[index + 1]
-            length = math.hypot(next_x - x, next_y - y)
-            steps = int(length // spacing)
-            for step in range(1, steps):
-                ratio = step * spacing / length
-                add_dot(
-                    x + (next_x - x) * ratio,
-                    y + (next_y - y) * ratio,
-                    3.6,
-                )
-
-    add_bar_graph(80, 210, (4, 7, 5, 8, 6))
-    add_line_graph([
-        (1040, 230), (1105, 170), (1170, 200),
-        (1235, 150), (1300, 185), (1360, 130),
-    ])
-    add_bar_graph(70, 650, (5, 8, 4, 6))
-
-    stops = (
-        '<stop offset="0" stop-color="#000000" stop-opacity="1"/>'
-        '<stop offset="1" stop-color="#000000" stop-opacity="0"/>'
-    )
-    gradients = "".join(
-        f'<linearGradient id="{identifier}" x1="{x1:g}" y1="{y1:g}" '
-        f'x2="{x2:g}" y2="{y2:g}" gradientUnits="userSpaceOnUse">'
-        f"{stops}"
-        "</linearGradient>"
-        for identifier, x1, y1, x2, y2 in (
-            ("fade-left", 0, 0, 120, 0),
-            ("fade-right", 1440, 0, 1320, 0),
-            ("fade-top", 0, 0, 0, 110),
-            ("fade-bottom", 0, 900, 0, 780),
-        )
-    )
-    fades = "".join(
-        f'<rect width="1440" height="900" fill="url(#{identifier})"/>'
-        for identifier in ("fade-left", "fade-right", "fade-top", "fade-bottom")
-    )
-    art = "".join(marks)
-    return (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" '
-        'viewBox="0 0 1440 900">'
-        "<defs>"
-        f"{gradients}"
-        '<mask id="edge-fade" maskUnits="userSpaceOnUse" '
-        'x="0" y="0" width="1440" height="900">'
-        '<rect width="1440" height="900" fill="#ffffff"/>'
-        f"{fades}"
-        "</mask>"
-        "</defs>"
-        f'<g mask="url(#edge-fade)" fill="{BOREALIS_COLORS["glow"]}" '
-        'opacity="0.07">'
-        f"{art}"
-        "</g>"
-        "</svg>"
-    )
-
-
-def _background_art_css() -> str:
-    """Return the CSS rules that place the decorative background artwork."""
-    uri = "data:image/svg+xml," + quote(_background_art_svg())
-    return (
-        "body,\n"
-        ".gradio-container {\n"
-        f'  background-image: url("{uri}");\n'
-        "  background-repeat: no-repeat;\n"
-        "  background-size: cover;\n"
-        "  background-position: 15% 20%;\n"
-        "  background-attachment: fixed;\n"
-        "}\n"
-        "\n"
-        "@media (max-width: 600px) {\n"
-        "  body,\n"
-        "  .gradio-container {\n"
-        "    background-size: 300vw auto;\n"
-        "    background-position: left top;\n"
-        "  }\n"
-        "}\n"
+        loader_color=colors["glow"],
+        loader_color_dark=colors["glow"],
     )
 
 
@@ -273,11 +162,11 @@ _BOREALIS_CSS_TEMPLATE = """
   --borealis-space-2: 16px;
   --borealis-space-3: 24px;
   --borealis-space-4: 32px;
-  --borealis-radius-sm: 10px;
-  --borealis-radius-md: 12px;
+  --borealis-radius-sm: 4px;
+  --borealis-radius-md: 4px;
   --borealis-content-width: 1200px;
   --borealis-font: Inter, Arial, system-ui, sans-serif;
-  --borealis-shadow: 0 10px 30px rgba(0, 12, 22, 0.22);
+  --borealis-shadow: none;
   --borealis-focus-width: 3px;
   --borealis-focus-offset: 3px;
 }
@@ -314,14 +203,15 @@ body,
   width: 100%;
   max-width: var(--borealis-content-width);
   margin-inline: auto;
-  padding: var(--borealis-space-2) var(--borealis-space-3) 40px;
-  gap: var(--borealis-space-2) !important;
+  padding: 40px var(--borealis-space-3) 64px;
+  gap: var(--borealis-space-4) !important;
 }
 
 .borealis-header {
-  padding: 0;
+  padding: 0 0 32px;
+  border-bottom: 1px solid var(--borealis-deep-sky);
   color: var(--borealis-text);
-  gap: 6px !important;
+  gap: 8px !important;
 }
 
 .borealis-header .borealis-header {
@@ -334,17 +224,17 @@ body,
 }
 
 .borealis-header h1 {
-  margin-block: 12px !important;
-  font-size: clamp(2rem, 4vw, 3rem);
-  line-height: 1;
-  letter-spacing: -0.04em;
+  margin-block: 0 16px !important;
+  font-size: 40px;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
 }
 
 .borealis-header strong {
-  color: var(--borealis-sun);
-  font-size: 0.75rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  color: var(--borealis-text);
+  font-size: 1rem;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .borealis-actions {
@@ -375,8 +265,9 @@ body,
 
 .borealis-section-title h2 {
   margin: 0 !important;
-  font-size: 1rem;
-  letter-spacing: 0.02em;
+  font-size: 18px;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
 }
 
 .borealis-upload-image {
@@ -393,8 +284,7 @@ body,
 }
 
 .borealis-scope {
-  border-left: 2px solid var(--borealis-sun);
-  padding-left: 12px;
+  padding: 0;
   max-width: 850px;
 }
 
@@ -429,7 +319,7 @@ body,
   background: transparent;
   box-shadow: none;
   line-height: 1.5;
-  font-size: 0.8125rem;
+  font-size: 14px;
 }
 
 .borealis-setting,
@@ -441,17 +331,51 @@ body,
 
 .borealis-setting {
   min-height: 0 !important;
-  padding: 20px 16px !important;
+  padding: 16px !important;
 }
 
-.borealis-setting > div,
-.borealis-setting .wrap {
-  padding-block: 0 !important;
+.borealis-setting .head {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.borealis-setting .head > label,
+.borealis-setting > label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.borealis-setting input[type="text"],
+.borealis-setting textarea {
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 12px !important;
 }
 
 .borealis-advanced {
+  padding: 0 !important;
   border-block: 1px solid var(--borealis-deep-sky) !important;
   border-radius: 0 !important;
+}
+
+.borealis-advanced > .label-wrap {
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 16px !important;
+  margin-bottom: 0 !important;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Controls supply the inset; the accordion body must not add another one. */
+.borealis-advanced > [data-testid="accordion-content"],
+.borealis-advanced > [data-testid="accordion-content"] > .form,
+.borealis-advanced > [data-testid="accordion-content"] > .column,
+.borealis-advanced > [data-testid="accordion-content"] > .column > .form {
+  padding: 0 !important;
+  gap: 0 !important;
 }
 
 .borealis-result-image {
@@ -476,19 +400,19 @@ body,
 .borealis-image-view label {
   margin: 0 !important;
   padding: 7px 12px !important;
-  border-radius: 7px !important;
+  border-radius: 4px !important;
   font-weight: 600;
 }
 
 .borealis-error {
-  border-left: 3px solid var(--borealis-sun);
+  border-left: 3px solid var(--borealis-aurora);
   padding: 12px 14px;
   background: var(--borealis-elevated);
   border-radius: 0 var(--borealis-radius-sm) var(--borealis-radius-sm) 0;
 }
 
 .borealis-status {
-  color: var(--borealis-sun);
+  color: var(--borealis-muted);
   font-size: 0.875rem;
   font-weight: 600;
 }
@@ -513,6 +437,87 @@ body,
   gap: var(--borealis-space-4) !important;
 }
 
+/* Section rules and spacing establish hierarchy without nested cards. */
+.borealis-app {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.borealis-header p {
+  max-width: 680px;
+  color: var(--borealis-muted);
+}
+
+.borealis-header p + p {
+  margin-top: 8px !important;
+}
+
+.borealis-workspace-heading {
+  padding-bottom: 16px !important;
+  border-bottom: 1px solid var(--borealis-deep-sky) !important;
+}
+
+.borealis-workspace-heading .borealis-workspace-heading {
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+.borealis-empty {
+  padding: 48px 0;
+  max-width: 420px;
+}
+
+.borealis-empty h3 {
+  color: var(--borealis-text);
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+
+.borealis-app button {
+  min-height: 44px;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+
+.borealis-details {
+  border: 0 !important;
+  border-top: 1px solid var(--borealis-deep-sky) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.borealis-details > .label-wrap {
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Centre the disclosure glyph's line box alongside the title in either state. */
+.borealis-details > .label-wrap > .icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+}
+
+.borealis-details .borealis-summary {
+  padding-bottom: 16px;
+}
+
+.borealis-workspace > *,
+.borealis-review > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.borealis-app .prose a {
+  color: var(--borealis-glow);
+}
+
 @media (max-width: 900px) {
   .borealis-workspace-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -528,16 +533,16 @@ body,
     padding: var(--borealis-space-2);
   }
 
-  .borealis-header {
-    padding-top: var(--borealis-space-2);
-  }
+  .borealis-header { padding-top: 8px; padding-bottom: 24px; }
+  .borealis-header h1 { font-size: 32px; }
 
   .borealis-workspace {
     min-height: 360px;
     padding: var(--borealis-space-2);
   }
 
-  .borealis-setting {
+  .borealis-setting,
+  .borealis-advanced > .label-wrap {
     padding: 16px 12px !important;
   }
 
@@ -552,4 +557,4 @@ body,
 """.strip()
 
 
-BOREALIS_CSS = _BOREALIS_CSS_TEMPLATE + "\n\n" + _background_art_css()
+BOREALIS_CSS = _BOREALIS_CSS_TEMPLATE

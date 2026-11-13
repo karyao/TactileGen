@@ -336,9 +336,9 @@ class GradioAppTest(unittest.TestCase):
     def test_accessible_status_helpers_cover_ready_busy_success_zero_and_error(self):
         self.assertIn('role="status"', ready_status())
         self.assertIn('aria-live="polite"', analyzing_status())
-        self.assertIn("Analysis result ready", complete_status())
-        self.assertIn("Analysis result ready", complete_status(0))
-        self.assertIn("Analysis result ready", complete_status(3, 2))
+        self.assertIn("Analysis complete", complete_status())
+        self.assertIn("Analysis complete", complete_status(0))
+        self.assertIn("Analysis complete", complete_status(3, 2))
         self.assertIn('role="alert"', alert_message("Try again"))
 
     def test_completeness_summary_covers_all_states_and_details(self):
@@ -499,6 +499,88 @@ class GradioAppTest(unittest.TestCase):
             ValueError, "X-axis title cannot be blank"
         ):
             generate_review_submission(model, blank, root)
+
+    def test_creator_workspace_disclosures_preserve_result_bindings(self):
+        demo = build_app(object(), device="cpu")
+        config = demo.get_config_file()
+        components = {item["id"]: item for item in config["components"]}
+        disclosures = {
+            item["props"]["label"]: item
+            for item in components.values() if item["type"] == "accordion"
+        }
+
+        def descendants(node):
+            result = {node["id"]}
+            for child in node.get("children", []):
+                result.update(descendants(child))
+            return result
+
+        def layout_node(node, target):
+            if node["id"] == target:
+                return node
+            for child in node.get("children", []):
+                found = layout_node(child, target)
+                if found is not None:
+                    return found
+            return None
+
+        analysis_details = disclosures["Analysis details"]
+        specification = disclosures["Chart specification"]
+        for disclosure in (analysis_details, specification):
+            self.assertFalse(disclosure["props"]["open"])
+        detail_ids = descendants(layout_node(config["layout"], analysis_details["id"]))
+        spec_ids = descendants(layout_node(config["layout"], specification["id"]))
+        detail_labels = {components[key]["props"].get("label") for key in detail_ids}
+        self.assertTrue({"Detection summary", "Recognized text", "Legend mappings"}
+                        <= detail_labels)
+        self.assertTrue(any(components[key]["props"].get("label") ==
+                            "Reconstructed VerticalBarSpec" for key in spec_ids))
+        secondary_ids = detail_ids | spec_ids
+        for component in components.values():
+            classes = component["props"].get("elem_classes", [])
+            if any(name in classes for name in (
+                "borealis-review", "borealis-error", "borealis-result-image",
+                "borealis-tactile-gallery",
+            )):
+                self.assertNotIn(component["id"], secondary_ids)
+
+        analyze = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
+        ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
+        ready_updates = ready()
+        self.assertEqual(len(ready_updates), len(analyze.outputs))
+        self.assertIn("Your chart workspace", ready_updates[1]["value"])
+        frame = DetectionFrame("input/chart.png", 20, 20, ())
+        result = AnalysisResult(
+            "summary", np.zeros((20, 20, 3), dtype=np.uint8), 0,
+            frame, None, None, spec=make_spec(), completeness=Completeness(READY),
+        )
+        with patch("src.gradio_app.analyze_image", return_value=result):
+            updates = analyze.fn("chart.png", 0.25, 0.70, "eng")
+        by_class = {
+            name: update
+            for output, update in zip(analyze.outputs, updates)
+            for name in output.elem_classes
+        }
+        self.assertTrue(by_class["borealis-result-image"]["visible"])
+        self.assertTrue(by_class["borealis-review"]["visible"])
+        self.assertTrue(by_class["borealis-generate"]["interactive"])
+        self.assertTrue(by_class["borealis-spec-json"]["visible"])
+        self.assertFalse(by_class["borealis-empty"]["visible"])
+
+        blocked = AnalysisResult(
+            "partial summary", result.overlay_rgb, 0, frame, None, None,
+            spec=make_spec(),
+            completeness=Completeness(CANNOT_BUILD, blockers=["Ambiguous structure."]),
+        )
+        with patch("src.gradio_app.analyze_image", return_value=blocked):
+            blocked_updates = analyze.fn("chart.png", 0.25, 0.70, "eng")
+        self.assertFalse(blocked_updates[13]["interactive"])
+        self.assertTrue(blocked_updates[9]["visible"])
+        with patch("src.gradio_app.analyze_image", side_effect=UploadValidationError("Choose a chart.")):
+            error_updates = analyze.fn(None, 0.25, 0.70, "eng")
+        self.assertTrue(error_updates[23]["visible"])
+        self.assertIn('role="alert"', error_updates[23]["value"])
+        self.assertEqual(len(ready()), len(analyze.outputs))
 
     def test_app_factory_wires_controls_states_and_private_events(self):
         with patch("src.gradio_app.load_model") as load, \
@@ -674,7 +756,7 @@ class GradioAppTest(unittest.TestCase):
         )
         with patch("src.gradio_app.analyze_image", return_value=blocked_result):
             blocked_updates = analyze("chart.png", 0.25, 0.70, "eng")
-        self.assertIn("Analysis result ready", blocked_updates[0]["value"])
+        self.assertIn("Analysis complete", blocked_updates[0]["value"])
         for index in (2, 3, 4, 5, 6, 7):
             self.assertTrue(blocked_updates[index]["visible"])
         self.assertIn("Reconstruction: Cannot build", blocked_updates[7]["value"])

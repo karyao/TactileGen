@@ -311,16 +311,16 @@ def generation_report(result: ManualGenerationResult) -> str:
 
 
 def ready_status() -> str:
-    return '<div role="status" aria-live="polite">Ready for a chart image.</div>'
+    return '<div role="status" aria-live="polite">Ready to analyze</div>'
 
 
 def analyzing_status() -> str:
-    return '<div role="status" aria-live="polite">Analyzing chart.</div>'
+    return '<div role="status" aria-live="polite">Analyzing chart…</div>'
 
 
 def complete_status(detection_count: int = 0, ocr_count: int | None = None) -> str:
     return (
-        '<div role="status" aria-live="polite">Analysis result ready.</div>'
+        '<div role="status" aria-live="polite">Analysis complete</div>'
     )
 
 
@@ -620,7 +620,10 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
     def ready_results():
         return result_updates(
             ready_status(),
-            empty_message="Upload a chart and choose Analyze chart.",
+            empty_message=(
+                "### Your chart workspace\n\n"
+                "Upload a vertical bar chart, then select Analyze chart."
+            ),
         )
 
     def begin_analysis():
@@ -811,31 +814,26 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
         )
 
     with gr.Blocks(
-        title="TactileGen — Statistical Chart Element Detector",
+        title="TactileGen — Prepare charts for tactile reading",
         analytics_enabled=False,
         fill_width=False,
     ) as demo:
         with gr.Column(elem_classes="borealis-app"):
             with gr.Column(elem_classes="borealis-header"):
                 gr.Markdown(
-                    "**Statistical chart element detector**\n\n"
                     "# TactileGen\n\n"
-                    "Inspect the regions detected by YOLO in a vertical categorical "
-                    "bar chart, read detected text, and associate legend series "
-                    "with bars. Reconstruct chart labels, series, and numeric values "
-                    "when the image contains enough information."
-                )
-                gr.Markdown(
-                    "**Scope:** Vertical categorical bar charts only. The detector "
-                    "returns chart elements, bounding boxes, OCR text, provisional "
-                    "legend-to-bar matches, and a completeness-checked reconstruction. "
-                    "Incomplete results remain available for inspection.",
-                    elem_classes="borealis-scope",
+                    "**Prepare charts for tactile reading.**\n\n"
+                    "Analyze a vertical bar chart, review its labels and values, "
+                    "and generate tactile pages."
                 )
 
             with gr.Row(elem_classes="borealis-workspace-grid"):
                 with gr.Column(elem_classes="borealis-control-rail"):
-                    gr.Markdown("## Input", elem_classes="borealis-section-title")
+                    gr.Markdown("## Chart input", elem_classes="borealis-section-title")
+                    gr.Markdown(
+                        "Supports vertical categorical bar charts.",
+                        elem_classes="borealis-scope",
+                    )
                     image_input = gr.Image(
                         type="filepath",
                         sources=["upload"],
@@ -896,7 +894,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
 
                 with gr.Column(elem_classes="borealis-workspace"):
                     gr.Markdown(
-                        "## Analysis result",
+                        "## Chart workspace",
                         elem_classes=[
                             "borealis-section-title",
                             "borealis-workspace-heading",
@@ -906,15 +904,10 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         ready_status(), elem_classes="borealis-status"
                     )
                     empty_output = gr.Markdown(
-                        "Upload a chart and choose Analyze chart.",
+                        "### Your chart workspace\n\n"
+                        "Upload a vertical bar chart, then select Analyze chart.",
                         visible=True,
                         elem_classes="borealis-empty",
-                    )
-                    summary_output = gr.Markdown(
-                        "",
-                        label="Detection summary",
-                        visible=False,
-                        elem_classes="borealis-summary",
                     )
                     annotated_output = gr.Image(
                         type="numpy",
@@ -925,36 +918,6 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         buttons=["download", "fullscreen"],
                         alt_text="Uploaded chart with labeled detection boxes",
                         elem_classes="borealis-result-image",
-                    )
-                    ocr_output = gr.Dataframe(
-                        value=[],
-                        headers=list(OCR_TABLE_HEADERS),
-                        datatype=["str", "str", "str", "number",
-                                  "number", "number", "number", "number"],
-                        type="array",
-                        label="Recognized text",
-                        interactive=False,
-                        visible=False,
-                        wrap=True,
-                        elem_classes="borealis-ocr-table",
-                    )
-                    ocr_download = gr.DownloadButton(
-                        "Download OCR JSON",
-                        value=None,
-                        visible=False,
-                        variant="secondary",
-                        elem_classes="borealis-ocr-download",
-                    )
-                    legend_output = gr.Dataframe(
-                        value=[],
-                        headers=list(LEGEND_TABLE_HEADERS),
-                        datatype=["str", "str", "number", "str", "str", "str"],
-                        type="array",
-                        label="Legend mappings",
-                        interactive=False,
-                        visible=False,
-                        wrap=True,
-                        elem_classes="borealis-legend-table",
                     )
                     completeness_output = gr.Markdown(
                         "",
@@ -969,9 +932,8 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                     ) as review_panel:
                         gr.Markdown(
                             "## Review reconstructed chart\n\n"
-                            "Correct reconstructed text below. Numeric values are "
-                            "read-only. These draft corrections are not applied to "
-                            "the specification yet.",
+                            "Review the labels below. Numeric values are read-only. "
+                            "Your text changes are applied when you generate tactile pages.",
                             elem_classes="borealis-summary",
                         )
                         review_fields = gr.Dataframe(
@@ -1011,19 +973,6 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                             interactive=False,
                             elem_classes="borealis-generate",
                         )
-                    spec_output = gr.JSON(
-                        value={},
-                        label="Reconstructed VerticalBarSpec",
-                        visible=False,
-                        elem_classes="borealis-spec-json",
-                    )
-                    spec_download = gr.DownloadButton(
-                        "Download VerticalBarSpec JSON",
-                        value=None,
-                        visible=False,
-                        variant="secondary",
-                        elem_classes="borealis-spec-download",
-                    )
                     generation_gallery = gr.Gallery(
                         value=[],
                         label="Tactile review pages",
@@ -1061,6 +1010,70 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                     error_output = gr.HTML(
                         "", visible=False, elem_classes="borealis-error"
                     )
+                    with gr.Accordion(
+                        "Analysis details", open=False, elem_classes="borealis-details",
+                    ):
+                        gr.Markdown(
+                            "Inspect detected regions, recognized text, and legend mappings.",
+                            elem_classes="borealis-helper",
+                        )
+                        summary_output = gr.Markdown(
+                            "",
+                            label="Detection summary",
+                            visible=False,
+                            elem_classes="borealis-summary",
+                        )
+                        ocr_output = gr.Dataframe(
+                            value=[],
+                            headers=list(OCR_TABLE_HEADERS),
+                            datatype=["str", "str", "str", "number",
+                                      "number", "number", "number", "number"],
+                            type="array",
+                            label="Recognized text",
+                            interactive=False,
+                            visible=False,
+                            wrap=True,
+                            elem_classes="borealis-ocr-table",
+                        )
+                        ocr_download = gr.DownloadButton(
+                            "Download OCR JSON",
+                            value=None,
+                            visible=False,
+                            variant="secondary",
+                            elem_classes="borealis-ocr-download",
+                        )
+                        legend_output = gr.Dataframe(
+                            value=[],
+                            headers=list(LEGEND_TABLE_HEADERS),
+                            datatype=["str", "str", "number", "str", "str", "str"],
+                            type="array",
+                            label="Legend mappings",
+                            interactive=False,
+                            visible=False,
+                            wrap=True,
+                            elem_classes="borealis-legend-table",
+                        )
+                    with gr.Accordion(
+                        "Chart specification", open=False, elem_classes="borealis-details",
+                    ):
+                        gr.Markdown(
+                            "Download reconstructed labels, series, and values as JSON.",
+                            elem_classes="borealis-helper",
+                        )
+                        spec_output = gr.JSON(
+                            value={},
+                            label="Reconstructed VerticalBarSpec",
+                            visible=False,
+                            elem_classes="borealis-spec-json",
+                        )
+                        spec_download = gr.DownloadButton(
+                            "Download VerticalBarSpec JSON",
+                            value=None,
+                            visible=False,
+                            variant="secondary",
+                            elem_classes="borealis-spec-download",
+                        )
+
 
         image_input.change(
             ready_results,

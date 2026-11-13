@@ -57,8 +57,8 @@ class BorealisTest(unittest.TestCase):
         self.assertIn("background: var(--borealis-midnight)", BOREALIS_CSS)
         self.assertIn("--borealis-content-width: 1200px", BOREALIS_CSS)
         self.assertIn("--borealis-space-1: 8px", BOREALIS_CSS)
-        self.assertIn("--borealis-radius-sm: 10px", BOREALIS_CSS)
-        self.assertIn("--borealis-radius-md: 12px", BOREALIS_CSS)
+        self.assertIn("--borealis-radius-sm: 4px", BOREALIS_CSS)
+        self.assertIn("--borealis-radius-md: 4px", BOREALIS_CSS)
         self.assertIn("--borealis-shadow:", BOREALIS_CSS)
         self.assertIn("--borealis-focus-width: 3px", BOREALIS_CSS)
         self.assertIn(":focus-visible", BOREALIS_CSS)
@@ -75,8 +75,8 @@ class BorealisTest(unittest.TestCase):
         self.assertIn("@media (max-width: 600px)", BOREALIS_CSS)
         self.assertIn(".borealis-workspace-heading .borealis-workspace-heading", BOREALIS_CSS)
         self.assertIn(".borealis-workspace-heading,", BOREALIS_CSS)
-        self.assertIn("margin-block: 12px !important", BOREALIS_CSS)
-        self.assertIn("padding: 20px 16px !important", BOREALIS_CSS)
+        self.assertIn("margin-block: 0 16px !important", BOREALIS_CSS)
+        self.assertIn("padding: 16px !important", BOREALIS_CSS)
         self.assertIn("padding: 16px 12px !important", BOREALIS_CSS)
 
     def test_text_and_control_pairs_meet_wcag_aa(self):
