@@ -190,6 +190,7 @@ body,
 .borealis-scope,
 .borealis-control-rail,
 .borealis-upload-image,
+.borealis-image-view,
 .borealis-summary,
 .borealis-workspace,
 .borealis-review,
@@ -344,6 +345,27 @@ body,
 .borealis-result-image {
   border-color: var(--borealis-deep-sky) !important;
   box-shadow: none !important;
+}
+
+.borealis-image-view {
+  width: fit-content !important;
+  min-width: 240px;
+  margin-top: calc(-1 * var(--borealis-space-1));
+  padding: 4px !important;
+  background: var(--borealis-elevated) !important;
+  border: 1px solid var(--borealis-deep-sky) !important;
+  border-radius: var(--borealis-radius-sm) !important;
+}
+
+.borealis-image-view .wrap {
+  gap: 4px !important;
+}
+
+.borealis-image-view label {
+  margin: 0 !important;
+  padding: 7px 12px !important;
+  border-radius: 7px !important;
+  font-weight: 600;
 }
 
 .borealis-error {

@@ -163,6 +163,7 @@ class GradioAppTest(unittest.TestCase):
             self.assertIn("Detected 0 chart elements.", result.summary)
             self.assertIn("OCR attempted 0 text regions", result.summary)
             self.assertEqual(tuple(result.overlay_rgb[0, 0]), (30, 20, 10))
+            self.assertEqual(tuple(result.source_rgb[0, 0]), (30, 20, 10))
             self.assertEqual(progress.call_count, 7)
 
     def test_reconstruction_reuses_results_and_applies_edge_completeness(self):
@@ -514,6 +515,7 @@ class GradioAppTest(unittest.TestCase):
         self.assertIn("NMS IoU for duplicate suppression", labels)
         self.assertIn("OCR language", labels)
         self.assertIn("Annotated detections", labels)
+        self.assertIn("Image view", labels)
         self.assertIn("Recognized text", labels)
         self.assertIn("Legend mappings", labels)
         self.assertIn("Reconstruction completeness", labels)
@@ -554,20 +556,23 @@ class GradioAppTest(unittest.TestCase):
 
         begin = next(fn.fn for fn in demo.fns.values() if fn.api_name == "begin_analysis")
         begin_updates = begin()
-        self.assertEqual(len(begin_updates), 30)
+        self.assertEqual(len(begin_updates), 33)
         self.assertTrue(all(update["interactive"] is False for update in begin_updates[:6]))
         finish = next(fn.fn for fn in demo.fns.values() if fn.api_name == "finish_analysis")
         self.assertTrue(all(update["interactive"] is True for update in finish()))
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
         ready_updates = ready()
-        self.assertEqual(len(ready_updates), 24)
+        self.assertEqual(len(ready_updates), 27)
         self.assertTrue(ready_updates[1]["visible"])
         self.assertIsNone(ready_updates[8])
         self.assertTrue(all(not update["visible"] for update in ready_updates[2:8]))
         self.assertFalse(ready_updates[9]["visible"])
         self.assertFalse(ready_updates[12]["visible"])
         self.assertFalse(ready_updates[13]["interactive"])
-        self.assertTrue(all(not update["visible"] for update in ready_updates[14:]))
+        self.assertTrue(all(not update["visible"] for update in ready_updates[14:24]))
+        self.assertIsNone(ready_updates[24])
+        self.assertIsNone(ready_updates[25])
+        self.assertFalse(ready_updates[26]["visible"])
 
         analyze = inference_fn.fn
         display_frame = DetectionFrame("input/chart.png", 2, 2, (
@@ -576,9 +581,10 @@ class GradioAppTest(unittest.TestCase):
         display_ocr = OCRFrame("input/chart.png", (
             RecognizedText("title", "Sales", 0.8),
         ))
+        original = np.full((2, 2, 3), 7, dtype=np.uint8)
         success = AnalysisResult(
             "summary", np.zeros((2, 2, 3), dtype=np.uint8), 1,
-            display_frame, display_ocr, None,
+            display_frame, display_ocr, None, source_rgb=original,
         )
         with patch("src.gradio_app.analyze_image", return_value=success):
             success_updates = analyze("chart.png", 0.25, 0.70, "eng")
@@ -598,6 +604,10 @@ class GradioAppTest(unittest.TestCase):
         self.assertFalse(success_updates[13]["interactive"])
         self.assertTrue(all(not success_updates[index]["visible"]
                             for index in range(14, 24)))
+        self.assertIs(success_updates[24], original)
+        self.assertIs(success_updates[25], success.overlay_rgb)
+        self.assertTrue(success_updates[26]["visible"])
+        self.assertTrue(success_updates[26]["interactive"])
 
         mapped_frame = DetectionFrame("input/chart.png", 20, 20, (
             Detection("bar", "vertical_bar", Box(0, 5, 5, 20), 0.9),
@@ -716,8 +726,23 @@ class GradioAppTest(unittest.TestCase):
 
         change_events = [dependency for dependency in config["dependencies"]
                          if dependency["targets"] and dependency["targets"][0][1] == "change"]
-        self.assertEqual(len(change_events), 1)
-        self.assertFalse(change_events[0]["queue"])
+        self.assertEqual(len(change_events), 2)
+        self.assertTrue(all(not event["queue"] for event in change_events))
+        toggle_events = [dependency for dependency in change_events
+                         if dependency.get("api_name") == "toggle_annotations"]
+        self.assertEqual(len(toggle_events), 1)
+        self.assertEqual(toggle_events[0]["api_visibility"], "private")
+        toggle_fn = next(fn.fn for fn in demo.fns.values()
+                         if fn.api_name == "toggle_annotations")
+        annotated_pixels = np.full((2, 2, 3), 9, dtype=np.uint8)
+        source_pixels = np.full((2, 2, 3), 3, dtype=np.uint8)
+        np.testing.assert_array_equal(
+            toggle_fn("Original", source_pixels, annotated_pixels)["value"], source_pixels
+        )
+        np.testing.assert_array_equal(
+            toggle_fn("Annotated", source_pixels, annotated_pixels)["value"],
+            annotated_pixels,
+        )
         review_events = [dependency for dependency in config["dependencies"]
                          if dependency.get("api_name") == "update_review"]
         self.assertEqual(len(review_events), 1)
