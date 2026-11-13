@@ -192,6 +192,7 @@ body,
 .borealis-upload-image,
 .borealis-summary,
 .borealis-workspace,
+.borealis-review,
 .borealis-error,
 .borealis-empty {
   box-sizing: border-box;
@@ -246,6 +247,12 @@ body,
   border-radius: var(--borealis-radius-md);
   padding: var(--borealis-space-3);
   box-shadow: var(--borealis-shadow);
+}
+
+.borealis-review {
+  padding-top: var(--borealis-space-2);
+  border-top: 1px solid var(--borealis-deep-sky);
+  gap: var(--borealis-space-2) !important;
 }
 
 .borealis-control-rail {

@@ -37,6 +37,7 @@ from src.presentation import (
 from src.reconstruct import reconstruct_vbar
 from src.tactile.completeness import (
     Completeness,
+    Overrides,
     check_completeness,
     completeness_from_error,
     cut_off_flags,
@@ -85,6 +86,136 @@ class AnalysisResult:
     spec: VerticalBarSpec | None = None
     completeness: Completeness | None = None
     reconstruction_warning: str | None = None
+
+
+@dataclass(frozen=True)
+class ReviewFieldBinding:
+    """One immutable mapping between a review row and a specification field."""
+
+    key: str
+    label: str
+    initial_text: str
+    required: bool
+    confirmation_required: bool = False
+
+
+@dataclass(frozen=True)
+class ReviewModel:
+    """Authoritative specification and the text draft shown for its review."""
+
+    spec: VerticalBarSpec
+    bindings: tuple[ReviewFieldBinding, ...]
+    draft_values: tuple[str, ...]
+
+
+def build_review_model(spec: VerticalBarSpec, completeness: Completeness) -> ReviewModel:
+    """Build stable review bindings without deriving keys from display text."""
+    confirmation_fields = {item.field for item in completeness.missing}
+    bindings = [
+        ReviewFieldBinding(
+            "title", "Chart title", spec.title or "", True,
+            "title" in confirmation_fields,
+        ),
+        ReviewFieldBinding(
+            "x_axis_title", "X-axis title", spec.x_axis_title or "", True,
+            "x_axis_title" in confirmation_fields,
+        ),
+        ReviewFieldBinding(
+            "y_axis_title", "Y-axis title", spec.y_axis_title or "", True,
+            "y_axis_title" in confirmation_fields,
+        ),
+    ]
+    bindings.extend(
+        ReviewFieldBinding(
+            f"category[{index}]", f"Category {index}", text, True,
+            f"category[{index}]" in confirmation_fields,
+        )
+        for index, text in enumerate(spec.categories)
+    )
+    multiple_series = len(spec.series) > 1
+    bindings.extend(
+        ReviewFieldBinding(
+            f"series_name[{index}]", f"Series {index} name", series.name or "",
+            multiple_series or series.name is not None,
+            f"series_name[{index}]" in confirmation_fields,
+        )
+        for index, series in enumerate(spec.series)
+    )
+    frozen = tuple(bindings)
+    return ReviewModel(spec, frozen, tuple(item.initial_text for item in frozen))
+
+
+def review_text_rows(model: ReviewModel) -> list[list[str]]:
+    """Rows for the editable table; labels always come from server bindings."""
+    return [[binding.label, value]
+            for binding, value in zip(model.bindings, model.draft_values, strict=True)]
+
+
+def review_value_rows(spec: VerticalBarSpec) -> list[list[Any]]:
+    """Flatten immutable reconstructed values for a read-only review table."""
+    rows = []
+    for series_index, series in enumerate(spec.series):
+        for category_index, (category, value) in enumerate(
+            zip(spec.categories, series.values, strict=True)
+        ):
+            rows.append([
+                category_index,
+                category,
+                series_index,
+                series.name or "(unnamed)",
+                value,
+            ])
+    return rows
+
+
+def update_review_draft(model: ReviewModel, rows: Any) -> ReviewModel:
+    """Accept only text cells and map them by immutable server-side row order."""
+    if not isinstance(rows, (list, tuple)) or len(rows) != len(model.bindings):
+        raise ValueError(f"review must contain exactly {len(model.bindings)} rows")
+    values = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, (list, tuple)) or len(row) != 2:
+            raise ValueError(f"review row {index} must contain exactly 2 columns")
+        if not isinstance(row[1], str):
+            raise ValueError(f"review text in row {index} must be a string")
+        # row[0] is deliberately ignored: it is display text, never a field key.
+        values.append(row[1])
+    return replace(model, draft_values=tuple(values))
+
+
+def review_overrides(model: ReviewModel) -> Overrides:
+    """Convert a valid draft to indexed overrides for the later generate action."""
+    titles: dict[str, str] = {}
+    categories: dict[int, str] = {}
+    series_names: dict[int, str] = {}
+    for binding, draft in zip(model.bindings, model.draft_values, strict=True):
+        value = draft.strip()
+        if binding.required and not value:
+            raise ValueError(f"{binding.label} cannot be blank")
+        initial = binding.initial_text.strip()
+        if value == initial and not binding.confirmation_required:
+            continue
+        if not value:
+            continue
+        if binding.key in {"title", "x_axis_title", "y_axis_title"}:
+            titles[binding.key] = value
+            continue
+        match = re.fullmatch(r"category\[(\d+)]", binding.key)
+        if match:
+            categories[int(match.group(1))] = value
+            continue
+        match = re.fullmatch(r"series_name\[(\d+)]", binding.key)
+        if match:
+            series_names[int(match.group(1))] = value
+            continue
+        raise ValueError(f"unknown review field: {binding.key}")
+    return Overrides(
+        title=titles.get("title"),
+        x_axis_title=titles.get("x_axis_title"),
+        y_axis_title=titles.get("y_axis_title"),
+        categories=categories,
+        series_names=series_names,
+    )
 
 
 def ready_status() -> str:
@@ -328,6 +459,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
         ocr_download_path: Path | None = None,
         legend_table: list[list[Any]] | None = None,
         completeness_text: str | None = None,
+        review_model: ReviewModel | None = None,
         spec_json: dict[str, Any] | None = None,
         spec_download_path: Path | None = None,
         ocr_warning: str | None = None,
@@ -350,6 +482,16 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 value=completeness_text or "",
                 visible=completeness_text is not None,
             ),
+            review_model,
+            gr.update(visible=review_model is not None),
+            gr.update(
+                value=review_text_rows(review_model) if review_model else [],
+                row_count=len(review_model.bindings) if review_model else 0,
+            ),
+            gr.update(
+                value=review_value_rows(review_model.spec) if review_model else [],
+            ),
+            gr.update(value="", visible=False),
             gr.update(value=spec_json or {}, visible=spec_json is not None),
             gr.update(
                 value=spec_download_path,
@@ -413,6 +555,10 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             )
             show_mapping = result.legend_mapping is not None and bool(mapping_rows)
             spec_data = asdict(result.spec) if result.spec is not None else None
+            review = (
+                build_review_model(result.spec, result.completeness)
+                if result.spec is not None and result.completeness is not None else None
+            )
             spec_download = (
                 _spec_download_path(artifact_root, image_path, result.spec)
                 if result.spec is not None else None
@@ -428,6 +574,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                     completeness_summary(result.completeness)
                     if result.completeness is not None else None
                 ),
+                review_model=review,
                 spec_json=spec_data,
                 spec_download_path=spec_download,
                 ocr_warning=result.ocr_warning,
@@ -441,6 +588,23 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             LOGGER.exception("Chart analysis failed")
             message = "Analysis failed. Check the terminal and try another image."
         return result_updates(ready_status(), error_message=message)
+
+    def update_review_event(model, rows):
+        if model is None:
+            return None, gr.update(value=[]), gr.update(value="", visible=False)
+        try:
+            updated = update_review_draft(model, rows)
+        except ValueError as exc:
+            return (
+                model,
+                gr.update(value=review_text_rows(model)),
+                gr.update(value=alert_message(str(exc)), visible=True),
+            )
+        return (
+            updated,
+            gr.update(value=review_text_rows(updated)),
+            gr.update(value="", visible=False),
+        )
 
     def finish_analysis():
         return tuple(gr.update(interactive=True) for _ in range(6))
@@ -608,6 +772,49 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         visible=False,
                         elem_classes="borealis-summary",
                     )
+                    review_state = gr.State(value=None)
+                    with gr.Column(
+                        visible=False,
+                        elem_classes="borealis-review",
+                    ) as review_panel:
+                        gr.Markdown(
+                            "## Review reconstructed chart\n\n"
+                            "Correct reconstructed text below. Numeric values are "
+                            "read-only. These draft corrections are not applied to "
+                            "the specification yet.",
+                            elem_classes="borealis-summary",
+                        )
+                        review_fields = gr.Dataframe(
+                            value=[],
+                            headers=["Field", "Text"],
+                            datatype=["str", "str"],
+                            type="array",
+                            label="Reconstructed text",
+                            interactive=True,
+                            visible=True,
+                            wrap=True,
+                            column_count=2,
+                            static_columns=[0],
+                            show_search="none",
+                            elem_classes="borealis-review-fields",
+                        )
+                        review_values = gr.Dataframe(
+                            value=[],
+                            headers=[
+                                "Category #", "Category", "Series #", "Series",
+                                "Reconstructed value",
+                            ],
+                            datatype=["number", "str", "number", "str", "number"],
+                            type="array",
+                            label="Reconstructed values (read-only)",
+                            interactive=False,
+                            visible=True,
+                            wrap=True,
+                            elem_classes="borealis-review-values",
+                        )
+                        review_error_output = gr.HTML(
+                            "", visible=False, elem_classes="borealis-error"
+                        )
                     spec_output = gr.JSON(
                         value={},
                         label="Reconstructed VerticalBarSpec",
@@ -645,6 +852,11 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 ocr_download,
                 legend_output,
                 completeness_output,
+                review_state,
+                review_panel,
+                review_fields,
+                review_values,
+                review_error_output,
                 spec_output,
                 spec_download,
                 ocr_warning_output,
@@ -668,6 +880,11 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             ocr_download,
             legend_output,
             completeness_output,
+            review_state,
+            review_panel,
+            review_fields,
+            review_values,
+            review_error_output,
             spec_output,
             spec_download,
             ocr_warning_output,
@@ -698,6 +915,14 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             finish_analysis,
             outputs=controls,
             queue=False,
+            api_visibility="private",
+        )
+        review_fields.input(
+            update_review_event,
+            inputs=[review_state, review_fields],
+            outputs=[review_state, review_fields, review_error_output],
+            queue=False,
+            api_name="update_review",
             api_visibility="private",
         )
         clear_button.click(
