@@ -69,6 +69,20 @@ class ContractTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             LegendBarAssignment("bar", match_score=True, status="weak_match")
 
+    def test_legend_mapping_can_cover_the_bars_of_a_horizontal_chart(self):
+        frame = DetectionFrame("input/chart.png", 20, 20, (
+            Detection("h0", "horizontal_bar", Box(0, 0, 10, 4), 0.9),
+            Detection("h1", "horizontal_bar", Box(0, 6, 8, 10), 0.9),
+        ))
+        mapping = LegendMappingFrame("input/chart.png", (
+            LegendBarAssignment("h0"), LegendBarAssignment("h1"),
+        ))
+        self.assertEqual([bar.id for bar, _ in join_legend_assignments(frame, mapping)],
+                         ["h0", "h1"])
+        with self.assertRaisesRegex(ValueError, "detection order"):
+            join_legend_assignments(frame, LegendMappingFrame(
+                "input/chart.png", (LegendBarAssignment("h1"), LegendBarAssignment("h0"))))
+
     def test_existing_class_order_and_box_are_shared(self):
         self.assertEqual(CLASS_NAMES, (
             "horizontal_bar", "vertical_bar", "dot", "line_segment",

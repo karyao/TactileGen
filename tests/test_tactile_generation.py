@@ -70,6 +70,16 @@ class GenerationTests(unittest.TestCase):
             self.assertEqual(archive.namelist(), ["chart.svg"])
             self.assertEqual(archive.read("chart.svg"), page.clean_svg.read_bytes())
 
+    def test_horizontal_spec_uses_the_horizontal_layout(self):
+        result = generate_tactile_artifacts(make_spec(orientation="horizontal"), self.root)
+
+        self.assertEqual(len(result.pages), 1)
+        self.assertEqual(result.pages[0].violations, ())
+        svg = result.pages[0].clean_svg.read_text()
+        # Horizontal values sit under the axis as x values, not y values.
+        self.assertIn('id="x-value-0"', svg)
+        self.assertNotIn('id="y-value-0"', svg)
+
     def test_multi_page_metadata_order_and_overview_finding(self):
         result = generate_tactile_artifacts(divided_spec(), self.root)
 
