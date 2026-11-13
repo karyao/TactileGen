@@ -41,6 +41,11 @@ TEXT_ROLES = frozenset({
     "chart_title", "x_axis_title", "y_axis_title",
     "x_tick_label", "y_tick_label", "legend_label",
 })
+LEGEND_MAPPING_STATUSES = frozenset({
+    "matched", "weak_match", "ambiguous", "no_legend",
+    "missing_swatch", "missing_label", "unreadable_label",
+    "incomplete_legend", "unusable_crop", "ocr_unavailable",
+})
 
 
 def validate_source_key(value: str) -> None:
@@ -50,11 +55,18 @@ def validate_source_key(value: str) -> None:
         raise ValueError("source_key must be a relative, namespaced image path")
 
 
-def _confidence(value: float) -> None:
+def validate_unit_interval(value: float, name: str) -> float:
+    """Return a finite numeric value validated within the inclusive range 0 to 1."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("confidence must be a number from 0 to 1")
+        raise ValueError(f"{name} must be a number from 0 to 1")
+    value = float(value)
     if not math.isfinite(value) or not 0 <= value <= 1:
-        raise ValueError("confidence must be a number from 0 to 1")
+        raise ValueError(f"{name} must be a number from 0 to 1")
+    return value
+
+
+def _confidence(value: float) -> None:
+    validate_unit_interval(value, "confidence")
 
 
 @dataclass(frozen=True)
@@ -142,6 +154,105 @@ class OCRFrame:
             ids.add(region.detection_id)
 
 
+@dataclass(frozen=True)
+class LegendBarAssignment:
+    """One in-memory legend interpretation for a detected vertical bar."""
+
+    bar_id: str
+    swatch_id: str | None = None
+    label_id: str | None = None
+    series_name: str | None = None
+    match_score: float | None = None
+    status: str = "no_legend"
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("bar_id", self.bar_id),
+            ("swatch_id", self.swatch_id),
+            ("label_id", self.label_id),
+        ):
+            if not isinstance(value, str) or not value:
+                if value is not None or name == "bar_id":
+                    raise ValueError(f"{name} must be nonempty or absent")
+        if self.status not in LEGEND_MAPPING_STATUSES:
+            raise ValueError(f"Unknown legend mapping status: {self.status}")
+        if self.series_name is not None and (
+            not isinstance(self.series_name, str) or not self.series_name.strip()
+        ):
+            raise ValueError("series_name must be nonblank or absent")
+        if self.match_score is not None:
+            _confidence(self.match_score)
+
+        candidate = self.status in {"matched", "weak_match", "ambiguous"}
+        if candidate and (
+            self.swatch_id is None or self.label_id is None
+            or self.match_score is None
+        ):
+            raise ValueError(f"{self.status} requires candidate IDs and a score")
+        if self.status == "matched" and self.series_name is None:
+            raise ValueError("matched assignments require a series name")
+        if self.status in {"weak_match", "ambiguous"} and self.series_name is not None:
+            raise ValueError(f"{self.status} assignments must not assign a series")
+        if not candidate and any(value is not None for value in (
+            self.swatch_id, self.label_id, self.series_name, self.match_score
+        )):
+            raise ValueError(f"{self.status} assignments cannot contain a candidate")
+
+
+@dataclass(frozen=True)
+class LegendEntry:
+    """One legend swatch and label pair, whether or not any bar matched it.
+
+    ``name`` is the stripped OCR text of the label, or ``None`` when it was
+    unreadable.
+    """
+
+    swatch_id: str
+    label_id: str
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("swatch_id", "label_id"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field_name} must be nonempty")
+        if self.name is not None and not isinstance(self.name, str):
+            raise ValueError("name must be a string or absent")
+
+
+@dataclass(frozen=True)
+class LegendMappingFrame:
+    """Validated, ephemeral legend-to-bar assignments for one source image.
+
+    ``assignments`` has one row per detected bar. ``entries`` lists every
+    legend swatch and label pair in legend order (top to bottom, then left to
+    right), including pairs no bar matched. It is empty when the matcher could
+    not pair a legend at all.
+    """
+
+    source_key: str
+    assignments: tuple[LegendBarAssignment, ...]
+    entries: tuple[LegendEntry, ...] = ()
+
+    def __post_init__(self) -> None:
+        validate_source_key(self.source_key)
+        ids: set[str] = set()
+        for assignment in self.assignments:
+            if not isinstance(assignment, LegendBarAssignment):
+                raise ValueError("assignments must contain LegendBarAssignment objects")
+            if assignment.bar_id in ids:
+                raise ValueError(f"Duplicate legend mapping bar ID: {assignment.bar_id}")
+            ids.add(assignment.bar_id)
+        used: set[str] = set()
+        for entry in self.entries:
+            if not isinstance(entry, LegendEntry):
+                raise ValueError("entries must contain LegendEntry objects")
+            for identifier in (entry.swatch_id, entry.label_id):
+                if identifier in used:
+                    raise ValueError(f"Duplicate legend entry detection: {identifier}")
+                used.add(identifier)
+
+
 def join_text_regions(
     detections: DetectionFrame, ocr: OCRFrame
 ) -> tuple[tuple[Detection, RecognizedText], ...]:
@@ -160,14 +271,57 @@ def join_text_regions(
     return tuple(joined)
 
 
+def join_legend_assignments(
+    detections: DetectionFrame, mapping: LegendMappingFrame
+) -> tuple[tuple[Detection, LegendBarAssignment], ...]:
+    """Validate and join one legend assignment to every vertical bar."""
+    if detections.source_key != mapping.source_key:
+        raise ValueError("Legend mapping and detections refer to different source images")
+    by_id = {detection.id: detection for detection in detections.detections}
+    bars = [detection for detection in detections.detections
+            if detection.role == "vertical_bar"]
+    expected = [bar.id for bar in bars]
+    actual = [assignment.bar_id for assignment in mapping.assignments]
+    if actual != expected:
+        raise ValueError(
+            "Legend assignments must cover vertical bars in detection order"
+        )
+    joined = []
+    for bar, assignment in zip(bars, mapping.assignments, strict=True):
+        for referenced_id, role in (
+            (assignment.swatch_id, "legend_swatch"),
+            (assignment.label_id, "legend_label"),
+        ):
+            if referenced_id is None:
+                continue
+            referenced = by_id.get(referenced_id)
+            if referenced is None:
+                raise ValueError(f"Legend mapping references unknown detection: {referenced_id}")
+            if referenced.role != role:
+                raise ValueError(
+                    f"Legend mapping references {referenced.role}, expected {role}"
+                )
+        joined.append((bar, assignment))
+    return tuple(joined)
+
+
 @dataclass(frozen=True)
 class BarSeries:
+    """One series. ``has_bars=False`` is a legend entry whose bars are not
+    visible in the source chart; it has a name and no values (not zero)."""
+
     name: str | None
     values: tuple[float, ...]
+    has_bars: bool = True
 
     def __post_init__(self) -> None:
         if self.name is not None and (not isinstance(self.name, str) or not self.name):
             raise ValueError("series name must be nonempty or absent")
+        if not self.has_bars:
+            if self.name is None:
+                raise ValueError("a series with no visible bars needs its legend name")
+            if self.values:
+                raise ValueError("a series with no visible bars has no values")
         if any(isinstance(value, bool) or not isinstance(value, (int, float))
                or not math.isfinite(value) for value in self.values):
             raise ValueError("series values must be finite numbers")
@@ -192,7 +346,10 @@ class VerticalBarChart:
             raise ValueError("categories must be nonempty strings")
         if not self.series or any(not isinstance(item, BarSeries) for item in self.series):
             raise ValueError("chart must contain at least one BarSeries")
-        if any(len(item.values) != len(self.categories) for item in self.series):
+        if not any(item.has_bars for item in self.series):
+            raise ValueError("chart must contain at least one series with bars")
+        if any(item.has_bars and len(item.values) != len(self.categories)
+               for item in self.series):
             raise ValueError("series values must match category count")
 
 
@@ -221,6 +378,10 @@ class SeriesSpec:
     because no bar was detected (a rescued 0.0 means no bar pixels were found).
     ``value_confidence[i]`` is the detector confidence, or a low fixed value
     for rescued values. Both are empty when not provided.
+
+    ``no_visible_bars`` marks a legend entry with no bars in the chart. Its
+    ``values`` are all ``None`` (nothing was measured, which is not zero), and
+    it is not an unresolved series: it needs no bar-colour pairing.
     """
 
     name: str | None
@@ -228,6 +389,7 @@ class SeriesSpec:
     values: list[float | None]
     value_rescued: list[bool] = field(default_factory=list)
     value_confidence: list[float | None] = field(default_factory=list)
+    no_visible_bars: bool = False
 
 
 @dataclass(frozen=True)
@@ -271,6 +433,11 @@ class VerticalBarSpec:
                 raise ValueError("source_color must be #rrggbb or None")
             if len(item.values) != len(self.categories):
                 raise ValueError("series values must match category count")
+            if item.no_visible_bars and (
+                not item.name or any(v is not None for v in item.values)
+                or item.value_rescued or item.value_confidence
+            ):
+                raise ValueError("a series with no visible bars has a name and no values")
             if any(v is not None and not math.isfinite(v) for v in item.values):
                 raise ValueError("series values must be finite or None")
             for extra in (item.value_rescued, item.value_confidence):

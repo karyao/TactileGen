@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
+from urllib.parse import quote
 
 
 BOREALIS_COLORS: Mapping[str, str] = MappingProxyType({
@@ -147,7 +149,116 @@ def borealis_theme():
     )
 
 
-BOREALIS_CSS = """
+def _background_art_svg() -> str:
+    """Build the decorative Braille-inspired chart background artwork."""
+    marks: list[str] = []
+
+    def add_dot(x: float, y: float, radius: float) -> None:
+        marks.append(f'<circle cx="{x:g}" cy="{y:g}" r="{radius:g}"/>')
+
+    def add_bar_graph(x: float, bottom: float, heights: tuple[int, ...]) -> None:
+        step, pitch, pair_gap, radius = 11.0, 26.0, 8.0, 3.6
+        for index, cells in enumerate(heights):
+            left = x + index * pitch
+            for row in range(cells):
+                y = bottom - (row + 0.5) * step
+                add_dot(left, y, radius)
+                add_dot(left + pair_gap, y, radius)
+        width = (len(heights) - 1) * pitch + pair_gap + 12
+        marks.append(
+            f'<rect x="{x - 6:g}" y="{bottom + 5:g}" '
+            f'width="{width:g}" height="1.6"/>'
+        )
+
+    def add_line_graph(points: list[tuple[float, float]]) -> None:
+        spacing = 16.0
+        for index, (x, y) in enumerate(points):
+            add_dot(x - 4, y, 4.4)
+            add_dot(x + 4, y, 4.4)
+            if index + 1 == len(points):
+                continue
+            next_x, next_y = points[index + 1]
+            length = math.hypot(next_x - x, next_y - y)
+            steps = int(length // spacing)
+            for step in range(1, steps):
+                ratio = step * spacing / length
+                add_dot(
+                    x + (next_x - x) * ratio,
+                    y + (next_y - y) * ratio,
+                    3.6,
+                )
+
+    add_bar_graph(80, 210, (4, 7, 5, 8, 6))
+    add_line_graph([
+        (1040, 230), (1105, 170), (1170, 200),
+        (1235, 150), (1300, 185), (1360, 130),
+    ])
+    add_bar_graph(70, 650, (5, 8, 4, 6))
+
+    stops = (
+        '<stop offset="0" stop-color="#000000" stop-opacity="1"/>'
+        '<stop offset="1" stop-color="#000000" stop-opacity="0"/>'
+    )
+    gradients = "".join(
+        f'<linearGradient id="{identifier}" x1="{x1:g}" y1="{y1:g}" '
+        f'x2="{x2:g}" y2="{y2:g}" gradientUnits="userSpaceOnUse">'
+        f"{stops}"
+        "</linearGradient>"
+        for identifier, x1, y1, x2, y2 in (
+            ("fade-left", 0, 0, 120, 0),
+            ("fade-right", 1440, 0, 1320, 0),
+            ("fade-top", 0, 0, 0, 110),
+            ("fade-bottom", 0, 900, 0, 780),
+        )
+    )
+    fades = "".join(
+        f'<rect width="1440" height="900" fill="url(#{identifier})"/>'
+        for identifier in ("fade-left", "fade-right", "fade-top", "fade-bottom")
+    )
+    art = "".join(marks)
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" '
+        'viewBox="0 0 1440 900">'
+        "<defs>"
+        f"{gradients}"
+        '<mask id="edge-fade" maskUnits="userSpaceOnUse" '
+        'x="0" y="0" width="1440" height="900">'
+        '<rect width="1440" height="900" fill="#ffffff"/>'
+        f"{fades}"
+        "</mask>"
+        "</defs>"
+        f'<g mask="url(#edge-fade)" fill="{BOREALIS_COLORS["glow"]}" '
+        'opacity="0.07">'
+        f"{art}"
+        "</g>"
+        "</svg>"
+    )
+
+
+def _background_art_css() -> str:
+    """Return the CSS rules that place the decorative background artwork."""
+    uri = "data:image/svg+xml," + quote(_background_art_svg())
+    return (
+        "body,\n"
+        ".gradio-container {\n"
+        f'  background-image: url("{uri}");\n'
+        "  background-repeat: no-repeat;\n"
+        "  background-size: cover;\n"
+        "  background-position: 15% 20%;\n"
+        "  background-attachment: fixed;\n"
+        "}\n"
+        "\n"
+        "@media (max-width: 600px) {\n"
+        "  body,\n"
+        "  .gradio-container {\n"
+        "    background-size: 300vw auto;\n"
+        "    background-position: left top;\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+_BOREALIS_CSS_TEMPLATE = """
 :root {
   --borealis-midnight: #001322;
   --borealis-deep-sky: #003866;
@@ -190,8 +301,10 @@ body,
 .borealis-scope,
 .borealis-control-rail,
 .borealis-upload-image,
+.borealis-image-view,
 .borealis-summary,
 .borealis-workspace,
+.borealis-review,
 .borealis-error,
 .borealis-empty {
   box-sizing: border-box;
@@ -246,6 +359,12 @@ body,
   border-radius: var(--borealis-radius-md);
   padding: var(--borealis-space-3);
   box-shadow: var(--borealis-shadow);
+}
+
+.borealis-review {
+  padding-top: var(--borealis-space-2);
+  border-top: 1px solid var(--borealis-deep-sky);
+  gap: var(--borealis-space-2) !important;
 }
 
 .borealis-control-rail {
@@ -309,7 +428,8 @@ body,
   border: 0;
   background: transparent;
   box-shadow: none;
-  line-height: 1.6;
+  line-height: 1.5;
+  font-size: 0.8125rem;
 }
 
 .borealis-setting,
@@ -337,6 +457,27 @@ body,
 .borealis-result-image {
   border-color: var(--borealis-deep-sky) !important;
   box-shadow: none !important;
+}
+
+.borealis-image-view {
+  width: fit-content !important;
+  min-width: 240px;
+  margin-top: calc(-1 * var(--borealis-space-1));
+  padding: 4px !important;
+  background: var(--borealis-elevated) !important;
+  border: 1px solid var(--borealis-deep-sky) !important;
+  border-radius: var(--borealis-radius-sm) !important;
+}
+
+.borealis-image-view .wrap {
+  gap: 4px !important;
+}
+
+.borealis-image-view label {
+  margin: 0 !important;
+  padding: 7px 12px !important;
+  border-radius: 7px !important;
+  font-weight: 600;
 }
 
 .borealis-error {
@@ -409,3 +550,6 @@ body,
   }
 }
 """.strip()
+
+
+BOREALIS_CSS = _BOREALIS_CSS_TEMPLATE + "\n\n" + _background_art_css()

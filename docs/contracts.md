@@ -15,6 +15,7 @@ between every stage.
 | --- | --- | --- | --- |
 | `DetectionFrame` | Detector | OCR and interpreter | Image size and identified chart elements with role, pixel box, and confidence. |
 | `OCRFrame` | OCR | Interpreter | Text and confidence keyed by detection ID; role and location come from the matching detection. |
+| `LegendMappingFrame` | Legend matcher | Presentation and interpreter | One validated series-assignment result per detected vertical bar. |
 | `VerticalBarChart` | Interpreter | Tactile renderer | Title, axis titles, ordered categories, and one or more bar series with numeric values. |
 
 Every result has a `source_key` such as `val/22410.png`. PlotQA reuses numeric
@@ -29,11 +30,23 @@ declared width and height. Confidence is a finite number from 0 to 1. The
 role strings and their order match the existing `classes.txt` format; see
 `CLASS_NAMES` and `CHART_MARK_ROLE`.
 
+`LegendMappingFrame` temporarily stores legend-to-bar matches for one analysis.
+Assignments follow the detected bar order and reference validated bars, swatches,
+and labels. These matches are not written to JSON. `match_score` measures color
+similarity, not the probability that a match is correct. `entries` lists every
+legend swatch and label pair in legend order (top to bottom, then left to right),
+with the label's OCR text, including pairs no bar matched; it is empty when no
+legend could be paired.
+
 OCR may contain an empty text string when a crop was attempted but unreadable.
 The interpreter must either produce a complete `VerticalBarChart` or raise
 `ChartInterpretationError`; it must not invent missing values. A series name
 may be `None` when the source chart has no legend. Each series has one value
-per category in the same order.
+per category in the same order, except a series with `has_bars=False`: a legend
+entry whose bars are not visible in the source chart (for example bars below an
+axis that starts at zero). It must have a name and has no values, because
+nothing was measured and "zero" would be wrong. A chart needs at least one
+series with bars. In JSON, `has_bars` is written only when it is `false`.
 
 ## Example fixtures
 
@@ -64,7 +77,9 @@ belong to the model and end-to-end pipeline tasks.
 ## VerticalBarSpec (schema 0.2)
 
 `src/reconstruct.py` turns a `DetectionFrame`, OCR text and the image into a
-`VerticalBarSpec` with `reconstruct_vbar(frame, ocr_texts, image)`. Unlike
+`VerticalBarSpec`. Pass the in-memory legend result with
+`reconstruct_vbar(frame, ocr_texts, image, legend_mapping=mapping)`. When the
+mapping is omitted, reconstruction computes it from the same inputs. Unlike
 `VerticalBarChart`, titles may be `None`, series values may be `None`, and
 anything the interpreter could not resolve is listed in `flags` instead of
 raising. `ChartInterpretationError` is raised only when there are no bars, no
@@ -79,15 +94,27 @@ Flags (each is "could not resolve this", not "wrong"):
 | `title_missing`, `x_axis_title_missing`, `y_axis_title_missing` | No title box detected, or its text was empty. The field is `None`. |
 | `title_touches_right_edge` | The title box reaches the right image edge; the text may be clipped. |
 | `y_ticks_dropped:N` | N y tick labels were unreadable or inconsistent with the fitted line. |
+| `y_tick_leading_zero` | A surviving y tick label starts with a zero followed by a digit (e.g. `04`); a decimal point was probably lost, so the calibration may fit misread numbers. |
 | `y_ticks_not_arithmetic`, `y_calibration_ambiguous` | Surviving ticks are not evenly spaced, or two tick subsets fit equally well. |
 | `baseline_outside_plot`, `bar_baseline_offset` | The calibrated zero line is outside the plot, or bar bases sit far from it. |
 | `value_clipped_at_axis` | A bar reaches or passes the plot edge beyond the last tick, so its value is a lower bound. |
 | `category_count_mismatch`, `category_ambiguous` | Bars and x labels disagree in number, or two bars of a series map to one label. |
 | `category_unreadable` | An x label is empty or has no letter or digit (e.g. a lone `|`); OCR confidence is not used. That category's confidence is set to 0.1 (`confidence["category[j]"]`). |
 | `series_ambiguous` | Colour groups and legend entries could not be paired one-to-one. |
+| `legend_entry_skipped:<reason>:<text>` | A legend entry no bar matched was not added as a series (see below). Reasons: `bars_not_settled`, `unreadable_text`, `low_confidence`, `outside_legend`, `duplicate_name`, `unreadable_swatch`. |
+| `legend_order_differs` | The legend order disagrees with the left-to-right bar order, so series with bars keep the bar order and series with no visible bars follow. |
 | `plot_area_missing` | No plot area detected; position filters were skipped. |
 | `bars_rescued:N` | N values had no detected bar and were measured from pixels (`SeriesSpec.value_rescued`, low `value_confidence`). |
 | `value_inferred_zero` | At least one rescued value found no bar pixels and was set to 0.0. |
+
+A legend entry that no bar matched becomes a `SeriesSpec` with `no_visible_bars=True`: its
+`values` are all `None` (not measured, not zero), it carries the legend name and swatch colour, and it is not
+`series_ambiguous`. The series are then listed in legend order, provided the series with bars keep their left-to-right
+bar order within it. Phantom entries are guarded against: a series is added only when every bar was matched to some
+entry (otherwise an unmatched entry may own bars that were merely hard to match) and only when the swatch
+box, label box and OCR text are each read with confidence of at least `LEGEND_ENTRY_MIN_CONFIDENCE` (0.5), the
+text is non-empty and not a repeat of another series' name, and the swatch lies inside the legend box. Every
+other case is reported with a `legend_entry_skipped` flag.
 
 Series colours are seeded from the legend swatches, so near-identical series colours stay separate when a legend is detected. Bar rescue and the category guard can be switched off with `rescue_bars=False` and `category_guard=False`.
 

@@ -11,12 +11,16 @@ from src.contracts import (
     Box,
     Detection,
     DetectionFrame,
+    LegendBarAssignment,
+    LegendMappingFrame,
     OCRFrame,
     RecognizedText,
 )
 from src.presentation import (
+    LEGEND_TABLE_HEADERS,
     OCR_TABLE_HEADERS,
     detection_rows,
+    legend_rows,
     ocr_rows,
     render_detection_overlay,
     summarize_detections,
@@ -54,17 +58,17 @@ import src.presentation
 
         summary = summarize_detections(frame)
 
-        self.assertIn("Detected 3 chart elements.", summary)
-        self.assertIn("vertical bar: 2; chart title: 1", summary)
+        self.assertIn("**Detected 3 chart elements**", summary)
         self.assertIn("Confidence range: 80.0% to 95.0%.", summary)
-        self.assertIn("Vertical bars: 2.", summary)
-        self.assertTrue(summary.endswith("Chart text and numeric values have not been read."))
+        self.assertIn("- Vertical bar: 2", summary)
+        self.assertIn("- Chart title: 1", summary)
+        self.assertIn("- Chart text has not been read.", summary)
+        self.assertTrue(summary.endswith("- Numeric bar values are not reconstructed."))
 
     def test_summary_treats_zero_detections_as_valid(self):
         summary = summarize_detections(sample_frame())
-        self.assertIn("Detected 0 chart elements.", summary)
-        self.assertIn("No roles were detected.", summary)
-        self.assertIn("Vertical bars: 0.", summary)
+        self.assertIn("**Detected 0 chart elements**", summary)
+        self.assertIn("- No roles were detected.", summary)
         self.assertNotIn("Confidence range", summary)
 
     def test_ocr_summary_and_rows_use_joined_detection_geometry(self):
@@ -81,7 +85,7 @@ import src.presentation
         summary = summarize_detections(frame, ocr=ocr)
         rows = ocr_rows(frame, ocr)
 
-        self.assertIn("OCR attempted 2 text regions; 1 returned readable text.", summary)
+        self.assertIn("- OCR: 1 of 2 text regions readable", summary)
         self.assertEqual(OCR_TABLE_HEADERS, (
             "Detection ID", "Role", "Recognized text", "OCR confidence",
             "X1", "Y1", "X2", "Y2",
@@ -125,6 +129,34 @@ import src.presentation
         self.assertFalse(np.array_equal(overlay, image))
         for x, y in ((10, 30), (35, 15), (5, 90), (100, 30)):
             self.assertTrue(np.any(overlay[y, x]))
+
+    def test_legend_mapping_summary_rows_and_overlay(self):
+        frame = sample_frame(
+            Detection("bar", "vertical_bar", Box(10, 25, 25, 90), 0.91),
+            Detection("swatch", "legend_swatch", Box(80, 10, 90, 20), 0.9),
+            Detection("label", "legend_label", Box(92, 10, 110, 20), 0.9),
+        )
+        mapping = LegendMappingFrame("input/chart.png", (
+            LegendBarAssignment(
+                "bar", "swatch", "label", "North", 0.98, "matched"
+            ),
+        ))
+        summary = summarize_detections(frame, legend_mapping=mapping)
+        rows = legend_rows(frame, mapping)
+        overlay = render_detection_overlay(
+            np.zeros((100, 120, 3), dtype=np.uint8),
+            frame,
+            legend_mapping=mapping,
+        )
+        self.assertIn(
+            "- Legend matching: 1 of 1 vertical bars matched; 0 unmatched",
+            summary,
+        )
+        self.assertEqual(LEGEND_TABLE_HEADERS, (
+            "Bar ID", "Series", "Color similarity", "Swatch ID", "Label ID", "Status",
+        ))
+        self.assertEqual(rows, [["bar", "North", 0.98, "swatch", "label", "matched"]])
+        self.assertTrue(np.any(overlay))
 
     def test_structure_outline_is_dashed_and_solid_outline_is_continuous(self):
         image = np.zeros((100, 120, 3), dtype=np.uint8)

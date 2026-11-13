@@ -93,6 +93,10 @@ python3.12 -m src.ocr \
 The OCR JSON stores recognized text and confidence linked by detection ID.
 YOLO's detection JSON remains the sole source of roles and box coordinates.
 
+To measure series-assignment accuracy rather than inspect one image, run the
+oracle and end-to-end benchmark described in
+[`docs/experiments.md`](docs/experiments.md#legend-to-bar-matching-accuracy).
+
 ## Try PP-OCRv6 with RapidOCR
 
 RapidOCR runs the pre-trained PP-OCRv6-small recognition model locally through
@@ -110,6 +114,34 @@ python3.12 -m src.ocr \
 
 Tesseract remains the default and is still used by the Gradio application. The
 multilingual PP-OCRv6 model ignores the shared `--language` option.
+
+## Make a tactile graphic
+
+`src/tactile` lays out a vertical bar chart as a tactile page (braille labels,
+textured bars, grid), checks it against BANA tactile-graphics rules, and
+writes an SVG. It needs no extra dependencies:
+
+```bash
+python3.12 -m src.tactile --chart tests/fixtures/tactile/books_by_grade.json \
+  --output output/tactile/books_by_grade.svg --show-print
+```
+
+See the [tactile output guide](docs/tactile.md) for the rules, sources and
+limits.
+
+To go from a PlotQA vertical-bar chart image straight to a tactile SVG:
+
+```bash
+python3.12 -m src.tactile.pipeline --image data/png_test/png/31973.png \
+  --output output/tactile/31973.svg --yes
+```
+
+If the title, an axis title, a category or a series name could not be read,
+the command asks for it (or, without a terminal, lists the `--title`,
+`--x-title`, `--y-title`, `--category J=TEXT` and `--series I=NAME` flags to
+pass). Charts whose numbers cannot be trusted exit with status 3 and say what to
+try instead. Exit statuses: 0 written, 1 error, 2 text needed, 3 cannot build,
+4 not confirmed.
 
 ## Contributing and documentation
 
