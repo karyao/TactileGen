@@ -1,9 +1,15 @@
 """Horizontal bar layout and the BANA rules that depend on bar direction."""
 
+import io
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
+from pathlib import Path
 
+from src.contract_io import load_bar_chart, load_vertical_bar_chart, write_bar_chart
 from src.contracts import BarSeries, HorizontalBarChart
+from src.tactile.__main__ import main as tactile_main
 from src.tactile.braille import BLANK, GUIDE_DOT
 from src.tactile.constants import BAR_MIN_WIDTH, DOT_DIAMETER, DOT_PITCH, GUIDE_DOTS_MIN
 from src.tactile.layout_hbar import (
@@ -13,6 +19,7 @@ from src.tactile.layout_hbar import (
 from src.tactile.rules import check_layout
 from src.tactile.svg import render_svg
 
+FIXTURE = Path(__file__).parent / "fixtures" / "tactile" / "rainfall_hbar.json"
 RAIN = HorizontalBarChart(
     "demo/1.png", "Rainfall by city", "Rainfall (mm)", "City",
     ("Vancouver", "Calgary", "Toronto", "Halifax"),
@@ -126,6 +133,28 @@ class HorizontalLayoutTest(unittest.TestCase):
         svg = render_svg(pages[0], show_print=True)
         self.assertIn("bar-1-2", svg)
         self.assertIn("Grade 5", svg)
+
+
+class ChartFileTest(unittest.TestCase):
+    def test_fixture_loads_as_a_horizontal_chart_and_round_trips(self):
+        chart = load_bar_chart(FIXTURE)
+        self.assertIsInstance(chart, HorizontalBarChart)
+        self.assertEqual(chart.categories[0], "Vancouver")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "chart.json"
+            write_bar_chart(path, chart)
+            self.assertEqual(load_bar_chart(path), chart)
+        with self.assertRaises(ValueError):
+            load_vertical_bar_chart(FIXTURE)
+
+    def test_cli_renders_the_fixture_and_passes_strict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "rain.svg"
+            with redirect_stdout(io.StringIO()) as printed:
+                code = tactile_main(["--chart", str(FIXTURE), "--output", str(out), "--strict"])
+            self.assertEqual(code, 0)
+            self.assertIn("x-value-0", out.read_text())
+        self.assertIn("all passed", printed.getvalue())
 
 
 class DirectionRulesTest(unittest.TestCase):
