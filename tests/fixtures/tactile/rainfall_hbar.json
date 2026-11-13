@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "chart_type": "hbar_categorical",
+  "source_key": "fixtures/rainfall_hbar.png",
+  "title": "Yearly rainfall by city",
+  "x_axis_title": "Rainfall (mm)",
+  "y_axis_title": "City",
+  "categories": ["Vancouver", "Calgary", "Toronto", "Halifax"],
+  "series": [
+    {"name": null, "values": [1150, 420, 830, 1450]}
+  ]
+}

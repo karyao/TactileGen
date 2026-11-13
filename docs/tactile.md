@@ -1,6 +1,7 @@
-# Tactile output (vertical bar charts)
+# Tactile output (bar charts)
 
-`src/tactile/` turns a `VerticalBarChart` (see [contracts](contracts.md)) into a
+`src/tactile/` turns a `VerticalBarChart` or `HorizontalBarChart` (see
+[contracts](contracts.md)) into a
 one-page tactile graphic and checks it against BANA rules. This is the last
 stage of the pipeline: chart image → YOLO → OCR → chart data → **tactile page**.
 
@@ -80,6 +81,43 @@ are chosen across the whole graph so they match between pages. The CLI writes
 graph pages of six months each. §3.9.1 calls for an overview of the
 whole graph first; none is generated, so part 1 reports `overview_first`.
 
+## Horizontal bars
+
+`src/reconstruct_hbar.py` and `src/tactile/layout_hbar.py` handle charts whose
+bars run left to right.
+
+- **Which way the bars run.** `bar_orientation(frame)` says `horizontal` when
+  most confident bar detections are `horizontal_bar`; ties stay vertical. The
+  image pipeline uses it to pick the reconstruction and the layout. Only a
+  detector trained on horizontal bars finds them: the fine-tuned checkpoint
+  from `notebooks/kaggle_train_bars.ipynb` scored F1 0.947 on horizontal bars
+  and 0.965 on vertical bars (old model 0.966) on the PlotQA test split, IoU 0.5.
+- **Reconstruction.** The detections and image are transposed so the bars
+  stand upright, and `reconstruct_vbar` reads them; legend matching runs on
+  the original image (it compares colours only). The spec has
+  `orientation="horizontal"`, categories top to bottom as printed, and titles
+  on their printed axes (`x_axis_title` is the value heading below the chart).
+- **Layout** (BANA §6.6.6.6 unless noted):
+
+| Element | Placement | BANA |
+| --- | --- | --- |
+| Bars | Run right from the vertical axis; 3/8 to 1 inch thick; sets 1/8 inch apart; key top to bottom | §6.6.6.7, §6.6.6.4 |
+| Grid | Vertical grid lines, perpendicular to the bars, instead of tick marks | §6.6.6.3 |
+| Category labels | Left-aligned, centred on their set of bars; one blank cell and at least two guide dots (dot 5) before the axis; runovers left-justified, guide dots on the last line; same key fallback as vertical bars | §6.6.6.6, §5.8 |
+| Values | Below the axis, numeric indicator, dots 4-5-6 of the first cell on the grid line; the grid step grows until the values fit on one line | §6.6.6.6 |
+| Headings | Horizontal heading below the values, left-justified with the first one; vertical heading aligned with the first cell of the category labels, at most 20 cells a line | §6.6.6.6 |
+
+```bash
+python -m src.tactile --chart tests/fixtures/tactile/rainfall_hbar.json \
+  --output output/tactile/rainfall_hbar.svg --show-print
+python -m src.tactile.pipeline --image chart.png --output out.svg \
+  --weights path/to/best_bars_hv.pt --ocr rapidocr
+```
+
+Not done for horizontal bars yet: staggering values onto extra lines with lead
+lines, dividing a graph into sections (§3.9), and place-value alignment for
+numeric category labels.
+
 ## Rule checker
 
 `src.tactile.check_layout(layout)` returns a list of violations, each with the
@@ -88,7 +126,7 @@ also works on layouts built another way.
 
 | Rule | Checks | BANA |
 | --- | --- | --- |
-| `bar_width` | Bars 3/8 to 1 inch wide | §6.6.6.7 |
+| `bar_width` | Bars 3/8 to 1 inch wide (thick, for horizontal bars) | §6.6.6.7 |
 | `bar_spacing` | Bars in a set do not overlap; at least 1/8 inch between sets | §6.6.6.7, §3.4.3.12 |
 | `label_clearance` | Labels at least 1/8 inch (3 mm) from every other component | §3.4.3.12, §6.6.6.6 |
 | `label_owner_distance` | A label at most 1/4 inch (6 mm) from its component | §3.4.3.12, §5.10.5 |
@@ -109,6 +147,8 @@ also works on layouts built another way.
 | `overview_first` | A divided graph needs an overview first (always reported on part 1; not generated) | §3.9.1 |
 | `heading_placement` | Horizontal heading left-justified with the first value; vertical heading aligned with the first cell of the values (not centred on the plot) | §6.6.6.6 |
 | `key_format` | Key explanation in cell 6, level with its sample | §5.8.4.3, §5.8.4.4 |
+| `value_alignment` | Vertical values: dots 2-5 on the grid line; horizontal values: dots 4-5-6 of the first cell on it | §6.6.6.6 |
+| `guide_dots` | Horizontal-bar labels left-aligned, one blank cell and at least two guide dots before the axis | §6.6.6.6 |
 
 Passing every rule means these checks passed, not that the page is fully
 BANA compliant. Many guidelines (texture choice, whether a graph needs to be
@@ -126,8 +166,7 @@ Two liblouis checks in `tests/test_tactile.py` use the UEB grade 1 table
 for the demo labels, and a round-trip check that back-translating the braille
 of every label (demos plus abbreviation- and number-keyed layouts, about 70
 labels) gives the original text. Both skip when the `louis` Python bindings
-are not installed. **Neither has been run yet**: liblouis was not available
-on the development machine.
+are not installed. Both passed with liblouis 3.36 (WSL Ubuntu, November 2026).
 
 ## Not done yet
 
@@ -142,7 +181,7 @@ on the development machine.
   transcriber-made key (§5.8.4.2).
 - Texture designs from BANA's texture palettes (Appendices E and H), and a
   test that the dot fill is distinguishable from braille by touch.
-- Negative values, horizontal bars, stacked bars, line graphs and histograms.
+- Negative values, stacked bars, line graphs and histograms.
 - Reading `VerticalBarSpec` from `feat/reconstruct-vbar`, and the transcriber's
   notes BANA requires in some cases (for example omitted numeric indicators).
 - Review by a certified transcriber, and testing with braille readers.
