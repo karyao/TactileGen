@@ -479,7 +479,17 @@ body,
   box-shadow: none !important;
 }
 
+/* Keep slider reset arrows centred inside their compact numeric control. */
+.borealis-app .borealis-setting button[data-testid="reset-button"] {
+  min-height: 0;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 .borealis-details {
+  padding: 0 !important;
   border: 0 !important;
   border-top: 1px solid var(--borealis-deep-sky) !important;
   border-radius: 0 !important;
@@ -488,9 +498,24 @@ body,
 }
 
 .borealis-details > .label-wrap {
+  box-sizing: border-box;
   min-height: 44px;
+  padding: 8px 12px !important;
+  margin-bottom: 0 !important;
   align-items: center;
   gap: 8px;
+}
+
+/* Apply the inset once; Gradio's inner layout supplies only the item gap. */
+.borealis-details > [data-testid="accordion-content"] {
+  box-sizing: border-box;
+  padding: 8px 12px !important;
+}
+
+.borealis-details > [data-testid="accordion-content"] > .column,
+.borealis-details > [data-testid="accordion-content"] > .column > .form {
+  padding: 0 !important;
+  gap: 8px !important;
 }
 
 /* Centre the disclosure glyph's line box alongside the title in either state. */
@@ -504,8 +529,18 @@ body,
   line-height: 1;
 }
 
+.borealis-details .borealis-helper,
 .borealis-details .borealis-summary {
-  padding-bottom: 16px;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.borealis-details .prose > :first-child {
+  margin-top: 0 !important;
+}
+
+.borealis-details .prose > :last-child {
+  margin-bottom: 0 !important;
 }
 
 .borealis-workspace > *,
