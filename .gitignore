@@ -9,3 +9,11 @@ dataset_yolo_all/
 data/
 .DS_Store
 output/
+
+# failure audit: detection cache and bulky outputs
+audit_cache*/
+results/extras/extra_bar_conf.csv
+results/extras/run.log
+results/failure_groups/*/contact_sheet.png
+!results/failure_groups/series_legend_colour_match/contact_sheet.png
+!results/failure_groups/tiny_bars_undetected/contact_sheet.png

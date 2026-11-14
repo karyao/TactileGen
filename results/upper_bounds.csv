@@ -1,0 +1,9 @@
+group,charts,sole-cause charts (strict floor),"gain if fixed alone, upper (pts)","gain, sole-cause floor (pts)",effort (my estimate),upper gain per effort-step,(c) after,heuristic-fixable?,VLM-plausible?
+tiny_bars_undetected,1357,553,12.07,4.92,M-L: detector retrain or pixel scan for near-zero bars,3.02,78.5%,yes,no/unknown
+series_legend_colour_match,774,774,6.88,6.88,M: colour matching / drop weak bars then rescue,2.29,73.3%,yes,no/unknown
+false_block_gate,215,180,1.91,1.6,S: rule change (key-runover fix exists on a branch),1.91,68.3%,yes,no/unknown
+real_bars_undetected,564,381,5.02,3.39,L: detector retrain + data,1.0,71.4%,no,no/unknown
+category_label_ocr,421,351,3.74,3.12,M-L: OCR tuning or VLM text read,0.94,70.2%,no,yes (hypothesis)
+title_axis_title_ocr,218,211,1.94,1.88,M: OCR tuning or VLM text read,0.48,68.4%,no,yes (hypothesis)
+other_rare,163,151,1.45,1.34,L: long tail,0.29,67.9%,no,no/unknown
+y_axis_calibration,64,41,0.57,0.36,S-M: tick/clip heuristics,0.28,67.0%,yes,no/unknown
