@@ -28,7 +28,7 @@ from src.tactile.completeness import (
     MissingItem,
 )
 
-from tests.gradio_helpers import GradioTestCase, make_spec
+from tests.gradio.helpers import GradioTestCase, make_spec
 
 
 class GradioReviewTest(GradioTestCase):

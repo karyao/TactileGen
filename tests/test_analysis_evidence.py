@@ -1,17 +1,13 @@
 """Diagnostic evidence must explain decisions without changing chart results."""
 from dataclasses import asdict, replace
 import json
-from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
 
-import cv2
-import numpy as np
 import pytest
 
-from src.contracts import ChartInterpretationError, LegendMappingFrame, OCRFrame, RecognizedText
+from src.contracts import OCRFrame, RecognizedText
 from src.diagnostics import AnalysisDiagnostics
-from src.gradio_app import analyze_image, build_app
 from src.legend_matcher import match_legend_to_bars
 from src.reconstruct import reconstruct_vbar
 from tests.test_reconstruct import base_chart, y_of, Chart, PLOT, _grouped, SIMILAR
@@ -241,49 +237,6 @@ def test_series_events_survive_failure_while_building_later_series():
     assert not events(diagnostic, 'pixel_rescue')
 
 
-@pytest.mark.parametrize('failure', [None, 'detection', 'ocr', 'legend_matching', 'reconstruction', 'presentation'])
-def test_zip_preserves_partial_stage_outputs(tmp_path, failure):
-    chart = base_chart()
-    image_path = tmp_path / 'chart.png'
-    assert cv2.imwrite(str(image_path), chart.image)
-    frame = chart.frame()
-    ocr = OCRFrame(frame.source_key, tuple(RecognizedText(k, text, conf)
-                     for k, (text, conf) in chart.texts.items()))
-    diagnostic = AnalysisDiagnostics(settings={'confidence': .25})
-    functions = {'detection': 'run_detection', 'ocr': 'run_ocr',
-                 'legend_matching': 'match_legend_to_bars', 'reconstruction': 'reconstruct_vbar',
-                 'presentation': 'render_detection_overlay'}
-    from contextlib import ExitStack
-    with ExitStack() as stack:
-        stack.enter_context(patch('src.gradio_ui.analysis.run_detection', return_value=frame))
-        stack.enter_context(patch('src.gradio_ui.analysis.run_ocr', return_value=ocr))
-        if failure:
-            stack.enter_context(patch('src.gradio_ui.analysis.' + functions[failure], side_effect=RuntimeError('injected failure')))
-        try:
-            result = analyze_image(object(), image_path, .25, .7, diagnostics=diagnostic)
-            assert result.diagnostics is diagnostic
-        except RuntimeError:
-            assert failure in ('detection', 'presentation')
-        diagnostic.finish(failed=failure in ('detection', 'presentation'))
-    path = diagnostic.export_zip(tmp_path)
-    with ZipFile(path) as archive:
-        report = json.loads(archive.read('diagnostics.json'))
-        assert 'injected failure' in archive.read('report.txt').decode() if failure else not report['exceptions']
-        assert 'input.png' not in archive.namelist()
-        if failure != 'detection':
-            assert 'detections.json' in archive.namelist()
-            crops = [e for e in report['events'] if e['code'] == 'source_crop']
-            assert len(crops) == len(ocr.regions)
-            assert all(e['filename'] in archive.namelist() for e in crops)
-            assert cv2.imdecode(np.frombuffer(archive.read(crops[0]['filename']), dtype=np.uint8), 1) is not None
-        if failure not in ('detection', 'ocr'):
-            assert 'ocr.json' in archive.namelist()
-        if failure in ('reconstruction', 'presentation', None):
-            assert 'legend.json' in archive.namelist()
-        if failure == 'presentation':
-            assert 'spec.json' in archive.namelist()
-
-
 def test_export_failure_does_not_leave_partial_files(tmp_path):
     diagnostic = AnalysisDiagnostics(settings={})
     diagnostic.finish()
@@ -292,48 +245,6 @@ def test_export_failure_does_not_leave_partial_files(tmp_path):
     assert not list(tmp_path.rglob('*.tmp'))
     assert not list(tmp_path.rglob('*.zip'))
     assert diagnostic.record['exceptions'][-1]['stage'] == 'diagnostic_export'
-
-
-def test_gradio_download_reset_and_export_failure(tmp_path):
-    chart = base_chart()
-    image_path = tmp_path / 'chart.png'
-    cv2.imwrite(str(image_path), chart.image)
-    frame = chart.frame()
-    ocr = OCRFrame(frame.source_key, tuple(RecognizedText(k, text, conf)
-                     for k, (text, conf) in chart.texts.items()))
-    demo = build_app(object(), ocr_backend=object(), device='cpu')
-    event = next(fn for fn in demo.fns.values() if fn.api_name == 'analyze')
-    index = next(i for i, component in enumerate(event.outputs)
-                 if getattr(component, 'label', '') == 'Download analysis diagnostics (ZIP)')
-    try:
-        with patch('src.gradio_ui.analysis.run_detection', return_value=frame), \
-             patch('src.gradio_ui.analysis.run_ocr', return_value=ocr):
-            success = event.fn(str(image_path), .25, .7, 'eng')
-            assert success[index]['visible']
-            with ZipFile(success[index]['value']) as archive:
-                record = json.loads(archive.read('diagnostics.json'))
-                assert 'annotated.png' in archive.namelist()
-                assert record['outputs']['spec']['categories'] == ['C0', 'C1', 'C2']
-            rejected = event.fn(None, .25, .7, 'eng')
-            assert rejected[index]['visible']
-            assert rejected[index]['value'] != success[index]['value']
-            with ZipFile(rejected[index]['value']) as archive:
-                record = json.loads(archive.read('diagnostics.json'))
-                assert record['outcome'] == 'failed'
-                assert 'input.png' not in archive.namelist()
-            with patch('src.diagnostics.os.replace', side_effect=OSError('disk full')):
-                failed_export = event.fn(str(image_path), .25, .7, 'eng')
-            assert not failed_export[index]['visible']
-            assert 'Diagnostic export failed' in failed_export[index+1]['value']
-            assert failed_export[8] is not None  # Review remains available.
-        for name in ('ready_results', 'begin_analysis', 'clear_all'):
-            callback = next(fn for fn in demo.fns.values() if fn.api_name == name)
-            updates = callback.fn()
-            offset = len(callback.outputs) - len(event.outputs)
-            assert not updates[index+offset]['visible']
-            assert updates[index+offset]['value'] is None
-    finally:
-        demo.close(verbose=False)
 
 
 def test_ambiguous_series_exposes_legend_scores_and_unresolved_bars():

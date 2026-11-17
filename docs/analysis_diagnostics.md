@@ -411,7 +411,7 @@ specifications, completeness results, and expected reconstruction errors.
    ```sh
    .venv/bin/python -m pytest \
      tests/test_diagnostics_bundle.py tests/test_analysis_evidence.py \
-     tests/test_diagnostics.py tests/test_parsing_provenance.py \
+     tests/test_diagnostics.py tests/gradio/test_diagnostics.py tests/test_parsing_provenance.py \
      tests/test_ocr_trace.py tests/test_ocr_image_evidence.py \
      tests/test_ocr_crop.py tests/test_ocr.py tests/test_rapidocr_ocr.py \
      tests/test_tesseract_ocr.py tests/test_reconstruct.py \

@@ -27,7 +27,7 @@ from src.gradio_app import (
 )
 from src.tactile.completeness import CANNOT_BUILD, NEEDS_INPUT
 
-from tests.gradio_helpers import GradioTestCase, make_spec
+from tests.gradio.helpers import GradioTestCase, make_spec
 
 
 class GradioAnalysisTest(GradioTestCase):

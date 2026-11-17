@@ -424,21 +424,6 @@ class OCRTraceTest(unittest.TestCase):
         self.assertEqual(len(attempts), 8)
         self.assertTrue(all(a["submission"] == "not_submitted" for a in attempts))
 
-    def test_app_passes_collector_to_real_ocr_orchestration(self):
-        from src.gradio_app import analyze_image
-        module, _, _ = fake_rapidocr([output(" label ", .8)])
-        with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
-            backend = RapidOCRBackend()
-        frame = DetectionFrame("input/chart.png", 60, 40, (SHORT,))
-        diagnostics = collector()
-        with patch("src.gradio_ui.analysis.decode_upload", return_value=(Path("chart.png"), IMAGE)), \
-             patch("src.gradio_ui.analysis.run_detection", return_value=frame):
-            result = analyze_image(object(), "chart.png", .25, .7,
-                                   ocr_backend=backend, diagnostics=diagnostics)
-        trace = diagnostics.record["ocr_trace"]
-        self.assertEqual(result.ocr_frame.regions[0].text, "label")
-        self.assertEqual(trace["attempts"][0]["raw_output"]["text"], " label ")
-        self.assertEqual(trace["results"][0]["application_result"]["text"], "label")
 
     def test_snapshot_handles_non_json_values_without_coercing_strings(self):
         value = {"string": " nan \t", "float": float("inf"), "odd": object(),

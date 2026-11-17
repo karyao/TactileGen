@@ -295,32 +295,3 @@ def test_unavailable_legacy_backend_internals_are_explained(tmp_path):
         report = archive.read('report.md').decode()
         assert 'Internal OCR attempts are unavailable' in report
         assert_links(report, archive.namelist())
-
-
-def test_report_failure_keeps_app_analysis_and_shows_specific_error(tmp_path):
-    import cv2
-    from src.contracts import OCRFrame, RecognizedText
-    from src.gradio_app import build_app
-
-    chart = base_chart()
-    image = tmp_path / 'chart.png'
-    assert cv2.imwrite(str(image), chart.image)
-    frame = chart.frame()
-    ocr = OCRFrame(frame.source_key, tuple(RecognizedText(key, text, confidence)
-                   for key, (text, confidence) in chart.texts.items()))
-    demo = build_app(object(), ocr_backend=object(), device='cpu')
-    binding = next(fn for fn in demo.fns.values() if fn.api_name == 'analyze')
-    index = next(i for i, component in enumerate(binding.outputs)
-                 if getattr(component, 'label', '') == 'Download analysis diagnostics (ZIP)')
-    try:
-        with patch('src.gradio_ui.analysis.run_detection', return_value=frame), \
-             patch('src.gradio_ui.analysis.run_ocr', return_value=ocr), \
-             patch('src.diagnostics_report.DiagnosticReport.render', side_effect=RuntimeError('formatting failed')):
-            updates = binding.fn(str(image), .25, .7, 'eng')
-        assert updates[8] is not None  # Analysis review state survived packaging failure.
-        assert not updates[index]['visible'] and updates[index]['value'] is None
-        assert 'Diagnostic export failed' in updates[index + 1]['value']
-        assert 'report generation' in updates[index + 1]['value']
-        assert 'formatting failed' in updates[index + 1]['value']
-    finally:
-        demo.close(verbose=False)

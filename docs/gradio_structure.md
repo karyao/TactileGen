@@ -80,10 +80,11 @@ dependency with a mock must patch where the dependency is used: for example,
 
 The suites are separated into CLI startup (`test_gradio_app.py`), image analysis,
 review rules, component output ordering, and UI callbacks. Shared chart fixtures
-live in `tests/gradio_helpers.py`.
+live in `tests/gradio/helpers.py`. All Gradio suites, including theme and
+diagnostics integration checks, live under `tests/gradio/`.
 
 ```bash
-python3.12 -m pytest -q tests/test_gradio*.py
+python3.12 -m pytest -q tests/gradio/
 ```
 
 The tests use small generated images and mocked detector results, so they do not

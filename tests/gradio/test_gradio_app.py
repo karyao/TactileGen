@@ -16,7 +16,7 @@ from src.gradio_app import (
     parse_args,
 )
 
-from tests.gradio_helpers import GradioTestCase
+from tests.gradio.helpers import GradioTestCase
 
 
 class GradioCliTest(GradioTestCase):
