@@ -708,7 +708,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             ready_status(),
             empty_message=(
                 "### Your chart workspace\n\n"
-                "Upload a vertical bar chart, then select Analyze chart."
+                "Upload a vertical or horizontal bar chart, then select Analyze chart."
             ),
         )
 
@@ -939,7 +939,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 gr.Markdown(
                     "# TactileGen\n\n"
                     "**Prepare charts for tactile reading.**\n\n"
-                    "Analyze a vertical bar chart, review its labels and values, "
+                    "Analyze a vertical or horizontal bar chart, review its labels and values, "
                     "and generate tactile pages."
                 )
 
@@ -947,7 +947,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 with gr.Column(elem_classes="borealis-control-rail"):
                     gr.Markdown("## Chart input", elem_classes="borealis-section-title")
                     gr.Markdown(
-                        "Supports vertical categorical bar charts.",
+                        "Supports vertical and horizontal categorical bar charts.",
                         elem_classes="borealis-scope",
                     )
                     image_input = gr.Image(
@@ -1021,7 +1021,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                     )
                     empty_output = gr.Markdown(
                         "### Your chart workspace\n\n"
-                        "Upload a vertical bar chart, then select Analyze chart.",
+                        "Upload a vertical or horizontal bar chart, then select Analyze chart.",
                         visible=True,
                         elem_classes="borealis-empty",
                     )
