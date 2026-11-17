@@ -17,7 +17,15 @@ def snapshot(value):
             "diagnostic_type": "nonfinite_float", "value": str(value),
         }
     if isinstance(value, np.generic):
-        return {"diagnostic_type": str(value.dtype), "value": snapshot(value.item())}
+        converted = value.item()
+        # Extended NumPy scalars can return a new scalar of their own type.
+        # Recursing into it would repeat this conversion indefinitely.
+        if type(converted) is type(value):
+            saved = {"diagnostic_type": "unsupported", "python_type":
+                     f"{type(value).__module__}.{type(value).__qualname__}"}
+        else:
+            saved = snapshot(converted)
+        return {"diagnostic_type": str(value.dtype), "value": saved}
     if isinstance(value, np.ndarray):
         return {"diagnostic_type": "ndarray", "dtype": str(value.dtype),
                 "value": snapshot(value.tolist())}

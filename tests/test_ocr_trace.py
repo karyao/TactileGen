@@ -156,13 +156,44 @@ class OCRTraceTest(unittest.TestCase):
                 self.assertEqual(trace["attempts"][0]["output_availability"], "unavailable")
 
     def test_invalid_rapid_confidences_preserve_error_and_raw_value(self):
-        for score in (True, -.1, 1.1, "90", float("nan"), float("inf")):
+        for score in (True, -.1, 1.1, "90", float("nan"), float("inf"),
+                      np.longdouble('-.1'), np.longdouble('1.1'),
+                      np.longdouble('nan'), np.longdouble('inf')):
             with self.subTest(score=score):
                 diagnostics = collector()
                 for current in (None, diagnostics):
                     with self.assertRaisesRegex(RuntimeError, "confidence"):
                         self.rapid(output("text", score), diagnostics=current)
                 self.assertEqual(diagnostics.record["ocr_trace"]["attempts"][0]["raw_output"]["confidence"], snapshot(score))
+                json.dumps(diagnostics.record, allow_nan=False)
+
+    def test_extended_numpy_confidence_preserves_rapid_results_and_exports(self):
+        raw = output(' label ', np.longdouble('.75'))
+        diagnostics = collector()
+        ordinary, plain_engine = self.rapid(raw)
+        traced, engine = self.rapid(raw, diagnostics=diagnostics)
+        self.assertEqual(ordinary, traced)
+        self.assertEqual(traced.regions[0].confidence, .75)
+        self.assertEqual(engine.recognize_txt.call_count, plain_engine.recognize_txt.call_count)
+        self.assertEqual(len(engine.cls_calls), len(plain_engine.cls_calls))
+        for left, right in zip(plain_engine.recognize_txt.call_args.args[0],
+                               engine.recognize_txt.call_args.args[0], strict=True):
+            np.testing.assert_array_equal(left, right)
+        trace = diagnostics.record['ocr_trace']
+        self.assertEqual(trace['attempts'][0]['raw_output']['confidence'], snapshot(raw.scores[0]))
+        json.dumps(diagnostics.record, allow_nan=False)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            diagnostics.finish()
+            path = diagnostics.persist(root)
+            self.assertIsNotNone(path)
+            persisted = json.loads(path.read_text())
+            self.assertEqual(persisted['ocr_trace'], trace)
+            path = diagnostics.export_zip(root)
+            self.assertIsNotNone(path)
+            with ZipFile(path) as archive:
+                self.assertEqual(json.loads(archive.read('ocr_trace.json')), trace)
+                self.assertEqual(json.loads(archive.read('diagnostics.json')), persisted)
 
     def test_tesseract_preserves_odd_confidences_and_unmatched_tokens(self):
         raw = tesseract_data([[("A", "bad"), ("B", "-1")], [(" \t", "50")]])
@@ -339,6 +370,35 @@ class OCRTraceTest(unittest.TestCase):
         json.dumps(saved, allow_nan=False)
         self.assertEqual(saved["string"], value["string"])
         self.assertEqual(saved["odd"]["diagnostic_type"], "unsupported")
+
+    def test_snapshot_extended_numpy_scalars_and_nested_arrays(self):
+        for scalar_type in (np.longdouble, np.clongdouble):
+            for number in ('.75', 'nan', 'inf', '-inf'):
+                value = scalar_type(number)
+                with self.subTest(dtype=str(value.dtype), number=number):
+                    converted = value.item()
+                    if type(converted) is type(value):
+                        inner = {'diagnostic_type': 'unsupported', 'python_type':
+                                 f'{type(value).__module__}.{type(value).__qualname__}'}
+                    else:
+                        inner = snapshot(converted)
+                    expected = {'diagnostic_type': str(value.dtype), 'value': inner}
+                    self.assertEqual(snapshot(value), expected)
+                    array = np.array([value])
+                    saved = snapshot({'nested': [(value,)], 'array': array})
+                    self.assertEqual(saved['nested'], [[expected]])
+                    # Some platforms convert extended array elements to native
+                    # Python scalars even though scalar .item() preserves NumPy.
+                    array_item = array.tolist()[0]
+                    expected_item = expected if type(array_item) is type(value) else snapshot(array_item)
+                    self.assertEqual(saved['array'], {
+                        'diagnostic_type': 'ndarray', 'dtype': str(value.dtype), 'value': [expected_item]})
+                    json.dumps(saved, allow_nan=False)
+
+    def test_snapshot_ordinary_numpy_scalar_formats_are_unchanged(self):
+        self.assertEqual(snapshot(np.float32(.75)), {'diagnostic_type': 'float32', 'value': .75})
+        self.assertEqual(snapshot(np.float64(.75)), .75)
+        self.assertEqual(snapshot(np.int64(3)), {'diagnostic_type': 'int64', 'value': 3})
 
 
 if __name__ == "__main__":
