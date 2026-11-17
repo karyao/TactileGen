@@ -230,7 +230,7 @@ def recognized_run():
     diagnostics = AnalysisDiagnostics(settings={'language': 'eng'})
     frame = DetectionFrame('input/chart.png', 60, 40, (trace_helpers.SHORT, trace_helpers.TALL))
     diagnostics.snapshot('detections', frame)
-    result, _ = trace_helpers.OCRTraceTest().rapid(
+    result, _ = trace_helpers.recognize_with_fake_rapidocr(
         type('Output', (), {'txts': (' Sales ', 'tie', '\t', ''), 'scores': (.8, .8, .5, .2)})(),
         (trace_helpers.SHORT, trace_helpers.TALL), diagnostics=diagnostics)
     diagnostics.snapshot('ocr', result)

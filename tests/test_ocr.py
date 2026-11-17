@@ -635,14 +635,14 @@ class OCRBaselineIntegrationTest(unittest.TestCase):
 
 # Ocr crop
 
-def crop_detection(box, role="x_tick_label", id="text"):
+def text_detection(box, role="x_tick_label", id="text"):
     return Detection(id, role, Box(*box), 0.9)
 
 
 class OCRCropTest(unittest.TestCase):
     def test_non_title_crop_rounds_pads_clamps_and_returns_copy(self):
         image = np.arange(20 * 30 * 3, dtype=np.int32).reshape((20, 30, 3))
-        crop = crop_text_region(image, crop_detection((0.2, 0.4, 8.1, 6.1)))
+        crop = crop_text_region(image, text_detection((0.2, 0.4, 8.1, 6.1)))
 
         self.assertEqual(crop.shape, (9, 11, 3))
         crop[:] = -1
@@ -650,21 +650,21 @@ class OCRCropTest(unittest.TestCase):
 
     def test_title_uses_full_width_strip_and_can_be_disabled(self):
         image = np.zeros((60, 200, 3), dtype=np.uint8)
-        title = crop_detection((80, 10, 100, 26), "chart_title")
+        title = text_detection((80, 10, 100, 26), "chart_title")
 
         self.assertEqual(crop_text_region(image, title).shape, (20, 200, 3))
         with patch("src.ocr_crop._TITLE_FULL_WIDTH_STRIP", False):
             self.assertEqual(crop_text_region(image, title).shape, (20, 24, 3))
 
     def test_title_strip_stops_at_other_text_in_its_band(self):
-        title = crop_detection((80, 10, 100, 26), "chart_title", "title")
+        title = text_detection((80, 10, 100, 26), "chart_title", "title")
         neighbors = (
             title,
-            crop_detection((5, 5, 20, 30), "y_axis_title", "ytitle"),
-            crop_detection((25, 12, 40, 24), "y_tick_label", "ytick"),
-            crop_detection((150, 8, 190, 28), "legend_label", "legend"),
-            crop_detection((30, 100, 60, 120), "x_tick_label", "below"),
-            crop_detection((90, 12, 95, 24), "legend_label", "inside"),
+            text_detection((5, 5, 20, 30), "y_axis_title", "ytitle"),
+            text_detection((25, 12, 40, 24), "y_tick_label", "ytick"),
+            text_detection((150, 8, 190, 28), "legend_label", "legend"),
+            text_detection((30, 100, 60, 120), "x_tick_label", "below"),
+            text_detection((90, 12, 95, 24), "legend_label", "inside"),
         )
 
         self.assertEqual(_title_strip_bounds(title, neighbors, 200), (42, 110))
@@ -698,10 +698,6 @@ def empty_result():
     return {"text": [], "conf": []}
 
 
-def tesseract_detection(box, role="x_tick_label", id="text"):
-    return Detection(id, role, Box(*box), 0.9)
-
-
 class TesseractBackendTest(unittest.TestCase):
     def test_horizontal_crop_rounds_pads_clamps_upscales_and_forwards_options(self):
         module = fake_pytesseract(
@@ -713,7 +709,7 @@ class TesseractBackendTest(unittest.TestCase):
 
         with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
             recognized = backend.recognize(
-                image, tesseract_detection((0.2, 0.4, 8.1, 6.1)), language="eng"
+                image, text_detection((0.2, 0.4, 8.1, 6.1)), language="eng"
             )
 
         self.assertEqual(recognized, OCRBackendResult("Annual Sales", 0.8))
@@ -730,9 +726,9 @@ class TesseractBackendTest(unittest.TestCase):
 
     def test_title_is_read_from_full_width_strip_and_other_roles_are_unchanged(self):
         image = np.zeros((60, 200, 3), dtype=np.uint8)
-        title = tesseract_detection((80, 10, 100, 26), "chart_title")  # narrower than the text
+        title = text_detection((80, 10, 100, 26), "chart_title")  # narrower than the text
         shapes = {}
-        for label, item in (("title", title), ("tick", tesseract_detection((80, 10, 100, 26)))):
+        for label, item in (("title", title), ("tick", text_detection((80, 10, 100, 26)))):
             module = fake_pytesseract(results=(result(), empty_result()))
             with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
                 TesseractBackend().recognize(image, item, language="eng")
@@ -750,14 +746,14 @@ class TesseractBackendTest(unittest.TestCase):
     def test_title_strip_stops_at_other_text_in_its_band(self):
         from src.ocr_crop import _title_strip_bounds
 
-        title = tesseract_detection((80, 10, 100, 26), "chart_title", "title")
+        title = text_detection((80, 10, 100, 26), "chart_title", "title")
         neighbors = (
             title,
-            tesseract_detection((5, 5, 20, 30), "y_axis_title", "ytitle"),
-            tesseract_detection((25, 12, 40, 24), "y_tick_label", "ytick"),
-            tesseract_detection((150, 8, 190, 28), "legend_label", "legend"),
-            tesseract_detection((30, 100, 60, 120), "x_tick_label", "below"),  # other band
-            tesseract_detection((90, 12, 95, 24), "legend_label", "inside"),  # inside title box
+            text_detection((5, 5, 20, 30), "y_axis_title", "ytitle"),
+            text_detection((25, 12, 40, 24), "y_tick_label", "ytick"),
+            text_detection((150, 8, 190, 28), "legend_label", "legend"),
+            text_detection((30, 100, 60, 120), "x_tick_label", "below"),  # other band
+            text_detection((90, 12, 95, 24), "legend_label", "inside"),  # inside title box
         )
         self.assertEqual(_title_strip_bounds(title, neighbors, 200), (42, 110))
         self.assertEqual(_title_strip_bounds(title, (title,), 200), (0, 200))
@@ -765,8 +761,8 @@ class TesseractBackendTest(unittest.TestCase):
     def test_recognize_many_gives_title_its_neighbors(self):
         from src.tesseract_ocr import _recognition_candidates
 
-        title = tesseract_detection((80, 10, 100, 26), "chart_title", "title")
-        tick = tesseract_detection((10, 12, 40, 24), "y_tick_label", "tick")
+        title = text_detection((80, 10, 100, 26), "chart_title", "title")
+        tick = text_detection((10, 12, 40, 24), "y_tick_label", "tick")
         image = np.zeros((60, 200, 3), dtype=np.uint8)
         (strip, _), = [_recognition_candidates(image, title, (title, tick))]
         self.assertEqual(strip.shape, (40, 316))  # x from 42 to 200, doubled
@@ -783,7 +779,7 @@ class TesseractBackendTest(unittest.TestCase):
 
         with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
             recognized = backend.recognize(
-                image, tesseract_detection((10, 2, 14, 18), "y_axis_title"), language="eng"
+                image, text_detection((10, 2, 14, 18), "y_axis_title"), language="eng"
             )
 
         self.assertEqual(recognized, OCRBackendResult("first", 0.75))
@@ -801,7 +797,7 @@ class TesseractBackendTest(unittest.TestCase):
         with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
             recognized = backend.recognize(
                 np.zeros((20, 30), dtype=np.uint8),
-                tesseract_detection((2, 2, 20, 10)),
+                text_detection((2, 2, 20, 10)),
                 language="eng",
             )
         self.assertEqual(recognized, OCRBackendResult("One Two Three", 0.5))
@@ -812,7 +808,7 @@ class TesseractBackendTest(unittest.TestCase):
         with patch("src.tesseract_ocr._load_pytesseract", return_value=empty_confidence):
             recognized = TesseractBackend().recognize(
                 np.zeros((20, 30), dtype=np.uint8),
-                tesseract_detection((2, 2, 20, 10)),
+                text_detection((2, 2, 20, 10)),
                 language="eng",
             )
         self.assertEqual(recognized, OCRBackendResult("Text", 0.0))
@@ -822,7 +818,7 @@ class TesseractBackendTest(unittest.TestCase):
         single_channel = np.zeros((20, 30, 1), dtype=np.uint8)
         with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
             recognized = TesseractBackend().recognize(
-                single_channel, tesseract_detection((2, 2, 20, 10)), language="eng"
+                single_channel, text_detection((2, 2, 20, 10)), language="eng"
             )
         self.assertIsNone(recognized)
 
@@ -833,7 +829,7 @@ class TesseractBackendTest(unittest.TestCase):
         )
         backend = TesseractBackend()
         image = np.zeros((20, 30, 3), dtype=np.uint8)
-        item = tesseract_detection((2, 2, 20, 10))
+        item = text_detection((2, 2, 20, 10))
         with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
             backend.recognize(image, item, language="eng+fra")
             backend.recognize(image, item, language="eng")
@@ -863,7 +859,7 @@ class TesseractBackendTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "not available on PATH"):
                 TesseractBackend().recognize(
                     np.zeros((20, 30), dtype=np.uint8),
-                    tesseract_detection((2, 2, 20, 10)),
+                    text_detection((2, 2, 20, 10)),
                     language="eng",
                 )
 
@@ -872,7 +868,7 @@ class TesseractBackendTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "recognition timed out"):
                 TesseractBackend().recognize(
                     np.zeros((20, 30), dtype=np.uint8),
-                    tesseract_detection((2, 2, 20, 10)),
+                    text_detection((2, 2, 20, 10)),
                     language="eng",
                 )
 
@@ -886,7 +882,7 @@ class TesseractBackendTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "grayscale, BGR, or BGRA"):
                 TesseractBackend().recognize(
                     np.zeros((20, 30, 2), dtype=np.uint8),
-                    tesseract_detection((2, 2, 20, 10)),
+                    text_detection((2, 2, 20, 10)),
                     language="eng",
                 )
 
@@ -924,10 +920,6 @@ class TesseractBackendTest(unittest.TestCase):
 
 
 # Rapidocr ocr
-
-def rapidocr_detection(box, role="x_tick_label", id="text"):
-    return Detection(id, role, Box(*box), 0.9)
-
 
 def output(text="Label", score=0.9):
     return types.SimpleNamespace(txts=(text,), scores=(score,))
@@ -982,7 +974,7 @@ class RapidOCRBackendTest(unittest.TestCase):
         image = np.zeros((20, 30, 3), dtype=np.uint8)
 
         recognized = backend.recognize(
-            image, rapidocr_detection((0.2, 0.4, 8.1, 6.1)), language="eng"
+            image, text_detection((0.2, 0.4, 8.1, 6.1)), language="eng"
         )
 
         self.assertEqual(recognized, OCRBackendResult("Sales", 0.8))
@@ -1005,8 +997,8 @@ class RapidOCRBackendTest(unittest.TestCase):
         with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
             backend = RapidOCRBackend()
         image = np.zeros((60, 200, 3), dtype=np.uint8)
-        title = rapidocr_detection((80, 10, 100, 26), "chart_title")
-        tick = rapidocr_detection((80, 10, 100, 26))
+        title = text_detection((80, 10, 100, 26), "chart_title")
+        tick = text_detection((80, 10, 100, 26))
 
         backend.recognize(image, title, language="eng")
         backend.recognize(image, tick, language="eng")
@@ -1019,8 +1011,8 @@ class RapidOCRBackendTest(unittest.TestCase):
         module, engine, _ = fake_rapidocr([output()])
         with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
             backend = RapidOCRBackend()
-        title = rapidocr_detection((80, 10, 100, 26), "chart_title", "title")
-        tick = rapidocr_detection((10, 12, 40, 24), id="tick")
+        title = text_detection((80, 10, 100, 26), "chart_title", "title")
+        tick = text_detection((10, 12, 40, 24), id="tick")
 
         backend.recognize(
             np.zeros((60, 200, 3), dtype=np.uint8),
@@ -1042,7 +1034,7 @@ class RapidOCRBackendTest(unittest.TestCase):
         original = image.copy()
 
         recognized = backend.recognize(
-            image, rapidocr_detection((10, 2, 14, 18), "y_axis_title"), language="eng"
+            image, text_detection((10, 2, 14, 18), "y_axis_title"), language="eng"
         )
 
         self.assertEqual(recognized, OCRBackendResult("clockwise", 0.95))
@@ -1078,7 +1070,7 @@ class RapidOCRBackendTest(unittest.TestCase):
                     backend = RapidOCRBackend()
 
                 backend.recognize(
-                    image, rapidocr_detection((2, 2, 6, 6)), language="eng"
+                    image, text_detection((2, 2, 6, 6)), language="eng"
                 )
 
                 candidate = engine.calls[0][0]
@@ -1098,7 +1090,7 @@ class RapidOCRBackendTest(unittest.TestCase):
         bgra[:, :, 3] = 255
 
         backend.recognize_many(
-            bgra, (rapidocr_detection((2, 2, 6, 6)),), language="eng"
+            bgra, (text_detection((2, 2, 6, 6)),), language="eng"
         )
 
         candidate = engine.cls_calls[0][0]
@@ -1109,7 +1101,7 @@ class RapidOCRBackendTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "grayscale, BGR, or BGRA"):
             backend.recognize_many(
                 np.zeros((8, 8, 2), dtype=np.uint8),
-                (rapidocr_detection((2, 2, 6, 6)),),
+                (text_detection((2, 2, 6, 6)),),
                 language="eng",
             )
 
@@ -1132,7 +1124,7 @@ class RapidOCRBackendTest(unittest.TestCase):
         with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
             backend = RapidOCRBackend()
         image = np.zeros((20, 30, 3), dtype=np.uint8)
-        item = rapidocr_detection((2, 2, 20, 10))
+        item = text_detection((2, 2, 20, 10))
         self.assertIsNone(backend.recognize(image, item, language="eng"))
 
         bad_cases = (
@@ -1154,7 +1146,7 @@ class RapidOCRBackendTest(unittest.TestCase):
         with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
             backend = RapidOCRBackend()
         items = (
-            rapidocr_detection((1, 1, 10, 7)),
+            text_detection((1, 1, 10, 7)),
             Detection("second", "legend_label", Box(12, 1, 21, 7), 0.9),
         )
         results = backend.recognize_many(
@@ -1168,8 +1160,8 @@ class RapidOCRBackendTest(unittest.TestCase):
         module, engine, _ = fake_rapidocr([output("title"), output("tick")])
         with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
             backend = RapidOCRBackend()
-        title = rapidocr_detection((80, 10, 100, 26), "chart_title", "title")
-        tick = rapidocr_detection((10, 12, 40, 24), id="tick")
+        title = text_detection((80, 10, 100, 26), "chart_title", "title")
+        tick = text_detection((10, 12, 40, 24), id="tick")
 
         backend.recognize_many(
             np.zeros((60, 200, 3), dtype=np.uint8),
@@ -1220,38 +1212,44 @@ def tesseract_data(pages):
     return data
 
 
+def recognize_with_fake_rapidocr(raw, items=(SHORT,), *, diagnostics=None, cls_error=None):
+    """Run OCR with a fake RapidOCR engine and return its result and engine."""
+    module, engine, _ = fake_rapidocr([])
+    engine.recognize_txt = Mock(
+        side_effect=raw if isinstance(raw, Exception) else None,
+        return_value=raw,
+    )
+    if cls_error:
+        engine.cls_and_rotate = Mock(side_effect=cls_error)
+    with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
+        backend = RapidOCRBackend()
+    result = recognize(backend, items, diagnostics)
+    return result, engine
+
+
+def recognize_with_fake_tesseract(raw, items=(SHORT,), *, diagnostics=None):
+    """Run OCR with fake Tesseract and retain the submitted image pages."""
+    module = fake_pytesseract(results=[raw])
+    module.submitted_pages = []
+    if not isinstance(raw, Exception):
+        def response(path, **kwargs):
+            from PIL import Image, ImageSequence
+            with Image.open(path) as image:
+                module.submitted_pages.extend(np.array(page) for page in ImageSequence.Iterator(image))
+            return raw
+        module.image_to_data.side_effect = response
+    with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
+        result = recognize(TesseractBackend(), items, diagnostics)
+    return result, module
+
+
 class OCRTraceTest(unittest.TestCase):
-    def rapid(self, raw, items=(SHORT,), *, diagnostics=None, cls_error=None):
-        module, engine, _ = fake_rapidocr([])
-        engine.recognize_txt = Mock(side_effect=raw if isinstance(raw, Exception) else None,
-                                    return_value=raw)
-        if cls_error:
-            engine.cls_and_rotate = Mock(side_effect=cls_error)
-        with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
-            backend = RapidOCRBackend()
-        result = recognize(backend, items, diagnostics)
-        return result, engine
-
-    def tess(self, raw, items=(SHORT,), *, diagnostics=None):
-        module = fake_pytesseract(results=[raw])
-        module.submitted_pages = []
-        if not isinstance(raw, Exception):
-            def response(path, **kwargs):
-                from PIL import Image, ImageSequence
-                with Image.open(path) as image:
-                    module.submitted_pages.extend(np.array(page) for page in ImageSequence.Iterator(image))
-                return raw
-            module.image_to_data.side_effect = response
-        with patch("src.tesseract_ocr._load_pytesseract", return_value=module):
-            result = recognize(TesseractBackend(), items, diagnostics)
-        return result, module
-
     def test_rapid_exact_strings_all_attempts_and_first_tie(self):
         raw = types.SimpleNamespace(txts=(" \t雪 e\u0301\n", "tie", " \n", ""),
                                     scores=(np.float32(.75), .75, float("nan"), .9))
         diagnostics = collector()
-        ordinary, plain_engine = self.rapid(raw, (TALL, SHORT))
-        traced, engine = self.rapid(raw, (TALL, SHORT), diagnostics=diagnostics)
+        ordinary, plain_engine = recognize_with_fake_rapidocr(raw, (TALL, SHORT))
+        traced, engine = recognize_with_fake_rapidocr(raw, (TALL, SHORT), diagnostics=diagnostics)
         self.assertEqual(ordinary, traced)
         trace = diagnostics.record["ocr_trace"]
         self.assertEqual(trace["batches"][0]["raw_output"]["txts"]["value"], list(raw.txts))
@@ -1280,8 +1278,8 @@ class OCRTraceTest(unittest.TestCase):
         ]
         raw = tesseract_data(pages)
         diagnostics = collector()
-        plain, plain_module = self.tess(raw, (TALL,))
-        traced, module = self.tess(raw, (TALL,), diagnostics=diagnostics)
+        plain, plain_module = recognize_with_fake_tesseract(raw, (TALL,))
+        traced, module = recognize_with_fake_tesseract(raw, (TALL,), diagnostics=diagnostics)
         self.assertEqual(plain, traced)
         trace = diagnostics.record["ocr_trace"]
         self.assertEqual(trace["batches"][0]["raw_output"], raw)
@@ -1306,7 +1304,7 @@ class OCRTraceTest(unittest.TestCase):
         diagnostics = collector()
         for current in (None, diagnostics):
             with self.assertRaisesRegex(RuntimeError, "non-text"):
-                self.rapid(raw, (TALL,), diagnostics=current)
+                recognize_with_fake_rapidocr(raw, (TALL,), diagnostics=current)
         trace = diagnostics.record["ocr_trace"]
         self.assertEqual([a["raw_output"]["text"] for a in trace["attempts"]], ["ok", 123, "last"])
         self.assertEqual([a["processing"] for a in trace["attempts"]],
@@ -1323,7 +1321,7 @@ class OCRTraceTest(unittest.TestCase):
                 diagnostics = collector()
                 for current in (None, diagnostics):
                     with self.assertRaises(RuntimeError):
-                        self.rapid(raw, diagnostics=current)
+                        recognize_with_fake_rapidocr(raw, diagnostics=current)
                 trace = diagnostics.record["ocr_trace"]
                 fields = trace["batches"][0]["raw_output"]
                 self.assertEqual(fields["txts"]["presence"], "present" if hasattr(raw, "txts") else "absent")
@@ -1339,15 +1337,15 @@ class OCRTraceTest(unittest.TestCase):
                 diagnostics = collector()
                 for current in (None, diagnostics):
                     with self.assertRaisesRegex(RuntimeError, "confidence"):
-                        self.rapid(output("text", score), diagnostics=current)
+                        recognize_with_fake_rapidocr(output("text", score), diagnostics=current)
                 self.assertEqual(diagnostics.record["ocr_trace"]["attempts"][0]["raw_output"]["confidence"], snapshot(score))
                 json.dumps(diagnostics.record, allow_nan=False)
 
     def test_extended_numpy_confidence_preserves_rapid_results_and_exports(self):
         raw = output(' label ', np.longdouble('.75'))
         diagnostics = collector()
-        ordinary, plain_engine = self.rapid(raw)
-        traced, engine = self.rapid(raw, diagnostics=diagnostics)
+        ordinary, plain_engine = recognize_with_fake_rapidocr(raw)
+        traced, engine = recognize_with_fake_rapidocr(raw, diagnostics=diagnostics)
         self.assertEqual(ordinary, traced)
         self.assertEqual(traced.regions[0].confidence, .75)
         self.assertEqual(engine.recognize_txt.call_count, plain_engine.recognize_txt.call_count)
@@ -1375,8 +1373,8 @@ class OCRTraceTest(unittest.TestCase):
         raw = tesseract_data([[("A", "bad"), ("B", "-1")], [(" \t", "50")]])
         raw["text"].append("unmatched")
         diagnostics = collector()
-        plain, _ = self.tess(raw)
-        traced, _ = self.tess(raw, diagnostics=diagnostics)
+        plain, _ = recognize_with_fake_tesseract(raw)
+        traced, _ = recognize_with_fake_tesseract(raw, diagnostics=diagnostics)
         self.assertEqual(plain, traced)
         self.assertEqual(traced.regions[0].confidence, 0.0)
         self.assertEqual(diagnostics.record["ocr_trace"]["batches"][0]["raw_output"]["text"][-1], "unmatched")
@@ -1391,7 +1389,7 @@ class OCRTraceTest(unittest.TestCase):
                 errors = []
                 for current in (None, diagnostics):
                     with self.assertRaises(Exception) as caught:
-                        self.tess(raw, diagnostics=current)
+                        recognize_with_fake_tesseract(raw, diagnostics=current)
                     errors.append((type(caught.exception), str(caught.exception)))
                 self.assertEqual(errors[0], errors[1])
                 self.assertEqual(diagnostics.record["ocr_trace"]["batches"][0]["raw_output"], raw)
@@ -1404,10 +1402,12 @@ class OCRTraceTest(unittest.TestCase):
                 error = RuntimeError("engine failed")
                 with self.assertRaises(RuntimeError):
                     if engine == "tess":
-                        self.tess(error, diagnostics=diagnostics)
+                        recognize_with_fake_tesseract(error, diagnostics=diagnostics)
                     else:
-                        self.rapid(error, diagnostics=diagnostics,
-                                   cls_error=error if engine == "classifier" else None)
+                        recognize_with_fake_rapidocr(
+                            error, diagnostics=diagnostics,
+                            cls_error=error if engine == "classifier" else None,
+                        )
                 trace = diagnostics.record["ocr_trace"]
                 self.assertEqual(len(trace["batches"]), 1)
                 self.assertEqual(trace["batches"][0]["outcome"], "failed")
@@ -1424,7 +1424,7 @@ class OCRTraceTest(unittest.TestCase):
         diagnostics = collector()
         with patch("src.rapidocr_ocr._recognition_candidates", side_effect=ValueError("bad image")):
             with self.assertRaisesRegex(ValueError, "bad image"):
-                self.rapid(output(), (SHORT, TALL), diagnostics=diagnostics)
+                recognize_with_fake_rapidocr(output(), (SHORT, TALL), diagnostics=diagnostics)
         trace = diagnostics.record["ocr_trace"]
         self.assertEqual(len(trace["attempts"]), 4)
         self.assertTrue(all(a["submission"] == "not_submitted" for a in trace["attempts"]))
@@ -1549,9 +1549,9 @@ class OCRTraceTest(unittest.TestCase):
 
     def test_ids_are_unique_across_calls_and_runs_and_exports_roundtrip(self):
         first, second = collector(), collector()
-        self.rapid(output("雪", .9), diagnostics=first)
-        self.rapid(output("other", .8), diagnostics=first)
-        self.rapid(output("雪", .9), diagnostics=second)
+        recognize_with_fake_rapidocr(output("雪", .9), diagnostics=first)
+        recognize_with_fake_rapidocr(output("other", .8), diagnostics=first)
+        recognize_with_fake_rapidocr(output("雪", .9), diagnostics=second)
         ids = [a["attempt_id"] for c in (first, second) for a in c.record["ocr_trace"]["attempts"]]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(len(second.record["ocr_trace"]["attempts"]), 1)
@@ -1568,11 +1568,11 @@ class OCRTraceTest(unittest.TestCase):
         for kind in ("rapid", "tess"):
             diagnostics = collector()
             if kind == "rapid":
-                result, engine = self.rapid(output(), (), diagnostics=diagnostics)
+                result, engine = recognize_with_fake_rapidocr(output(), (), diagnostics=diagnostics)
                 engine.recognize_txt.assert_not_called()
                 self.assertEqual(engine.cls_calls, [])
             else:
-                result, module = self.tess({}, (), diagnostics=diagnostics)
+                result, module = recognize_with_fake_tesseract({}, (), diagnostics=diagnostics)
                 module.image_to_data.assert_not_called()
             self.assertEqual(result.regions, ())
             self.assertEqual(diagnostics.record["ocr_trace"]["attempts"], [])
@@ -1583,8 +1583,8 @@ class OCRTraceTest(unittest.TestCase):
                 raw = tesseract_data([[("A", "90")], [("", "-1")]])
                 del raw[missing]
                 diagnostics = collector()
-                plain, _ = self.tess(raw)
-                traced, _ = self.tess(raw, diagnostics=diagnostics)
+                plain, _ = recognize_with_fake_tesseract(raw)
+                traced, _ = recognize_with_fake_tesseract(raw, diagnostics=diagnostics)
                 self.assertEqual(plain, traced)
                 trace = diagnostics.record["ocr_trace"]
                 self.assertNotIn(missing, trace["batches"][0]["raw_output"])
@@ -1595,7 +1595,7 @@ class OCRTraceTest(unittest.TestCase):
         diagnostics = collector()
         with patch("src.tesseract_ocr._recognition_candidates", side_effect=ValueError("bad image")):
             with self.assertRaisesRegex(ValueError, "bad image"):
-                self.tess({}, (SHORT, TALL), diagnostics=diagnostics)
+                recognize_with_fake_tesseract({}, (SHORT, TALL), diagnostics=diagnostics)
         attempts = diagnostics.record["ocr_trace"]["attempts"]
         self.assertEqual(len(attempts), 8)
         self.assertTrue(all(a["submission"] == "not_submitted" for a in attempts))
@@ -1703,7 +1703,7 @@ class OCRImageEvidenceTest(unittest.TestCase):
     def test_tesseract_pngs_equal_actual_multipage_tiff_pixels(self):
         diagnostics = AnalysisDiagnostics(settings={})
         raw = tesseract_data([[('label', '90')]] * 8)
-        _, module = OCRTraceTest().tess(raw, (SHORT, TALL), diagnostics=diagnostics)
+        _, module = recognize_with_fake_tesseract(raw, (SHORT, TALL), diagnostics=diagnostics)
         attempts = diagnostics.record['ocr_trace']['attempts']
         self.assertEqual(len(attempts), 8)
         for attempt, submitted in zip(attempts, module.submitted_pages):
@@ -1715,9 +1715,8 @@ class OCRImageEvidenceTest(unittest.TestCase):
 
     def test_encoding_failure_retains_result_and_explicit_unavailability(self):
         diagnostics = AnalysisDiagnostics(settings={})
-        helper = OCRTraceTest()
         with patch('cv2.imencode', side_effect=RuntimeError('encoder unavailable')):
-            result, _ = helper.rapid(output('label'), diagnostics=diagnostics)
+            result, _ = recognize_with_fake_rapidocr(output('label'), diagnostics=diagnostics)
         self.assertEqual(result.regions[0].text, 'label')
         attempt = diagnostics.record['ocr_trace']['attempts'][0]
         self.assertEqual(attempt['recognition_image']['availability'], 'unavailable')
@@ -1726,27 +1725,27 @@ class OCRImageEvidenceTest(unittest.TestCase):
         self.assertTrue(diagnostics.record['exceptions'])
 
     def test_failures_retain_prepared_images_without_inventing_submission(self):
-        helper = OCRTraceTest()
         diagnostics = AnalysisDiagnostics(settings={})
         with self.assertRaisesRegex(RuntimeError, 'classification failed'):
-            helper.rapid(output(), diagnostics=diagnostics,
-                         cls_error=RuntimeError('classification failed'))
+            recognize_with_fake_rapidocr(
+                output(), diagnostics=diagnostics,
+                cls_error=RuntimeError('classification failed'),
+            )
         attempt = diagnostics.record['ocr_trace']['attempts'][0]
         self.assertEqual(attempt['recognition_image']['availability'], 'unavailable')
         self.assertEqual(attempt['recognition_submission'], 'not_submitted')
         self.assertEqual(len(diagnostics.record['ocr_source_crops']), 1)
         diagnostics = AnalysisDiagnostics(settings={})
         with self.assertRaisesRegex(RuntimeError, 'recognition failed'):
-            helper.rapid(RuntimeError('recognition failed'), diagnostics=diagnostics)
+            recognize_with_fake_rapidocr(RuntimeError('recognition failed'), diagnostics=diagnostics)
         attempt = diagnostics.record['ocr_trace']['attempts'][0]
         self.assertEqual(attempt['recognition_image']['availability'], 'available')
         self.assertEqual(attempt['recognition_submission'], 'submitted')
 
     def test_repeated_calls_and_runs_have_distinct_input_paths(self):
-        helper = OCRTraceTest()
         diagnostics = AnalysisDiagnostics(settings={})
-        helper.rapid(output(), diagnostics=diagnostics)
-        helper.rapid(output(), diagnostics=diagnostics)
+        recognize_with_fake_rapidocr(output(), diagnostics=diagnostics)
+        recognize_with_fake_rapidocr(output(), diagnostics=diagnostics)
         attempts = diagnostics.record['ocr_trace']['attempts']
         paths = [a['recognition_image']['filename'] for a in attempts]
         self.assertEqual(len(set(paths)), 2)

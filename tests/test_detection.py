@@ -360,22 +360,11 @@ class BaselineScoringTest(unittest.TestCase):
 
 # Yolo baseline
 
-class YoloFakeTensor:
-    def __init__(self, values):
-        self.values = values
-
-    def cpu(self):
-        return self
-
-    def tolist(self):
-        return self.values
-
-
 def yolo_fake_result(path, boxes, classes, confidences):
     return SimpleNamespace(
         path=str(path), orig_shape=(100, 100),
-        boxes=SimpleNamespace(xyxy=YoloFakeTensor(boxes), cls=YoloFakeTensor(classes),
-                              conf=YoloFakeTensor(confidences)),
+        boxes=SimpleNamespace(xyxy=FakeTensor(boxes), cls=FakeTensor(classes),
+                              conf=FakeTensor(confidences)),
     )
 
 
