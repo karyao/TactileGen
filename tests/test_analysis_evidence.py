@@ -327,9 +327,9 @@ def test_gradio_download_reset_and_export_failure(tmp_path):
             assert 'Diagnostic export failed' in failed_export[index+1]['value']
             assert failed_export[8] is not None  # Review remains available.
         for name in ('ready_results', 'begin_analysis', 'clear_all'):
-            callback = next(fn.fn for fn in demo.fns.values() if fn.api_name == name)
-            updates = callback()
-            offset = 6 if name in ('begin_analysis', 'clear_all') else 0
+            callback = next(fn for fn in demo.fns.values() if fn.api_name == name)
+            updates = callback.fn()
+            offset = len(callback.outputs) - len(event.outputs)
             assert not updates[index+offset]['visible']
             assert updates[index+offset]['value'] is None
     finally:

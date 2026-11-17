@@ -110,6 +110,34 @@ def test_early_failure_archive_marks_missing_evidence_and_records_traceback(tmp_
         assert 'Traceback' in log and 'invalid chart bytes' in log
 
 
+def test_detection_measurements_survive_json_and_both_reports(tmp_path):
+    from tests.test_detection import ObservedModel, fake_result
+    from src.detection import run_detection
+
+    image = tmp_path / 'chart.png'
+    image.touch()
+    diagnostics = AnalysisDiagnostics(settings={})
+    model = ObservedModel([fake_result(image)])
+    with diagnostics.stage('detection'):
+        frame = run_detection(model, image, imgsz=641, diagnostics=diagnostics)
+        diagnostics.snapshot('detections', frame)
+    diagnostics.finish()
+    with ZipFile(diagnostics.export_zip(tmp_path)) as archive:
+        record = json.loads(archive.read('diagnostics.json'))
+        assert record['settings']['imgsz'] == 641
+        assert record['metadata']['detection'] == {
+            'requested_imgsz': 641, 'effective_imgsz': [672, 672],
+            'tensor_shape': [1, 3, 352, 672], 'unavailable_reasons': {},
+        }
+        for name in ('report.md', 'report.txt', 'analysis.log'):
+            content = archive.read(name).decode()
+            assert 'effective_imgsz' in content and 'tensor_shape' in content
+        # The interchange contract still contains only original-image detections.
+        payload = json.loads(archive.read('detections.json'))
+        assert payload['width'] == 200 and payload['height'] == 100
+        assert 'tensor_shape' not in payload
+
+
 def test_missing_asset_never_creates_a_broken_report_link(tmp_path):
     diagnostics = recognized_run()
     attempt = diagnostics.record['ocr_trace']['attempts'][0]

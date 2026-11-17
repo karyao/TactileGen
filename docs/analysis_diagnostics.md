@@ -6,6 +6,7 @@ Run all commands from the repository root.
 
 - [Start the app](#start-the-app)
 - [Download and read diagnostics](#download-and-read-diagnostics)
+- [Compare YOLO inference sizes](#compare-yolo-inference-sizes)
 - [Understand missing evidence](#understand-missing-evidence)
 - [Archive contents](#archive-contents)
 - [Developer reference](#developer-reference)
@@ -56,6 +57,56 @@ If the app is already running, continue to [Download and read diagnostics](#down
 Reports explain recorded decisions; they do not verify recognition accuracy or
 ground-truth text. Real OCR results may differ with the chart and engine version.
 The app does not highlight issue regions interactively.
+
+## Compare YOLO inference sizes
+
+The default requested size is **640 pixels**. To start with a different value:
+
+```sh
+python3.12 -m src.gradio_app --imgsz 960
+```
+
+Change **YOLO inference size (pixels)** under **Advanced settings** before an
+analysis to override that value for the next run. Clear restores the startup
+value. Enter a positive integer; sizes need not be multiples of the model stride.
+
+In `diagnostics.json`, `settings.imgsz` is the requested size.
+`metadata.detection` distinguishes three measurements:
+
+| Field | Meaning |
+| --- | --- |
+| `requested_imgsz` | The scalar size submitted to YOLO |
+| `effective_imgsz` | YOLO's checked target `[height, width]`, after size adjustment |
+| `tensor_shape` | Observed inference input `[batch, channels, height, width]`, excluding warmup |
+| `unavailable_reasons` | Reasons for measurements that remain null |
+
+For example, requesting 641 with a stride-32 model can produce an effective
+size of `[672, 672]`, while rectangular padding produces an actual tensor of
+`[1, 3, 512, 672]` for a 320-by-240 chart. These dimensions describe model input;
+detection boxes, OCR crops, and overlays still use original-image coordinates.
+Read the same fields in the settings/metadata sections of `report.md` or
+`report.txt`, or the detection measurement line in `analysis.log`.
+
+Measurements remain null if the relevant stage has not executed or a custom model
+does not expose observation hooks. Failed runs retain whatever was observed
+before failure; original-image dimensions are never substituted for tensor shape.
+
+To compare sizes manually:
+
+1. Keep the chart image, checkpoint, device, confidence, NMS IoU, OCR engine, and
+   OCR language fixed. Use the same running app and avoid other inference work.
+2. Test **640, 960, and 1280**. At each size, run one analysis to warm up, then
+   collect three more analyses. Download each diagnostics ZIP before starting the
+   next analysis, and label the extracted folders with size and repetition.
+3. Compare the median `stages.detection.duration_seconds` at each size. Compare
+   `duration_seconds` separately for total analysis time. Detection-stage timing
+   includes wrapper and evidence work; it is not pure model-forward latency.
+4. Inspect the annotated detections and OCR results for known small labels on the
+   same charts. Record missed labels, incorrect detections, and recognition errors;
+   a larger detection count alone does not establish better accuracy.
+
+This procedure enables exploratory comparisons; it does not add an automated
+benchmark or establish accuracy without reference annotations.
 
 ## Understand missing evidence
 

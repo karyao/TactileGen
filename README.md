@@ -77,6 +77,15 @@ detection and Tesseract OCR. Without Tesseract (for example on Windows), add
 fine-tuned on vertical and horizontal bars, and handle both. Gradio remains
 optional for users who only need the command-line detector.
 
+YOLO inference explicitly requests **640 pixels** by default. Set the initial
+size with `python3.12 -m src.gradio_app --imgsz 960`, or change **YOLO inference
+size (pixels)** under **Advanced settings** before each analysis. Clear restores
+the startup size. Sizes must be positive integers; YOLO may round them up to its
+model stride. Larger sizes may help detect small chart elements and increase
+runtime. Diagnostic downloads record the requested size, checked size, and actual
+input tensor shape. See [comparing inference sizes](docs/analysis_diagnostics.md#compare-yolo-inference-sizes)
+for a repeatable manual check.
+
 Every Analyze chart event writes a temporary diagnostic JSON record, including
 rejected uploads and failed analyses. Terminal summaries include a unique run
 ID, stage outcomes, OCR totals, warning codes, and the record path:

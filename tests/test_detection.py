@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from src.contracts import CLASS_NAMES
 from src.detection import run_detection
+from src.diagnostics import AnalysisDiagnostics
 
 
 class FakeTensor:
@@ -47,6 +48,48 @@ class FakeModel:
         return self.results
 
 
+class ObservedModel(FakeModel):
+    """Exercise the actual callback/hook lifecycle without Torch or Ultralytics."""
+
+    def __init__(self, results):
+        super().__init__(results)
+        self.callbacks = {"on_predict_start": [lambda predictor: None]}
+        self.hooks = []
+        self.fail = False
+        self.warmed = False
+        self.predictor = None
+
+    def register_hook(self, hook):
+        self.hooks.append(hook)
+        return SimpleNamespace(remove=lambda: self.hooks.remove(hook))
+
+    def forward(self, shape):
+        for hook in self.hooks:
+            hook(self, (SimpleNamespace(shape=shape),))
+
+    def predict(self, **kwargs):
+        self.calls.append(kwargs)
+        size = math.ceil(kwargs["imgsz"] / 32) * 32
+        if self.predictor is None:
+            self.predictor = SimpleNamespace(
+                callbacks=self.callbacks, model=SimpleNamespace(
+                    register_forward_pre_hook=self.register_hook), done_warmup=False,
+            )
+        self.predictor.imgsz = [size, size]
+        for callback in self.callbacks["on_predict_start"]:
+            callback(self.predictor)
+        if not self.warmed:
+            self.forward((1, 3, size, size))
+            self.warmed = True
+            self.predictor.done_warmup = True
+        if self.fail == "before_forward":
+            raise RuntimeError("before forward")
+        self.forward((1, 3, math.ceil(size / 64) * 32, size))
+        if self.fail:
+            raise RuntimeError("after forward")
+        return self.results
+
+
 class DetectionTest(unittest.TestCase):
     def test_module_import_does_not_require_model_or_frontend_packages(self):
         script = """
@@ -75,10 +118,102 @@ import src.detection
 
             self.assertEqual(model.calls, [{
                 "source": str(image), "conf": 0.4, "iou": 0.6,
-                "device": "cpu", "verbose": False,
+                "device": "cpu", "verbose": False, "imgsz": 640,
             }])
             self.assertEqual(frame.source_key, "input/chart.png")
             self.assertEqual(frame.detections[0].role, "vertical_bar")
+
+    def test_custom_sizes_and_invalid_sizes_before_prediction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / "chart.png"
+            image.touch()
+            for size in (1, 641, 1280):
+                model = FakeModel([fake_result(image)])
+                run_detection(model, image, imgsz=size)
+                self.assertEqual(model.calls[0]["imgsz"], size)
+            for size in (True, False, "640", 640.0, 640.5, 0, -1, None, math.nan, math.inf):
+                with self.subTest(size=size):
+                    model = FakeModel([fake_result(image)])
+                    with self.assertRaisesRegex(ValueError, "imgsz"):
+                        run_detection(model, image, imgsz=size)
+                    self.assertEqual(model.calls, [])
+
+    def test_measures_rectangular_tensor_and_cleans_up_between_runs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / "chart.png"
+            image.touch()
+            model = ObservedModel([fake_result(image)])
+            callbacks = list(model.callbacks["on_predict_start"])
+            original_hooks = [lambda backend, inputs: None]
+            model.hooks.extend(original_hooks)
+            records = []
+            for requested, effective, height in ((640, 640, 320), (641, 672, 352), (1280, 1280, 640)):
+                diagnostics = AnalysisDiagnostics(settings={})
+                run_detection(model, image, imgsz=requested, diagnostics=diagnostics)
+                evidence = diagnostics.record["metadata"]["detection"]
+                records.append(evidence)
+                self.assertEqual(evidence["requested_imgsz"], requested)
+                self.assertEqual(evidence["effective_imgsz"], [effective, effective])
+                self.assertEqual(evidence["tensor_shape"], [1, 3, height, effective])
+                self.assertEqual(evidence["unavailable_reasons"], {})
+                self.assertEqual(diagnostics.record["settings"]["imgsz"], requested)
+                self.assertIn("tensor_shape=", diagnostics._log_entries[-1])
+                self.assertEqual(model.callbacks["on_predict_start"], callbacks)
+                self.assertEqual(model.hooks, original_hooks)
+            self.assertEqual(records[0]["tensor_shape"], [1, 3, 320, 640])
+
+    def test_failure_keeps_observed_evidence_but_never_records_warmup_shape(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / "chart.png"
+            image.touch()
+            for failure in ("before_forward", "after_forward"):
+                with self.subTest(failure=failure):
+                    model = ObservedModel([fake_result(image)])
+                    model.fail = failure
+                    diagnostics = AnalysisDiagnostics(settings={})
+                    with self.assertRaises(RuntimeError):
+                        run_detection(model, image, diagnostics=diagnostics)
+                    evidence = diagnostics.record["metadata"]["detection"]
+                    self.assertEqual(evidence["effective_imgsz"], [640, 640])
+                    self.assertEqual(evidence["tensor_shape"],
+                                     None if failure == "before_forward" else [1, 3, 320, 640])
+                    self.assertEqual(len(model.callbacks["on_predict_start"]), 1)
+                    self.assertEqual(model.hooks, [])
+                    model.fail = False
+                    recovered = AnalysisDiagnostics(settings={})
+                    run_detection(model, image, imgsz=1280, diagnostics=recovered)
+                    self.assertEqual(recovered.record["metadata"]["detection"]["tensor_shape"],
+                                     [1, 3, 640, 1280])
+                    self.assertEqual(model.hooks, [])
+
+    def test_unavailable_backend_hook_keeps_effective_size_and_detection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / "chart.png"
+            image.touch()
+            model = ObservedModel([fake_result(image)])
+
+            def unsupported(hook):
+                raise RuntimeError("hooks unsupported")
+
+            model.register_hook = unsupported
+            diagnostics = AnalysisDiagnostics(settings={})
+            run_detection(model, image, diagnostics=diagnostics)
+            evidence = diagnostics.record["metadata"]["detection"]
+            self.assertEqual(evidence["effective_imgsz"], [640, 640])
+            self.assertIsNone(evidence["tensor_shape"])
+            self.assertIn("hooks unsupported", evidence["unavailable_reasons"]["tensor_shape"])
+            self.assertEqual(len(model.callbacks["on_predict_start"]), 1)
+
+    def test_custom_model_without_observation_support_still_detects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / "chart.png"
+            image.touch()
+            diagnostics = AnalysisDiagnostics(settings={})
+            run_detection(FakeModel([fake_result(image)]), image, diagnostics=diagnostics)
+            evidence = diagnostics.record["metadata"]["detection"]
+            self.assertIsNone(evidence["effective_imgsz"])
+            self.assertIsNone(evidence["tensor_shape"])
+            self.assertIn("callbacks", evidence["unavailable_reasons"]["tensor_shape"])
 
     def test_thresholds_are_validated_independently_before_inference(self):
         with tempfile.TemporaryDirectory() as temporary:
