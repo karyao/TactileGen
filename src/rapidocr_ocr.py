@@ -88,6 +88,15 @@ def _result(output) -> OCRBackendResult | None:
 class RapidOCRBackend:
     """Recognize text in authoritative YOLO boxes with PP-OCRv6-small ONNX."""
 
+    def diagnostic_metadata(self, *, language: str) -> dict:
+        """Describe the configured multilingual recognizer without inference."""
+        return {
+            "language_behavior": "multilingual model; requested language is not applied",
+            "effective_language": "multilingual",
+            "model": "PP-OCRv6-small", "runtime": "onnxruntime",
+            "text_score": 0.0, "intra_op_num_threads": 1, "inter_op_num_threads": 1,
+        }
+
     def __init__(self) -> None:
         rapidocr = _load_rapidocr()
         try:

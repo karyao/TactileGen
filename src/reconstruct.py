@@ -14,6 +14,8 @@ from collections.abc import Iterable, Mapping
 
 import numpy as np
 
+from src.diagnostics import AnalysisDiagnostics
+
 from src.contracts import (
     ChartInterpretationError,
     Detection,
@@ -126,14 +128,18 @@ def _inside(point: tuple[float, float], box: Detection, margin_x=0.0, margin_y=0
 
 # --- y calibration -------------------------------------------------------------
 
+def _normalized_tick_text(text: str) -> str:
+    return (text.strip().replace("−", "-").replace("–", "-")
+            .replace(",", "").replace(" ", "").lstrip("$"))
+
+
 def parse_tick_value(text: str) -> tuple[float, str | None] | None:
     """Parse an axis label to ``(value, unit)``; ``None`` if it is not a number.
 
     K/M/B suffixes are expanded into the value (``1.5M`` -> 1500000.0); only
     ``%`` is kept as a unit.
     """
-    cleaned = (text.strip().replace("−", "-").replace("–", "-")
-               .replace(",", "").replace(" ", "").lstrip("$"))
+    cleaned = _normalized_tick_text(text)
     unit = None
     if cleaned.endswith("%"):
         unit, cleaned = "%", cleaned[:-1]
@@ -147,7 +153,7 @@ def parse_tick_value(text: str) -> tuple[float, str | None] | None:
     return (value, unit) if math.isfinite(value) else None
 
 
-def _calibrate(ticks: list[tuple[float, float]]):
+def _calibrate(ticks: list[tuple[float, float]], *, diagnostics: AnalysisDiagnostics | None = None):
     """Fit ``value = a * y + b`` robustly.
 
     Every pair of ticks proposes a line; the line with the most ticks within a
@@ -169,13 +175,20 @@ def _calibrate(ticks: list[tuple[float, float]]):
         inliers = frozenset(k for k, r in enumerate(residuals) if r <= tolerance)
         score = (len(inliers), -sum(residuals[k] ** 2 for k in inliers))
         if best is None or score > best[0]:
-            best, tied_sets = (score, inliers), {inliers}
+            best, tied_sets = (score, inliers, a, b, residuals), {inliers}
         elif score[0] == best[0][0]:
             tied_sets.add(inliers)
     if best is None or len(best[1]) < 2:
         raise ChartInterpretationError("y-axis calibration needs at least 2 consistent ticks")
     inliers = sorted(best[1])
     a, b = np.polyfit([ticks[k][0] for k in inliers], [ticks[k][1] for k in inliers], 1)
+    if diagnostics is not None:
+        diagnostics.event("reconstruction", "y_calibration", a=float(a), b=float(b),
+            formula="value = a * y + b", tolerance_pixels=tolerance,
+            inlier_indexes=inliers, ambiguous=len(tied_sets) > 1,
+            selection_a=best[2], selection_b=best[3],
+            selection_residuals_pixels=best[4],
+            residuals_pixels=[float(abs(v - (a * y + b)) / abs(a)) for y, v in ticks])
     return float(a), float(b), inliers, len(tied_sets) > 1
 
 
@@ -390,7 +403,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      min_confidence: float = MIN_CONFIDENCE,
                      rescue_bars: bool = True,
                      category_guard: bool = True, *,
-                     legend_mapping: LegendMappingFrame | None = None
+                     legend_mapping: LegendMappingFrame | None = None,
+                     diagnostics: AnalysisDiagnostics | None = None
                      ) -> VerticalBarSpec:
     """Turn detections plus OCR into a ``VerticalBarSpec``.
 
@@ -403,18 +417,29 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     reported through ``flags``.
     """
     texts = _text_table(ocr_texts)
+
+    def trace(code, **evidence):
+        if diagnostics is not None:
+            diagnostics.event("reconstruction", code, **evidence)
+
     if legend_mapping is None:
         legend_ocr = (
             ocr_texts
             if isinstance(ocr_texts, OCRFrame)
             else _legend_ocr_frame(frame, texts)
         )
-        legend_mapping = match_legend_to_bars(image, frame, legend_ocr)
+        legend_mapping = match_legend_to_bars(image, frame, legend_ocr,
+            **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     assignment_by_bar = {
         bar.id: assignment
         for bar, assignment in join_legend_assignments(frame, legend_mapping)
     }
     roles = _group_roles(frame, min_confidence)
+    trace("detection_filter", min_confidence=min_confidence, duplicate_iou=DUPLICATE_IOU,
+          retained_ids=[d.id for items in roles.values() for d in items],
+          excluded=[{"id": d.id, "reason": "below_confidence" if d.confidence < min_confidence
+                     else "duplicate"} for d in frame.detections
+                    if d not in roles.get(d.role, [])])
     flags: list[str] = []
     confidence: dict[str, float] = {}
 
@@ -426,6 +451,9 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     # Bars must sit inside the plot; labels sit outside it, so they are only
     # kept if they line up with the plot along the axis they annotate.
     bars = [d for d in roles.get("vertical_bar", []) if plot is None or _inside(_centre(d), plot)]
+    trace("plot_selection", plot_id=plot.id if plot else None,
+          retained_bar_ids=[d.id for d in bars],
+          excluded_bar_ids=[d.id for d in roles.get("vertical_bar", []) if d not in bars])
     if not bars:
         raise ChartInterpretationError("no vertical bars detected inside the plot area")
     bars.sort(key=lambda d: _centre(d)[0])
@@ -439,6 +467,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     x_labels = sorted((d for d in roles.get("x_tick_label", [])
                        if plot is None or plot.box.x1 - mx <= _centre(d)[0] <= plot.box.x2 + mx),
                       key=lambda d: _centre(d)[0])
+    trace("tick_selection", x_label_ids=[d.id for d in x_labels],
+          y_label_ids=[d.id for d in y_labels], margin_x=mx, margin_y=my)
     if not x_labels:
         raise ChartInterpretationError("no x tick labels detected")
 
@@ -446,13 +476,30 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     parsed = []
     for detection in y_labels:
         value = parse_tick_value(texts.get(detection.id, ("", 0.0))[0])
+        trace("y_tick_parse", detection_id=detection.id,
+              raw_text=next((r.text for r in ocr_texts.regions if r.detection_id == detection.id), "")
+                       if isinstance(ocr_texts, OCRFrame) else texts.get(detection.id, ("", 0))[0],
+              normalized_text=_normalized_tick_text(texts.get(detection.id, ("", 0))[0]),
+              ocr_confidence=texts.get(detection.id, ("", 0))[1],
+              y=_centre(detection)[1], parsed_value=value[0] if value else None,
+              reason="numeric_candidate" if value else "unparseable")
         if value is not None:
             parsed.append((detection, *value))
     if len(parsed) < 2:
         raise ChartInterpretationError("fewer than 2 readable y tick labels")
-    a, b, inliers, ambiguous = _calibrate([(_centre(d)[1], v) for d, v, _ in parsed])
+    a, b, inliers, ambiguous = _calibrate(
+        [(_centre(d)[1], v) for d, v, _ in parsed], diagnostics=diagnostics)
+    trace("y_tick_decisions", ticks=[{
+        "detection_id": d.id, "value": v, "y": _centre(d)[1],
+        "reason": "retained" if k in inliers else "numeric_outlier"}
+        for k, (d, v, _) in enumerate(parsed)])
     good = [parsed[k] for k in inliers]
     dropped = len(y_labels) - len(good)
+    if dropped:
+        parsed_ids = {d.id for d, _, _ in parsed}
+        trace("y_ticks_dropped", count=dropped,
+              unparseable_ids=[d.id for d in y_labels if d.id not in parsed_ids],
+              numeric_outlier_ids=[d.id for k, (d, _, _) in enumerate(parsed) if k not in inliers])
     if dropped:
         flags.append(f"y_ticks_dropped:{dropped}")
     if ambiguous:
@@ -460,6 +507,9 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     if any(_LEADING_ZERO.match(texts[d.id][0].strip()) for d, _, _ in good):
         flags.append("y_tick_leading_zero")
     tick_values = [v for _, v, _ in sorted(good, key=lambda t: t[1])]
+    trace("y_ticks_not_arithmetic" if not _is_arithmetic(tick_values) else "y_tick_spacing",
+          tick_values=tick_values, differences=[v - u for u, v in zip(tick_values, tick_values[1:])],
+          relative_tolerance=ARITHMETIC_TOLERANCE, absolute_tolerance=1e-12)
     if not _is_arithmetic(tick_values):
         flags.append("y_ticks_not_arithmetic")
     units = {u for _, _, u in good if u}
@@ -473,6 +523,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     tick_ys = [_centre(d)[1] for d, _, _ in good]
     lo, hi = (plot.box.y1 - my, plot.box.y2 + my) if plot else (min(tick_ys), max(tick_ys))
     baseline_inside = lo <= baseline <= hi
+    trace("baseline_outside_plot" if not baseline_inside else "baseline",
+          zero_y=baseline, accepted_bounds=[lo, hi], a=a, b=b, margin_y=my)
     if not baseline_inside:
         flags.append("baseline_outside_plot")
     values = []
@@ -489,6 +541,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         values.append(a * free + b)
         free_ends.append(free)
         offsets.append(abs(anchor - baseline))
+        trace("bar_value", bar_id=bar.id, free_end_y=free, anchor_y=anchor,
+              anchor_offset=offsets[-1], value=values[-1])
     if baseline_inside and plot and statistics.median(offsets) > 0.03 * (plot.box.y2 - plot.box.y1):
         flags.append("bar_baseline_offset")
     if plot is not None:
@@ -596,6 +650,17 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         (matched_groups and unresolved) or conflicting_swatches
     )
     can_rescue = rescue_bars and baseline_inside and grouping_is_settled
+    trace("series_ambiguous" if ambiguous_series else "series_grouping",
+          unresolved_bar_ids=[bars[k].id for k in unresolved],
+          conflicting_swatches=sorted(conflicting_swatches),
+          unreadable_color_bar_ids=[bars[k].id for k, color in enumerate(bar_colors) if color is None],
+          has_detected_swatches=has_detected_swatches,
+          clusters=[{"bar_ids": [bars[k].id for k in members], "name": name,
+                     "identity": identity, "color": centre}
+                    for members, name, identity, centre in zip(
+                        clusters, cluster_names, cluster_identities, cluster_centre)],
+          rescue_enabled=can_rescue, rescue_requested=rescue_bars,
+          baseline_inside=baseline_inside, grouping_is_settled=grouping_is_settled)
     series = []
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
@@ -606,7 +671,14 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         for k in members:
             slot = bar_label[k]
             gap = abs(label_x[slot] - _centre(bars[k])[0])
+            trace("category_assignment", series_index=c, bar_id=bars[k].id,
+                  category_index=slot, label_id=x_labels[slot].id,
+                  label=categories[slot], label_x=label_x[slot], bar_x=_centre(bars[k])[0], gap=gap)
             if slot in best_gap:
+                trace("category_ambiguous", series_index=c, category_index=slot,
+                      competing_bar_ids=[bars[kept[slot]].id, bars[k].id],
+                      gaps=[best_gap[slot], gap],
+                      selected_bar_id=bars[kept[slot] if gap >= best_gap[slot] else k].id)
                 category_ambiguous = True
                 if gap >= best_gap[slot]:
                     continue
@@ -628,9 +700,16 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                 row[j] = _rescue_value(rgb, label_x[j] + offset, bar_width, baseline, a, centre)
                 rescued[j] = True
                 value_conf[j] = RESCUE_CONFIDENCE
+                trace("pixel_rescue", series_index=c, category_index=j,
+                      center_x=label_x[j] + offset, width=bar_width, baseline=baseline,
+                      value=row[j], inferred_zero=row[j] == 0.0)
                 n_rescued += 1
                 rescued_zero += row[j] == 0.0
         rescued_total += n_rescued
+        trace("category_count_mismatch" if len(members) + n_rescued != len(categories)
+              else "category_counts", series_index=c, detected_bars=len(members),
+              rescued_bars=n_rescued, category_count=len(categories),
+              missing_slots=[j for j, v in enumerate(row) if v is None])
         if len(members) + n_rescued != len(categories):
             count_mismatch = True
         name = cluster_names[c]

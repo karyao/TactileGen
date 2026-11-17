@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from src.diagnostics import AnalysisDiagnostics
+
 from src.contracts import (
     Detection,
     DetectionFrame,
@@ -425,10 +427,17 @@ def match_legend_to_bars(
     *,
     max_error: float = 0.03,
     min_margin: float = 0.01,
+    diagnostics: AnalysisDiagnostics | None = None,
 ) -> LegendMappingFrame:
     """Return one deterministic, in-memory legend assignment per vertical bar."""
-    return _classify_legend_scores(
-        _score_legend_to_bars(image, detections, ocr),
-        max_error=max_error,
-        min_margin=min_margin,
-    )
+    scores = _score_legend_to_bars(image, detections, ocr)
+    result = _classify_legend_scores(scores, max_error=max_error, min_margin=min_margin)
+    if diagnostics is not None:
+        for scored, assignment in zip(scores.bars, result.assignments, strict=True):
+            diagnostics.event("legend_matching", "legend_assignment",
+                bar_id=scored.bar_id, best_error=scored.best_error,
+                runner_up_error=scored.runner_up_error, max_error=max_error,
+                min_margin=min_margin, status=assignment.status,
+                swatch_id=scored.candidate.swatch.id if scored.candidate else None,
+                label_id=scored.candidate.label.id if scored.candidate else None)
+    return result

@@ -74,6 +74,37 @@ With the Tesseract executable installed, this starts the frontend with YOLO
 detection and Tesseract OCR. Gradio remains optional for users who only need
 the command-line detector.
 
+Every Analyze chart event writes a temporary diagnostic JSON record, including
+rejected uploads and failed analyses. Terminal summaries include a unique run
+ID, stage outcomes, OCR totals, warning codes, and the record path:
+
+```text
+INFO [run <UUID>] analysis outcome=succeeded duration=0.123s record=/.../diagnostics/<UUID>.json
+```
+
+Records contain settings, available model/backend and package metadata, stage
+timings, completeness status, and exception tracebacks. OCR totals distinguish
+readable and empty results; unavailable counts remain null after OCR failure.
+Partial results use `completed_with_warnings`, while fatal analysis errors use
+`failed`. Files remain available until the app exits.
+
+In **Analysis details**, select **Download analysis diagnostics (ZIP)** to save
+`report.txt`, `diagnostics.json`, completed stage outputs, the decoded input,
+annotated detections, and OCR source crops. The run ID matches the terminal logs.
+The download is available for blocked and failed analyses too, with the evidence
+collected before failure. Starting another analysis or clearing the form resets
+the displayed download.
+
+To investigate a warning, search its code in `report.txt` or the structured events
+in `diagnostics.json`. Tick events include raw OCR text, parsed values, retained
+and rejected IDs, calibration coefficients and pixel residuals. Unparseable
+labels are distinguished from numeric outliers. Baseline events record the
+calculated zero position and accepted bounds; category and series events record
+conflicting assignments, counts, legend scores, and rescue outcomes. Follow a
+detection ID to `detections.json`, `ocr.json`, and its `source_crop` event to find
+the matching image in `ocr_crops/`. Crops show the shared OCR source selection
+before backend preprocessing; evidence does not establish ground-truth text.
+
 ## Read detected text with Tesseract
 
 The standalone OCR command uses the text labels and boxes in YOLO's detection

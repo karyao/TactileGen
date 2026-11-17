@@ -120,6 +120,15 @@ class TesseractBackend:
         self.timeout_seconds = float(timeout_seconds)
         self._installed_languages: frozenset[str] | None = None
 
+    def diagnostic_metadata(self, *, language: str) -> dict:
+        """Describe configuration without probing or starting Tesseract."""
+        return {
+            "language_behavior": "requested language expression forwarded to Tesseract",
+            "effective_language": language,
+            "config": _TESSERACT_CONFIG,
+            "timeout_seconds": self.timeout_seconds,
+        }
+
     def _languages(self, pytesseract) -> frozenset[str]:
         if self._installed_languages is None:
             try:
