@@ -68,7 +68,10 @@ python3.12 -m src.gradio_app --imgsz 960
 
 Change **YOLO inference size (pixels)** under **Advanced settings** before an
 analysis to override that value for the next run. Clear restores the startup
-value. Enter a positive integer; sizes need not be multiples of the model stride.
+value. Quick-select buttons offer **640**, **960**, and **1280** pixels. Custom
+values must be integers from **1 to 1280**, enforced by the shared inference
+validator, CLI, and UI. The maximum bounds per-request work; it does not guarantee
+performance on every device. Sizes need not be multiples of the model stride.
 
 In `diagnostics.json`, `settings.imgsz` is the requested size.
 `metadata.detection` distinguishes three measurements:

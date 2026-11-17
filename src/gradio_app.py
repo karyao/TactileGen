@@ -27,7 +27,7 @@ from src.contracts import (
     VerticalBarSpec,
 )
 from src.detection import (
-    DEFAULT_CONFIDENCE, DEFAULT_IMGSZ, DEFAULT_NMS_IOU,
+    DEFAULT_CONFIDENCE, DEFAULT_IMGSZ, DEFAULT_NMS_IOU, MAX_IMGSZ,
     load_model, run_detection, validate_imgsz,
 )
 from src.diagnostics import AnalysisDiagnostics, configure_analysis_logging
@@ -384,7 +384,9 @@ def _imgsz(value: str) -> int:
     try:
         return validate_imgsz(int(value))
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("imgsz must be a positive integer") from exc
+        raise argparse.ArgumentTypeError(
+            f"imgsz must be a positive integer between 1 and {MAX_IMGSZ}"
+        ) from exc
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -392,7 +394,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--device", help="Ultralytics device, e.g. cpu or mps")
     parser.add_argument("--imgsz", type=_imgsz, default=DEFAULT_IMGSZ,
-                        help="Initial YOLO inference size in pixels (default: 640)")
+                        help=f"Initial YOLO inference size in pixels (1–{MAX_IMGSZ}; default: {DEFAULT_IMGSZ})")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=_port, default=DEFAULT_PORT)
     parser.add_argument("--ocr", choices=("tesseract", "rapidocr"), default="tesseract",
@@ -952,6 +954,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None,
             gr.update(value=initial_imgsz, interactive=True),
             gr.update(interactive=True),
             gr.update(interactive=True),
+            *(gr.update(interactive=True) for _ in size_presets),
             *ready_results(),
         )
 
@@ -1016,12 +1019,24 @@ def build_app(model, *, ocr_backend=None, device: str | None = None,
                             value=initial_imgsz,
                             precision=None,
                             minimum=1,
+                            maximum=MAX_IMGSZ,
                             step=1,
                             label="YOLO inference size (pixels)",
-                            info=("Larger sizes may improve small-element detection and increase runtime. "
+                            info=(f"Maximum {MAX_IMGSZ} pixels. Larger sizes may improve small-element detection and increase runtime. "
                                   "YOLO may adjust this size to its model stride."),
                             elem_classes="borealis-setting",
                         )
+                        with gr.Row():
+                            size_presets = [
+                                gr.Button(label, size="sm", variant="secondary")
+                                for label in ("640 (default)", "960", "1280 (maximum)")
+                            ]
+                        for button, size in zip(size_presets, (640, 960, MAX_IMGSZ)):
+                            button.click(
+                                lambda value=size: value,
+                                inputs=[], outputs=inference_size,
+                                queue=False, api_visibility="private",
+                            )
                         nms_iou = gr.Slider(
                             0.10,
                             0.95,
@@ -1234,7 +1249,8 @@ def build_app(model, *, ocr_backend=None, device: str | None = None,
 
 
         controls = [
-            image_input, confidence, nms_iou, language, inference_size, analyze_button, clear_button
+            image_input, confidence, nms_iou, language, inference_size, analyze_button, clear_button,
+            *size_presets,
         ]
         result_components = [
             status_output,

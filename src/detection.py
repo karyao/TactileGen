@@ -13,12 +13,16 @@ from src.contracts import CLASS_NAMES, Box, Detection, DetectionFrame
 DEFAULT_CONFIDENCE = 0.25
 DEFAULT_NMS_IOU = 0.70
 DEFAULT_IMGSZ = 640
+# Bound per-request inference work; this is an application limit, not a YOLO limit.
+MAX_IMGSZ = 1280
 
 
 def validate_imgsz(imgsz: int) -> int:
     """Validate the requested scalar size; YOLO handles stride adjustment."""
     if isinstance(imgsz, bool) or not isinstance(imgsz, int) or imgsz <= 0:
         raise ValueError("imgsz must be a positive integer")
+    if imgsz > MAX_IMGSZ:
+        raise ValueError(f"imgsz must be at most {MAX_IMGSZ} pixels")
     return imgsz
 
 

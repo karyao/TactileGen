@@ -131,7 +131,7 @@ import src.detection
                 model = FakeModel([fake_result(image)])
                 run_detection(model, image, imgsz=size)
                 self.assertEqual(model.calls[0]["imgsz"], size)
-            for size in (True, False, "640", 640.0, 640.5, 0, -1, None, math.nan, math.inf):
+            for size in (True, False, "640", 640.0, 640.5, 0, -1, None, math.nan, math.inf, 1281, 100000):
                 with self.subTest(size=size):
                     model = FakeModel([fake_result(image)])
                     with self.assertRaisesRegex(ValueError, "imgsz"):

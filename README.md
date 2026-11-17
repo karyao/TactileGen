@@ -80,8 +80,11 @@ optional for users who only need the command-line detector.
 YOLO inference explicitly requests **640 pixels** by default. Set the initial
 size with `python3.12 -m src.gradio_app --imgsz 960`, or change **YOLO inference
 size (pixels)** under **Advanced settings** before each analysis. Clear restores
-the startup size. Sizes must be positive integers; YOLO may round them up to its
-model stride. Larger sizes may help detect small chart elements and increase
+the startup size. Quick-select buttons offer **640**, **960**, and **1280** pixels.
+Sizes must be integers from **1 to 1280**; the shared validator rejects larger
+values before inference to bound memory use and runtime. This is an application
+limit, not a guarantee of performance on every device. YOLO may round sizes up
+to its model stride. Larger sizes may help detect small chart elements and increase
 runtime. Diagnostic downloads record the requested size, checked size, and actual
 input tensor shape. See [comparing inference sizes](docs/analysis_diagnostics.md#compare-yolo-inference-sizes)
 for a repeatable manual check.
