@@ -22,6 +22,20 @@ from tests.test_gradio_app import make_spec
 
 
 class DiagnosticsTest(unittest.TestCase):
+    def test_event_normalizes_nested_non_finite_evidence(self):
+        collector = AnalysisDiagnostics(settings={})
+        nested = {"values": [float("inf"), {"negative": float("-inf")}],
+                  "tuple": (float("nan"), 1.7e308, 0.0, -2, True, None, "text")}
+        collector.event("reconstruction", "numeric_evidence", nested=nested)
+        event = collector.record["events"][0]
+        self.assertEqual(event, {
+            "stage": "reconstruction", "code": "numeric_evidence",
+            "nested": {"values": ["inf", {"negative": "-inf"}],
+                       "tuple": ("nan", 1.7e308, 0.0, -2, True, None, "text")},
+        })
+        json.dumps(collector.record, allow_nan=False)
+        self.assertEqual(nested["values"][0], float("inf"))
+
     def test_interleaved_collectors_and_chained_exceptions_round_trip(self):
         first = AnalysisDiagnostics(settings={"language": "eng"})
         second = AnalysisDiagnostics(settings={"language": "fra"})

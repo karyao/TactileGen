@@ -29,6 +29,19 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_event_evidence(value):
+    """Preserve non-finite evidence as strings compatible with strict JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _normalize_event_evidence(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_event_evidence(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_normalize_event_evidence(item) for item in value)
+    return value
+
+
 def configure_analysis_logging() -> None:
     """Make app summaries visible without configuring third-party loggers."""
     if not LOGGER.handlers:
@@ -202,8 +215,10 @@ class AnalysisDiagnostics:
         self.record["duration_seconds"] = time.monotonic() - self._started
 
     def event(self, stage: str, code: str, **evidence) -> None:
-        """Capture facts at a decision point without changing its result."""
-        self.record["events"].append({"stage": stage, "code": code, **evidence})
+        """Capture facts; non-finite floats become 'inf', '-inf', or 'nan'."""
+        self.record["events"].append({
+            "stage": stage, "code": code, **_normalize_event_evidence(evidence),
+        })
 
     def snapshot(self, name: str, value) -> None:
         if is_dataclass(value):

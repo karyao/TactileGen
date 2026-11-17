@@ -46,6 +46,38 @@ def test_dropped_ticks_distinguish_parse_failure_from_outlier():
     assert len(calibration['residuals_pixels']) == 5
 
 
+def test_extreme_tick_residuals_preserve_both_report_exports(tmp_path):
+    chart = base_chart()
+    outlier = chart.add('y_tick_label', (40, y_of(75)-6, 75, y_of(75)+6), text='1.7e308')
+    with pytest.warns(RuntimeWarning, match='overflow encountered in scalar divide'):
+        spec, diagnostic = recorded(chart)
+    assert spec.y_axis.tick_values == [0, 50, 100, 150, 200]
+    assert 'y_ticks_dropped:1' in spec.flags
+    assert any(t['detection_id'] == outlier and t['reason'] == 'numeric_outlier'
+               for t in events(diagnostic, 'y_tick_decisions')[0]['ticks'])
+    calibration = events(diagnostic, 'y_calibration')[0]
+    for key in ('selection_residuals_pixels', 'residuals_pixels'):
+        assert len(calibration[key]) == 6
+        assert calibration[key][-1] == 'inf'
+        assert all(isinstance(value, float) for value in calibration[key][:-1])
+
+    diagnostic.finish()
+    persisted = diagnostic.persist(tmp_path)
+    assert persisted is not None
+    persisted_record = json.loads(persisted.read_text())
+    assert persisted_record == json.loads(json.dumps(diagnostic.record, allow_nan=False))
+    exported = diagnostic.export_zip(tmp_path)
+    assert exported is not None
+    with ZipFile(exported) as archive:
+        assert json.loads(archive.read('diagnostics.json')) == persisted_record
+        report = archive.read('report.txt').decode()
+        assert 'y_calibration' in report
+        assert 'selection_residuals_pixels' in report
+        assert 'residuals_pixels' in report
+        assert '"inf"' in report
+    assert not any(e['stage'] == 'diagnostic_export' for e in diagnostic.record['exceptions'])
+
+
 def test_baseline_and_missing_slot_evidence():
     chart = Chart()
     chart.add('plot_area', PLOT)
