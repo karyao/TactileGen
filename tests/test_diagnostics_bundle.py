@@ -313,8 +313,8 @@ def test_report_failure_keeps_app_analysis_and_shows_specific_error(tmp_path):
     index = next(i for i, component in enumerate(binding.outputs)
                  if getattr(component, 'label', '') == 'Download analysis diagnostics (ZIP)')
     try:
-        with patch('src.gradio_app.run_detection', return_value=frame), \
-             patch('src.gradio_app.run_ocr', return_value=ocr), \
+        with patch('src.gradio_ui.analysis.run_detection', return_value=frame), \
+             patch('src.gradio_ui.analysis.run_ocr', return_value=ocr), \
              patch('src.diagnostics_report.DiagnosticReport.render', side_effect=RuntimeError('formatting failed')):
             updates = binding.fn(str(image), .25, .7, 'eng')
         assert updates[8] is not None  # Analysis review state survived packaging failure.

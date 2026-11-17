@@ -255,10 +255,10 @@ def test_zip_preserves_partial_stage_outputs(tmp_path, failure):
                  'presentation': 'render_detection_overlay'}
     from contextlib import ExitStack
     with ExitStack() as stack:
-        stack.enter_context(patch('src.gradio_app.run_detection', return_value=frame))
-        stack.enter_context(patch('src.gradio_app.run_ocr', return_value=ocr))
+        stack.enter_context(patch('src.gradio_ui.analysis.run_detection', return_value=frame))
+        stack.enter_context(patch('src.gradio_ui.analysis.run_ocr', return_value=ocr))
         if failure:
-            stack.enter_context(patch('src.gradio_app.' + functions[failure], side_effect=RuntimeError('injected failure')))
+            stack.enter_context(patch('src.gradio_ui.analysis.' + functions[failure], side_effect=RuntimeError('injected failure')))
         try:
             result = analyze_image(object(), image_path, .25, .7, diagnostics=diagnostic)
             assert result.diagnostics is diagnostic
@@ -306,8 +306,8 @@ def test_gradio_download_reset_and_export_failure(tmp_path):
     index = next(i for i, component in enumerate(event.outputs)
                  if getattr(component, 'label', '') == 'Download analysis diagnostics (ZIP)')
     try:
-        with patch('src.gradio_app.run_detection', return_value=frame), \
-             patch('src.gradio_app.run_ocr', return_value=ocr):
+        with patch('src.gradio_ui.analysis.run_detection', return_value=frame), \
+             patch('src.gradio_ui.analysis.run_ocr', return_value=ocr):
             success = event.fn(str(image_path), .25, .7, 'eng')
             assert success[index]['visible']
             with ZipFile(success[index]['value']) as archive:

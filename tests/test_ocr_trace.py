@@ -431,8 +431,8 @@ class OCRTraceTest(unittest.TestCase):
             backend = RapidOCRBackend()
         frame = DetectionFrame("input/chart.png", 60, 40, (SHORT,))
         diagnostics = collector()
-        with patch("src.gradio_app.decode_upload", return_value=(Path("chart.png"), IMAGE)), \
-             patch("src.gradio_app.run_detection", return_value=frame):
+        with patch("src.gradio_ui.analysis.decode_upload", return_value=(Path("chart.png"), IMAGE)), \
+             patch("src.gradio_ui.analysis.run_detection", return_value=frame):
             result = analyze_image(object(), "chart.png", .25, .7,
                                    ocr_backend=backend, diagnostics=diagnostics)
         trace = diagnostics.record["ocr_trace"]

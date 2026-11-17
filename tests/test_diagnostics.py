@@ -18,7 +18,7 @@ from src.diagnostics import AnalysisDiagnostics, configure_analysis_logging
 from src.gradio_app import UploadValidationError, analyze_image, build_app
 from src.rapidocr_ocr import RapidOCRBackend
 from src.tesseract_ocr import TesseractBackend
-from tests.test_gradio_app import make_spec
+from tests.gradio_helpers import make_spec
 
 
 class DiagnosticsTest(unittest.TestCase):
@@ -134,7 +134,7 @@ class DiagnosticsTest(unittest.TestCase):
     def test_optional_collector_preserves_exceptions_and_invalid_settings(self):
         collector = AnalysisDiagnostics(settings={"confidence": float("nan")})
         with self.assertRaises(UploadValidationError), \
-             patch("src.gradio_app.run_detection") as detect:
+             patch("src.gradio_ui.analysis.run_detection") as detect:
             analyze_image(object(), None, .25, .7, diagnostics=collector)
         detect.assert_not_called()
         collector.finish(failed=True)
@@ -214,14 +214,14 @@ class DiagnosticsTest(unittest.TestCase):
             )
             try:
                 with patch.object(AnalysisDiagnostics, "persist", save), \
-                     patch("src.gradio_app.run_detection", return_value=frame) as detect, \
-                     patch("src.gradio_app.run_ocr", return_value=ocr) as recognize, \
-                     patch("src.gradio_app.match_legend_to_bars", return_value=object()), \
-                     patch("src.gradio_app.render_detection_overlay", side_effect=lambda image, *a, **k: image), \
-                     patch("src.gradio_app.summarize_detections", return_value="summary"), \
-                     patch("src.gradio_app.legend_rows", return_value=[]), \
-                     patch("src.gradio_app.reconstruct_vbar", return_value=make_spec()) as reconstruct, \
-                     patch("src.gradio_app.cut_off_flags", return_value=[]), \
+                     patch("src.gradio_ui.analysis.run_detection", return_value=frame) as detect, \
+                     patch("src.gradio_ui.analysis.run_ocr", return_value=ocr) as recognize, \
+                     patch("src.gradio_ui.analysis.match_legend_to_bars", return_value=object()), \
+                     patch("src.gradio_ui.analysis.render_detection_overlay", side_effect=lambda image, *a, **k: image), \
+                     patch("src.gradio_ui.analysis.summarize_detections", return_value="summary"), \
+                     patch("src.gradio_ui.callbacks.legend_rows", return_value=[]), \
+                     patch("src.gradio_ui.analysis.reconstruct_vbar", return_value=make_spec()) as reconstruct, \
+                     patch("src.gradio_ui.analysis.cut_off_flags", return_value=[]), \
                      self.assertLogs("src.gradio_app", level="INFO") as logs:
                     success = event(str(image), .25, .7, "eng")
                     event(None, .25, .7, "eng")
@@ -234,7 +234,7 @@ class DiagnosticsTest(unittest.TestCase):
                     reconstruct.side_effect = ChartInterpretationError("fewer than 2 readable y tick labels")
                     event(str(image), .25, .7, "eng")
                     reconstruct.side_effect = None
-                    with patch("src.gradio_app._download_path", side_effect=OSError("export unavailable")):
+                    with patch("src.gradio_ui.callbacks.write_ocr_download", side_effect=OSError("export unavailable")):
                         event(str(image), .25, .7, "eng")
                     with patch("src.diagnostics.os.replace", side_effect=OSError("disk full")), \
                          patch.object(AnalysisDiagnostics, "persist", persist):
