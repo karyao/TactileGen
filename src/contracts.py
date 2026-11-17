@@ -274,15 +274,20 @@ def join_text_regions(
 def join_legend_assignments(
     detections: DetectionFrame, mapping: LegendMappingFrame
 ) -> tuple[tuple[Detection, LegendBarAssignment], ...]:
-    """Validate and join one legend assignment to every vertical bar."""
+    """Validate and join one legend assignment to every bar.
+
+    The assignments cover every vertical bar, or, for a horizontal bar chart
+    (``src.reconstruct_hbar.match_legend_to_hbars``), every horizontal bar.
+    """
     if detections.source_key != mapping.source_key:
         raise ValueError("Legend mapping and detections refer to different source images")
     by_id = {detection.id: detection for detection in detections.detections}
-    bars = [detection for detection in detections.detections
-            if detection.role == "vertical_bar"]
-    expected = [bar.id for bar in bars]
     actual = [assignment.bar_id for assignment in mapping.assignments]
-    if actual != expected:
+    for role in ("vertical_bar", "horizontal_bar"):
+        bars = [detection for detection in detections.detections if detection.role == role]
+        if actual == [bar.id for bar in bars] and (bars or role == "vertical_bar"):
+            break
+    else:
         raise ValueError(
             "Legend assignments must cover vertical bars in detection order"
         )
@@ -353,6 +358,27 @@ class VerticalBarChart:
             raise ValueError("series values must match category count")
 
 
+@dataclass(frozen=True)
+class HorizontalBarChart:
+    """A horizontal bar chart for the tactile layout.
+
+    ``categories`` run top to bottom down the vertical axis; values run along
+    the horizontal axis. The titles keep their printed axes: ``x_axis_title``
+    is the value heading below the chart, ``y_axis_title`` the category
+    heading on the left.
+    """
+
+    source_key: str
+    title: str
+    x_axis_title: str
+    y_axis_title: str
+    categories: tuple[str, ...]
+    series: tuple[BarSeries, ...]
+
+    def __post_init__(self) -> None:
+        VerticalBarChart.__post_init__(self)
+
+
 class ChartInterpretationError(ValueError):
     """A complete chart cannot be reconstructed from detections and OCR."""
 
@@ -394,10 +420,17 @@ class SeriesSpec:
 
 @dataclass(frozen=True)
 class VerticalBarSpec:
-    """Reconstructed vertical bar chart (schema 0.2).
+    """Reconstructed bar chart (schema 0.2).
 
     Unlike ``VerticalBarChart`` it tolerates missing titles and values and
     records what the interpreter could not resolve in ``flags``.
+
+    ``orientation`` is ``"vertical"`` or ``"horizontal"``. For horizontal
+    bars ``categories`` run top to bottom, ``y_axis`` is the value axis
+    (printed along the bottom), and the titles keep their printed axes:
+    ``x_axis_title`` is the value heading, ``y_axis_title`` the category
+    heading. Flag names stay those of the vertical reconstruction, so a
+    ``y_tick`` flag refers to the value-axis ticks.
     """
 
     source_key: str
@@ -418,8 +451,8 @@ class VerticalBarSpec:
         validate_source_key(self.source_key)
         if self.schema_version != "0.2":
             raise ValueError("VerticalBarSpec schema_version must be 0.2")
-        if self.chart_type != "bar" or self.orientation != "vertical":
-            raise ValueError("VerticalBarSpec is a vertical bar chart")
+        if self.chart_type != "bar" or self.orientation not in ("vertical", "horizontal"):
+            raise ValueError("VerticalBarSpec is a bar chart with vertical or horizontal bars")
         for label in (self.title, self.x_axis_title, self.y_axis_title):
             if label is not None and not isinstance(label, str):
                 raise ValueError("titles must be strings or None")

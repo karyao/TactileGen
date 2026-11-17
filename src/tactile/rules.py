@@ -12,14 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import combinations
 
-from src.tactile.braille import has_numeric_indicator
+from src.tactile.braille import BLANK, GUIDE_DOT, has_numeric_indicator
 from src.tactile.constants import (
     BAR_GAP,
     BAR_MAX_WIDTH,
     BAR_MIN_WIDTH,
     CELL_PITCH,
+    DOT_DIAMETER,
+    DOT_PITCH,
     GRID_MIN_SPACING,
     GROUP_GAP,
+    GUIDE_DOTS_MIN,
     KEY_SAMPLE_HEIGHT,
     KEY_SAMPLE_WIDTH,
     KEY_TEXT_CELL,
@@ -52,7 +55,8 @@ class Violation:
 
 
 RULES = {rule.id: rule for rule in (
-    Rule("bar_width", "§6.6.6.7", "Bars are 3/8 inch to 1 inch wide."),
+    Rule("bar_width", "§6.6.6.7",
+         "Bars are 3/8 inch to 1 inch wide (thick, for horizontal bars)."),
     Rule("bar_spacing", "§6.6.6.7 (gap value from §3.4.3.12)",
          "Bars in a set are joined without overlapping; neighbouring sets are separated "
          "by at least 1/8 inch."),
@@ -69,7 +73,8 @@ RULES = {rule.id: rule for rule in (
     Rule("numeric_indicator", "§6.6.6.2", "Numeric values use the numeric indicator."),
     Rule("all_bars_labeled", "§6.6.1.3", "No labels are omitted for bars."),
     Rule("key_before_graph", "§6.6.6.4", "The key is placed before (above) the graph."),
-    Rule("key_order", "§6.6.6.4", "The key lists bars in the order they appear, left to right."),
+    Rule("key_order", "§6.6.6.4",
+         "The key lists bars in the order they appear, left to right or top to bottom."),
     Rule("distinct_textures", "§6.6.6.7, §6.6.6.4",
          "Each set of bars has a distinct texture that matches its key sample."),
     Rule("key_sample_size", "§3.4.3.14", "Key texture samples are 1/2 inch high and 1 inch wide."),
@@ -88,6 +93,12 @@ RULES = {rule.id: rule for rule in (
          "Category labels fit under their bars in some overflow mode, or need review."),
     Rule("key_format", "§5.8.4.3, §5.8.4.4",
          "Key explanations start in cell 6, level with the top of their texture sample."),
+    Rule("value_alignment", "§6.6.6.6",
+         "Vertical values have dots 2-5 level with their grid line; horizontal values have "
+         "dots 4-5-6 of the first cell on their grid line."),
+    Rule("guide_dots", "§6.6.6.6",
+         "Labels of horizontal bars are left-aligned, with one blank cell and at least two "
+         "guide dots (dot 5) before the vertical axis."),
 )}
 
 
@@ -114,6 +125,8 @@ def check_layout(layout: TactileLayout) -> list[Violation]:
     found += _texture_count(layout)
     found += _key_format(layout)
     found += _key_symbols(layout)
+    found += _value_alignment(layout)
+    found += _guide_dots(layout)
     found += [_violation("x_label_overflow", reason) for reason in layout.needs_review]
     if layout.section is not None and layout.section[0] == 1:
         # No overview is generated: the whole graph cannot meet the BANA limits
@@ -141,11 +154,18 @@ def _key_symbols(layout):
             yield _violation("key_symbols", f"key {label.text!r} is used twice", label.id)
 
 
+def _horizontal(layout) -> bool:
+    return layout.orientation == "horizontal"
+
+
 def _heading_placement(layout):
     by_role = {}
     for label in layout.labels:
         by_role.setdefault(label.role, []).append(label)
-    categories = sorted(by_role.get("category", []), key=lambda l: l.x)
+    # The horizontal values are category names under vertical bars, or
+    # numbers under horizontal bars; the vertical values are the other kind.
+    across, down = ("x_value", "category") if _horizontal(layout) else ("category", "y_value")
+    categories = sorted(by_role.get(across, []), key=lambda l: l.x)
     x_heading = sorted(by_role.get("x_heading", []), key=lambda l: l.y)
     if categories and x_heading:
         first = categories[0]
@@ -156,7 +176,7 @@ def _heading_placement(layout):
         if x_heading[0].y <= first.y:
             yield _violation("heading_placement", f"{x_heading[0].id} is not below the values",
                              x_heading[0].id)
-    values = by_role.get("y_value", [])
+    values = by_role.get(down, [])
     if values:
         first_cell = min(l.x for l in values)
         for heading in by_role.get("y_heading", []):
@@ -187,17 +207,20 @@ def _key_format(layout):
 
 def _bar_width(layout):
     for bar in layout.bars:
-        if not BAR_MIN_WIDTH - TOLERANCE <= bar.width <= BAR_MAX_WIDTH + TOLERANCE:
-            yield _violation("bar_width", f"{bar.id} is {bar.width:.1f} mm wide "
+        width = bar.height if _horizontal(layout) else bar.width
+        if not BAR_MIN_WIDTH - TOLERANCE <= width <= BAR_MAX_WIDTH + TOLERANCE:
+            yield _violation("bar_width", f"{bar.id} is {width:.1f} mm wide "
                              f"(allowed {BAR_MIN_WIDTH:.1f}-{BAR_MAX_WIDTH:.1f} mm)", bar.id)
 
 
 def _bar_spacing(layout):
-    bars = sorted(layout.bars, key=lambda b: b.x)
+    horizontal = _horizontal(layout)
+    bars = sorted(layout.bars, key=lambda b: b.y if horizontal else b.x)
     for left, right in zip(bars, bars[1:]):
         same_set = left.category_index == right.category_index
         minimum = BAR_GAP if same_set else GROUP_GAP
-        gap = right.bounds.x1 - left.bounds.x2
+        gap = (right.bounds.y1 - left.bounds.y2 if horizontal
+               else right.bounds.x1 - left.bounds.x2)
         if gap < minimum - TOLERANCE:
             kind = "bars in a set" if same_set else "sets of bars"
             yield _violation("bar_spacing", f"{left.id} and {right.id} ({kind}) are "
@@ -243,13 +266,23 @@ def _fits_page(layout):
 
 
 def _grid_spacing(layout):
-    ys = sorted({round(line.y1, 3) for line in layout.lines if line.kind == "grid"}
-                | {round(line.y1, 3) for line in layout.lines
-                   if line.kind == "axis" and line.y1 == line.y2})
-    for a, b in zip(ys, ys[1:]):
+    # Grid lines run across the bars: horizontal lines for vertical bars,
+    # vertical lines for horizontal bars. The parallel axis line counts too.
+    axis = "x" if _horizontal(layout) else "y"
+
+    def place(line):
+        return line.x1 if axis == "x" else line.y1
+
+    def parallel(line):
+        return line.x1 == line.x2 if axis == "x" else line.y1 == line.y2
+
+    places = sorted({round(place(l), 3) for l in layout.lines if l.kind == "grid"}
+                    | {round(place(l), 3) for l in layout.lines
+                       if l.kind == "axis" and parallel(l)})
+    for a, b in zip(places, places[1:]):
         if b - a < GRID_MIN_SPACING - TOLERANCE:
-            yield _violation("grid_spacing", f"grid lines at y={a:.1f} and y={b:.1f} mm "
-                             f"are {b - a:.1f} mm apart")
+            yield _violation("grid_spacing", f"grid lines at {axis}={a:.1f} and "
+                             f"{axis}={b:.1f} mm are {b - a:.1f} mm apart")
 
 
 def _line_hierarchy(layout):
@@ -307,7 +340,7 @@ def _key_rules(layout):
 
     order = [s.series_index for s in samples]
     bar_order = []
-    for bar in sorted(layout.bars, key=lambda b: b.x):
+    for bar in sorted(layout.bars, key=lambda b: b.y if _horizontal(layout) else b.x):
         if bar.series_index not in bar_order:
             bar_order.append(bar.series_index)
     if layout.page_kind == "key":
@@ -340,6 +373,50 @@ def _y_heading_length(layout):
         if label.role == "y_heading" and len(label.cells) > Y_HEADING_MAX_CELLS:
             yield _violation("y_heading_length",
                              f"{label.id} has {len(label.cells)} cells", label.id)
+
+
+# From a label's top-left corner to the centre of its middle dot row (dots
+# 2-5) and of its first cell's right column (dots 4-5-6); the same distance.
+_DOT_OFFSET = DOT_DIAMETER / 2 + DOT_PITCH
+
+
+def _value_alignment(layout):
+    lines = [l for l in layout.lines if l.kind in ("grid", "axis", "tick")]
+    rows = [l.y1 for l in lines if l.y1 == l.y2]
+    columns = [l.x1 for l in lines if l.x1 == l.x2]
+    for label in layout.labels:
+        if label.role == "y_value":
+            place, targets, what = label.y + _DOT_OFFSET, rows, "dots 2-5"
+        elif label.role == "x_value":
+            place, targets, what = label.x + _DOT_OFFSET, columns, "dots 4-5-6"
+        else:
+            continue
+        if not any(abs(place - t) <= TOLERANCE for t in targets):
+            yield _violation("value_alignment", f"{label.id} ({label.text!r}) does not have "
+                             f"{what} on a grid line", label.id)
+
+
+def _guide_dots(layout):
+    if not _horizontal(layout):
+        return
+    labels = [l for l in layout.labels if l.role == "category"]
+    if not labels:
+        return
+    left = min(l.x for l in labels)
+    for label in labels:
+        if abs(label.x - left) > TOLERANCE:
+            yield _violation("guide_dots", f"{label.id} is not left-aligned with the other "
+                             "category labels", label.id)
+        if label.owner_id is None:
+            continue   # a runover line above the line that carries the guide dots
+        cells = list(label.cells)
+        dots = 0
+        while cells and cells[-1] == GUIDE_DOT:
+            cells.pop()
+            dots += 1
+        if dots < GUIDE_DOTS_MIN or not cells or cells[-1] != BLANK:
+            yield _violation("guide_dots", f"{label.id} needs one blank cell and at least "
+                             f"{GUIDE_DOTS_MIN} guide dots before the axis", label.id)
 
 
 def format_report(violations: list[Violation]) -> str:

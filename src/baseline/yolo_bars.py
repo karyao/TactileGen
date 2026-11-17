@@ -1,4 +1,7 @@
-"""Run the trained YOLO detector and score its vertical-bar predictions.
+"""Run the trained YOLO detector and score its bar predictions.
+
+Vertical bars are scored by default; ``--bar-role horizontal_bar`` scores
+horizontal-bar charts the same way.
 
 Use ``python -m src.baseline.yolo_bars --help`` for the CLI. Inference reads
 images only; evaluation reads labels after predictions have been made.
@@ -20,7 +23,7 @@ from src.baseline.opencv_bars import (
     read_image,
 )
 from src.contract_io import write_detection_frame
-from src.contracts import CLASS_IDS, CLASS_NAMES, validate_source_key
+from src.contracts import CHART_MARK_ROLE, CLASS_IDS, CLASS_NAMES, validate_source_key
 from src.detection import (
     DEFAULT_CONFIDENCE,
     DEFAULT_NMS_IOU,
@@ -34,9 +37,13 @@ from src.detection import (
 
 DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
 DEFAULT_DATA_ROOT = Path("dataset_yolo_vbars_clean")
+BAR_ROLES = ("vertical_bar", "horizontal_bar")
+# Chart type whose bars carry each role (vbar_categorical -> vertical_bar, ...).
+CHART_TYPE_FOR_ROLE = {role: chart for chart, role in CHART_MARK_ROLE.items() if role in BAR_ROLES}
 
 
-def _test_images(data_root: Path, split: str, limit: int | None) -> list[Path]:
+def _test_images(data_root: Path, split: str, limit: int | None,
+                 role: str = "vertical_bar") -> list[Path]:
     images_dir = data_root / "images" / split
     manifest = data_root / f"chart_types_{split}.csv"
     images = sorted(images_dir.glob("*.png"), key=lambda path: int(path.stem))
@@ -45,13 +52,14 @@ def _test_images(data_root: Path, split: str, limit: int | None) -> list[Path]:
             reader = csv.DictReader(stream)
             if reader.fieldnames != ["image_id", "chart_type"]:
                 raise ValueError(f"Invalid chart-type manifest: {manifest}")
-            selected = {row["image_id"] for row in reader if row["chart_type"] == "vbar_categorical"}
+            chart_type = CHART_TYPE_FOR_ROLE[role]
+            selected = {row["image_id"] for row in reader if row["chart_type"] == chart_type}
         available = {path.stem for path in images}
         if selected - available:
             raise FileNotFoundError(f"Manifest references missing images in {images_dir}")
         images = [path for path in images if path.stem in selected]
     if not images:
-        raise ValueError(f"No vertical-bar PNG images found in {images_dir}")
+        raise ValueError(f"No {role.replace('_', '-')} PNG images found in {images_dir}")
     if limit is not None:
         if limit < 1:
             raise ValueError("--limit must be positive")
@@ -59,17 +67,19 @@ def _test_images(data_root: Path, split: str, limit: int | None) -> list[Path]:
     return images
 
 
-def _class_id(data_root: Path) -> int:
+def _class_id(data_root: Path, role: str = "vertical_bar") -> int:
     names = tuple((data_root / "classes.txt").read_text(encoding="utf-8").splitlines())
     if names != CLASS_NAMES:
         raise ValueError("Dataset class names/order differ from the chart contract")
-    return CLASS_IDS["vertical_bar"]
+    if role not in BAR_ROLES:
+        raise ValueError(f"bar role must be one of {', '.join(BAR_ROLES)}")
+    return CLASS_IDS[role]
 
 
 def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path,
              limit: int | None = None, confidence: float = DEFAULT_CONFIDENCE,
              batch: int = 16, device: str | None = None,
-             match_iou: float | tuple[float, ...] = 0.5) -> dict:
+             match_iou: float | tuple[float, ...] = 0.5, role: str = "vertical_bar") -> dict:
     if not 0 <= confidence <= 1:
         raise ValueError("--confidence must be between 0 and 1")
     match_ious = (match_iou,) if isinstance(match_iou, (int, float)) else tuple(match_iou)
@@ -81,8 +91,8 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
         _validate_threshold(threshold, "--match-iou")
     if batch < 1:
         raise ValueError("--batch must be positive")
-    class_id = _class_id(data_root)
-    images = _test_images(data_root, split, limit)
+    class_id = _class_id(data_root, role)
+    images = _test_images(data_root, split, limit, role)
     output_dir.mkdir(parents=True, exist_ok=True)
     counts = {threshold: {"tp": 0, "fp": 0, "fn": 0} for threshold in match_ious}
     sample_rows = {threshold: [] for threshold in match_ious}
@@ -99,7 +109,7 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
             if Path(result.path).resolve() != path.resolve():
                 raise ValueError(f"Prediction order differs from input images: {result.path}")
             frame = detection_frame(result, f"{split}/{path.name}")
-            predicted = [item.box for item in frame.detections if item.role == "vertical_bar"]
+            predicted = [item.box for item in frame.detections if item.role == role]
             actual = load_yolo_boxes(data_root / "labels" / split / f"{path.stem}.txt",
                                      class_id, (frame.width, frame.height), len(CLASS_NAMES))
             for threshold in match_ious:
@@ -134,7 +144,7 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
         recall = tp / (tp + fn) if tp + fn else 0.0
         reports.append({
             "model": str(weights), "data_root": str(data_root), "split": split,
-            "class": "vertical_bar", "confidence": confidence, "iou": threshold,
+            "class": role, "confidence": confidence, "iou": threshold,
             "images": processed, "true_positive": tp, "false_positive": fp,
             "false_negative": fn, "precision": precision, "recall": recall,
             "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
@@ -159,12 +169,19 @@ def validate(model, weights: Path, data_root: Path, split: str, output_dir: Path
                         device=device, project=str(output_dir.resolve().parent),
                         name=output_dir.name, exist_ok=True, plots=False)
     image_count = len(list((data_root / "images" / split).glob("*.png")))
+    # mAP50-95 for every chart part present in the split (Ultralytics fills
+    # absent classes with the overall mAP, so only report present ones).
+    present = sorted({int(c) for c in getattr(metrics.box, "ap_class_index", [])})
+    per_class = {CLASS_NAMES[c]: float(metrics.box.maps[c]) for c in present}
     report = {
         "model": str(weights), "data_root": str(data_root), "split": split,
         "images": image_count,
         "map50": float(metrics.box.map50), "map50_95": float(metrics.box.map),
         "vertical_bar_map50_95": float(metrics.box.maps[class_id]),
+        "per_class_map50_95": per_class,
     }
+    if CLASS_IDS["horizontal_bar"] in present:
+        report["horizontal_bar_map50_95"] = per_class["horizontal_bar"]
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "metrics.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
@@ -181,7 +198,9 @@ def main() -> None:
         "--nms-iou", type=float, default=DEFAULT_NMS_IOU,
         help="duplicate-suppression overlap threshold from 0 to 1 (default: 0.70)",
     )
-    scoring = commands.add_parser("evaluate", help="Score vertical bars on a labeled split")
+    scoring = commands.add_parser("evaluate", help="Score bars on a labeled split")
+    scoring.add_argument("--bar-role", choices=BAR_ROLES, default="vertical_bar",
+                         help="which bars to score; images are filtered to that chart type")
     scoring.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     scoring.add_argument("--split", choices=("train", "val", "test"), default="test")
     scoring.add_argument("--output-dir", type=Path, required=True)
@@ -237,7 +256,8 @@ def main() -> None:
     elif args.command == "evaluate":
         print(json.dumps(evaluate(model, args.weights, args.data_root, args.split,
                                   args.output_dir, args.limit, args.confidence,
-                                  args.batch, args.device, args.match_ious), indent=2))
+                                  args.batch, args.device, args.match_ious,
+                                  args.bar_role), indent=2))
     else:
         print(json.dumps(validate(model, args.weights, args.data_root, args.split,
                                   args.output_dir, args.batch, args.device), indent=2))
