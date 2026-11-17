@@ -62,6 +62,19 @@ by default. Replace `path/to/chart.png` with your image path. For an example
 image already in the repository, use
 `tests/fixtures/contracts/val/example.png`.
 
+The standalone detector accepts `--imgsz` on **predict**, **evaluate**, and
+**validate**, with the same **640** default and **1280** maximum as Gradio:
+
+```bash
+python3.12 -m src.baseline.yolo_bars predict --image path/to/chart.png --output-dir output/demo-960 --imgsz 960
+python3.12 -m src.baseline.yolo_bars evaluate --data-root dataset_yolo_vbars_clean --output-dir output/eval-960 --imgsz 960 --batch 1
+python3.12 -m src.baseline.yolo_bars validate --data-root dataset_yolo_vbars_clean --output-dir output/map-960 --imgsz 960 --batch 1
+```
+
+`evaluate` reports bar precision/recall/F1; `validate` reports detection mAP.
+Both save the requested `imgsz` in `metrics.json`. See the
+[size comparison guide](docs/analysis_diagnostics.md#compare-yolo-inference-sizes).
+
 To install the detector together with the Gradio application dependencies,
 use the dedicated application requirements file instead:
 

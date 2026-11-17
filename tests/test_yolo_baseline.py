@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from src.baseline.yolo_bars import check_model_classes, detection_frame, evaluate, main, validate
 from src.contract_io import load_detection_frame
@@ -82,6 +82,7 @@ class YoloBaselineTest(unittest.TestCase):
             self.assertEqual((report["true_positive"], report["false_positive"],
                               report["false_negative"]), (1, 0, 0))
             self.assertEqual(report["exact_bar_count_accuracy"], 1)
+            self.assertEqual(report["imgsz"], 640)
             self.assertEqual(load_detection_frame(root / "output/1_detections.json").source_key,
                              "test/1.png")
             self.assertEqual(json.loads((root / "output/metrics.json").read_text())["images"], 1)
@@ -129,6 +130,7 @@ class YoloBaselineTest(unittest.TestCase):
             results = report["matching_results"]
             self.assertEqual([item["iou"] for item in results], [0.75, 0.90])
             self.assertEqual([item["true_positive"] for item in results], [1, 0])
+            self.assertEqual([item["imgsz"] for item in results], [640, 640])
             self.assertEqual(len(model.results), 1)
 
     def test_validation_records_standard_map(self):
@@ -140,10 +142,13 @@ class YoloBaselineTest(unittest.TestCase):
             (root / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
             (root / "data.yaml").write_text("test: images/test\n", encoding="utf-8")
             model = FakeModel([])
-            report = validate(model, Path("best.pt"), root, "test", root / "map")
+            report = validate(model, Path("best.pt"), root, "test", root / "map", imgsz=1280)
             self.assertEqual(report["map50"], 0.8)
             self.assertEqual(report["vertical_bar_map50_95"], 0.7)
             self.assertEqual(model.validation_args["split"], "test")
+            self.assertEqual(model.validation_args["imgsz"], 1280)
+            self.assertEqual(report["imgsz"], 1280)
+            self.assertEqual(json.loads((root / "map/metrics.json").read_text())["imgsz"], 1280)
             self.assertEqual(json.loads((root / "map/metrics.json").read_text())["images"], 1)
 
     def test_evaluation_scores_horizontal_bars_on_hbar_charts_only(self):
@@ -215,10 +220,13 @@ class YoloBaselineTest(unittest.TestCase):
             model = TrackingModel()
             with patch("src.baseline.yolo_bars.read_image", return_value=None), \
                  patch("src.baseline.yolo_bars._write_overlay"):
-                report = evaluate(model, Path("best.pt"), root, "test", root / "output", batch=1)
+                report = evaluate(model, Path("best.pt"), root, "test", root / "output",
+                                  batch=1, imgsz=960)
             self.assertEqual(report["images"], 2)
             self.assertEqual([len(call["source"]) for call in model.calls], [1, 1])
             self.assertEqual([call["iou"] for call in model.calls], [0.70, 0.70])
+            self.assertEqual([call["imgsz"] for call in model.calls], [960, 960])
+            self.assertEqual(json.loads((root / "output/metrics.json").read_text())["imgsz"], 960)
 
     def test_prediction_cli_uses_shared_detection_and_preserves_outputs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -241,7 +249,7 @@ class YoloBaselineTest(unittest.TestCase):
                  patch("src.baseline.yolo_bars._write_overlay"), redirect_stdout(io.StringIO()) as stdout:
                 main()
             run.assert_called_once_with(model, image, confidence=0.4,
-                                        nms_iou=0.6, device=None)
+                                        nms_iou=0.6, device=None, imgsz=640)
             detection_path = output / "chart final_detections.json"
             self.assertTrue(detection_path.is_file())
             data = json.loads(detection_path.read_text(encoding="utf-8"))
@@ -250,6 +258,58 @@ class YoloBaselineTest(unittest.TestCase):
             self.assertEqual(data["source_key"], "test/chart.png")
             summary = json.loads(stdout.getvalue())
             self.assertEqual(set(summary), {"source_key", "detections", "vertical_bars", "output_dir"})
+
+    def test_cli_forwards_selected_size_for_all_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root / "chart.png"
+            image.touch()
+            frame = DetectionFrame("input/chart.png", 100, 100, ())
+            for command in ("predict", "evaluate", "validate"):
+                for size in (640, 960, 1280):
+                    with self.subTest(command=command, size=size):
+                        argv = ["yolo_bars", command, "--output-dir", str(root / "out"),
+                                "--imgsz", str(size)]
+                        if command == "predict":
+                            argv += ["--image", str(image)]
+                        with patch("sys.argv", argv), \
+                             patch("src.baseline.yolo_bars.load_model"), \
+                             patch("src.baseline.yolo_bars.run_detection", return_value=frame) as predict, \
+                             patch("src.baseline.yolo_bars.evaluate", return_value={}) as evaluate_fn, \
+                             patch("src.baseline.yolo_bars.validate", return_value={}) as validate_fn, \
+                             patch("src.baseline.yolo_bars.read_image"), \
+                             patch("src.baseline.yolo_bars._write_overlay"), \
+                             redirect_stdout(io.StringIO()):
+                            main()
+                        called = {"predict": predict, "evaluate": evaluate_fn,
+                                  "validate": validate_fn}[command]
+                        self.assertEqual(called.call_count, 1)
+                        self.assertEqual(called.call_args.kwargs["imgsz"], size)
+
+    def test_all_cli_commands_reject_invalid_sizes_before_loading_model(self):
+        for command in ("predict", "evaluate", "validate"):
+            for size in ("0", "-1", "1281", "100000", "640.5", "no"):
+                with self.subTest(command=command, size=size):
+                    argv = ["yolo_bars", command, "--output-dir", "unused", "--imgsz", size]
+                    if command == "predict":
+                        argv += ["--image", "unused.png"]
+                    with patch("sys.argv", argv), \
+                         patch("src.baseline.yolo_bars.load_model") as load, \
+                         redirect_stderr(io.StringIO()):
+                        with self.assertRaisesRegex(SystemExit, "2"):
+                            main()
+                        load.assert_not_called()
+
+    def test_scoring_apis_reject_invalid_sizes_before_model_or_dataset_access(self):
+        for score in (evaluate, validate):
+            for size in (0, -1, 1281, 100000, 640.5, True):
+                with self.subTest(function=score.__name__, size=size):
+                    model = Mock()
+                    with self.assertRaisesRegex(ValueError, "imgsz"):
+                        score(model, Path("best.pt"), Path("missing"), "test",
+                              Path("unused"), imgsz=size)
+                    model.predict.assert_not_called()
+                    model.val.assert_not_called()
 
     def test_prediction_cli_rejects_invalid_input_before_loading_model(self):
         with tempfile.TemporaryDirectory() as temporary:

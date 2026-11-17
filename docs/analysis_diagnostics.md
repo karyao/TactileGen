@@ -111,6 +111,28 @@ To compare sizes manually:
 This procedure enables exploratory comparisons; it does not add an automated
 benchmark or establish accuracy without reference annotations.
 
+### Measure detection accuracy from the standalone CLI
+
+`src.baseline.yolo_bars` accepts `--imgsz` for `predict`, `evaluate`, and
+`validate` (default **640**, maximum **1280**). For example:
+
+```sh
+python3.12 -m src.baseline.yolo_bars evaluate --weights models/yolo_bars_hv/best.pt --data-root dataset_yolo_vbars_clean --output-dir output/eval-960 --imgsz 960 --batch 1
+```
+
+Repeat at **640**, **960**, and **1280**, using a separate output directory for
+each run. Keep the checkpoint, dataset, split, confidence, matching IoU, batch,
+device, and bar role fixed. Add `--bar-role horizontal_bar` and a dataset with
+horizontal annotations when scoring horizontal bars. `evaluate` measures bar
+precision/recall/F1 against annotations; `validate` measures standard detection
+mAP across chart parts. Both record the requested size as `imgsz` in
+`metrics.json`, including each result when evaluating multiple matching IoUs.
+
+The recorded size is the requested target, not an observed tensor shape.
+Prediction batching, validation preprocessing, and stride adjustment can change
+the actual input dimensions; compare runs within the same command and settings.
+Larger sizes increase resource use, so start with `--batch 1` for these comparisons.
+
 ## Understand missing evidence
 
 - **An analysis failed early:** the ZIP contains what was collected before the

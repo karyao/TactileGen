@@ -26,12 +26,15 @@ from src.contract_io import write_detection_frame
 from src.contracts import CHART_MARK_ROLE, CLASS_IDS, CLASS_NAMES, validate_source_key
 from src.detection import (
     DEFAULT_CONFIDENCE,
+    DEFAULT_IMGSZ,
     DEFAULT_NMS_IOU,
+    MAX_IMGSZ,
     _validate_threshold,
     check_model_classes,
     detection_frame,
     load_model,
     run_detection,
+    validate_imgsz,
 )
 
 
@@ -79,7 +82,9 @@ def _class_id(data_root: Path, role: str = "vertical_bar") -> int:
 def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path,
              limit: int | None = None, confidence: float = DEFAULT_CONFIDENCE,
              batch: int = 16, device: str | None = None,
-             match_iou: float | tuple[float, ...] = 0.5, role: str = "vertical_bar") -> dict:
+             match_iou: float | tuple[float, ...] = 0.5, role: str = "vertical_bar", *,
+             imgsz: int = DEFAULT_IMGSZ) -> dict:
+    validate_imgsz(imgsz)
     if not 0 <= confidence <= 1:
         raise ValueError("--confidence must be between 0 and 1")
     match_ious = (match_iou,) if isinstance(match_iou, (int, float)) else tuple(match_iou)
@@ -103,7 +108,7 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
         batch_images = images[start:start + batch]
         predictions = model.predict(source=[str(path) for path in batch_images], stream=True,
                                     batch=batch, conf=confidence, iou=DEFAULT_NMS_IOU,
-                                    device=device, verbose=False)
+                                    device=device, verbose=False, imgsz=imgsz)
         batch_processed = 0
         for path, result in zip(batch_images, predictions, strict=True):
             if Path(result.path).resolve() != path.resolve():
@@ -144,7 +149,7 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
         recall = tp / (tp + fn) if tp + fn else 0.0
         reports.append({
             "model": str(weights), "data_root": str(data_root), "split": split,
-            "class": role, "confidence": confidence, "iou": threshold,
+            "class": role, "confidence": confidence, "iou": threshold, "imgsz": imgsz,
             "images": processed, "true_positive": tp, "false_positive": fp,
             "false_negative": fn, "precision": precision, "recall": recall,
             "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
@@ -157,8 +162,10 @@ def evaluate(model, weights: Path, data_root: Path, split: str, output_dir: Path
 
 
 def validate(model, weights: Path, data_root: Path, split: str, output_dir: Path,
-             batch: int = 16, device: str | None = None) -> dict:
+             batch: int = 16, device: str | None = None, *,
+             imgsz: int = DEFAULT_IMGSZ) -> dict:
     """Record standard Ultralytics detection mAP on the specified split."""
+    validate_imgsz(imgsz)
     class_id = _class_id(data_root)
     data_yaml = data_root / "data.yaml"
     if not data_yaml.is_file():
@@ -167,7 +174,7 @@ def validate(model, weights: Path, data_root: Path, split: str, output_dir: Path
         raise ValueError("--batch must be positive")
     metrics = model.val(data=str(data_yaml.resolve()), split=split, batch=batch,
                         device=device, project=str(output_dir.resolve().parent),
-                        name=output_dir.name, exist_ok=True, plots=False)
+                        name=output_dir.name, exist_ok=True, plots=False, imgsz=imgsz)
     image_count = len(list((data_root / "images" / split).glob("*.png")))
     # mAP50-95 for every chart part present in the split (Ultralytics fills
     # absent classes with the overall mAP, so only report present ones).
@@ -175,7 +182,7 @@ def validate(model, weights: Path, data_root: Path, split: str, output_dir: Path
     per_class = {CLASS_NAMES[c]: float(metrics.box.maps[c]) for c in present}
     report = {
         "model": str(weights), "data_root": str(data_root), "split": split,
-        "images": image_count,
+        "images": image_count, "imgsz": imgsz,
         "map50": float(metrics.box.map50), "map50_95": float(metrics.box.map),
         "vertical_bar_map50_95": float(metrics.box.maps[class_id]),
         "per_class_map50_95": per_class,
@@ -218,9 +225,17 @@ def main() -> None:
     for command in (prediction, scoring, validation):
         command.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
         command.add_argument("--device", help="Ultralytics device, e.g. cpu or mps")
+        command.add_argument(
+            "--imgsz", type=int, default=DEFAULT_IMGSZ,
+            help=f"YOLO target size in pixels (1–{MAX_IMGSZ}; default: {DEFAULT_IMGSZ})",
+        )
     for command in (prediction, scoring):
         command.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE)
     args = parser.parse_args()
+    try:
+        validate_imgsz(args.imgsz)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.command == "predict":
         try:
             _validate_threshold(args.confidence, "--confidence")
@@ -244,7 +259,7 @@ def main() -> None:
     model = load_model(args.weights)
     if args.command == "predict":
         frame = run_detection(model, args.image, confidence=args.confidence,
-                              nms_iou=args.nms_iou, device=args.device)
+                              nms_iou=args.nms_iou, device=args.device, imgsz=args.imgsz)
         if args.source_key is not None:
             frame = replace(frame, source_key=args.source_key)
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -257,10 +272,11 @@ def main() -> None:
         print(json.dumps(evaluate(model, args.weights, args.data_root, args.split,
                                   args.output_dir, args.limit, args.confidence,
                                   args.batch, args.device, args.match_ious,
-                                  args.bar_role), indent=2))
+                                  args.bar_role, imgsz=args.imgsz), indent=2))
     else:
         print(json.dumps(validate(model, args.weights, args.data_root, args.split,
-                                  args.output_dir, args.batch, args.device), indent=2))
+                                  args.output_dir, args.batch, args.device,
+                                  imgsz=args.imgsz), indent=2))
 
 
 if __name__ == "__main__":
