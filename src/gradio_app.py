@@ -529,14 +529,17 @@ def analyze_image(
                 )
                 candidate = replace(
                     reconstructed,
-                    flags=[*reconstructed.flags, *cut_off_flags(frame, image)],
+                    flags=[*reconstructed.flags, *cut_off_flags(
+                        frame, image,
+                        **({"diagnostics": diagnostics} if diagnostics is not None else {}))],
                 )
                 if diagnostics is not None:
                     diagnostics.snapshot("spec", candidate)
                     diagnostics.record["spec_flags"] = list(candidate.flags)
                     for flag in candidate.flags:
-                        diagnostics.warning(flag.split(":", 1)[0], "reconstruction")
-                assessment = check_completeness(candidate)
+                        diagnostics.warning(flag.split(":", 1)[0], "reconstruction", flag=flag)
+                assessment = check_completeness(
+                    candidate, **({"diagnostics": diagnostics} if diagnostics is not None else {}))
                 spec = candidate
                 completeness = assessment
         except ChartInterpretationError as exc:

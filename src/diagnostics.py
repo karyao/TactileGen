@@ -192,11 +192,36 @@ class AnalysisDiagnostics:
         self.record["stages"][name].update(outcome="skipped", reason=reason)
         self.log("stage=%s outcome=skipped reason=%s", name, reason)
 
-    def warning(self, code: str, stage: str) -> None:
-        item = {"code": code, "stage": stage}
-        if item not in self.record["warnings"]:
+    def evidence_for(self, code: str, *, flag: str | None = None) -> list[str]:
+        """Find producer events, preserving exact parameterized flag identities."""
+        if flag is not None:
+            return [event["event_id"] for event in self.record["events"]
+                    if event.get("flag") == flag or event["code"] == flag]
+        return [event["event_id"] for event in self.record["events"]
+                if event["code"] == code or (event.get("flag") or "").split(":", 1)[0] == code]
+
+    def warning(self, code: str, stage: str, *, flag: str | None = None) -> None:
+        item = next((w for w in self.record["warnings"]
+                     if w["code"] == code and w["stage"] == stage), None)
+        if item is None:
+            item = {"code": code, "stage": stage}
             self.record["warnings"].append(item)
             self.log("warning=%s stage=%s", code, stage, level=logging.WARNING)
+        evidence = self.evidence_for(code, flag=flag)
+        if evidence:
+            links = item.setdefault("evidence_ids", [])
+            links.extend(link for link in evidence if link not in links)
+
+    def field_source(self, field: str, detection_ids=(), evidence_ids=()) -> dict:
+        source = {"detection_ids": list(detection_ids), "evidence_ids": list(evidence_ids),
+                  "availability": "available" if detection_ids else "unavailable"}
+        self.record.setdefault("spec_sources", {})[field] = source
+        return source
+
+    def field_evidence(self, field: str) -> dict:
+        return self.record.get("spec_sources", {}).get(field, {
+            "availability": "unavailable", "detection_ids": [], "evidence_ids": [],
+        })
 
     def finish(self, *, failed: bool = False) -> None:
         if self.record["ended_at"] is not None:
@@ -216,11 +241,14 @@ class AnalysisDiagnostics:
         self.record["ended_at"] = _utc_now()
         self.record["duration_seconds"] = time.monotonic() - self._started
 
-    def event(self, stage: str, code: str, **evidence) -> None:
+    def event(self, stage: str, code: str, **evidence) -> str:
         """Capture facts; non-finite floats become 'inf', '-inf', or 'nan'."""
+        event_id = f"{self.run_id}:event-{len(self.record['events']) + 1:05d}"
         self.record["events"].append({
             "stage": stage, "code": code, **_normalize_event_evidence(evidence),
+            "event_id": event_id,
         })
+        return event_id
 
     def snapshot(self, name: str, value) -> None:
         if is_dataclass(value):

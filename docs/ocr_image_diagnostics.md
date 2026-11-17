@@ -1,5 +1,8 @@
 # OCR image diagnostics (Plan 3)
 
+For links from parsing and completeness findings to this evidence, see
+[OCR warning provenance (Plan 4)](ocr_warning_provenance.md).
+
 Diagnostics capture source crops and the actual image inputs used by both built-in
 recognizers. Capture uses the original preprocessing pass; it adds no inference.
 `OCRFrame`, chart contracts, backend signatures, and winner selection are unchanged.

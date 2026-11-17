@@ -30,6 +30,7 @@ class DiagnosticsTest(unittest.TestCase):
         event = collector.record["events"][0]
         self.assertEqual(event, {
             "stage": "reconstruction", "code": "numeric_evidence",
+            "event_id": f"{collector.run_id}:event-00001",
             "nested": {"values": ["inf", {"negative": "-inf"}],
                        "tuple": ("nan", 1.7e308, 0.0, -2, True, None, "text")},
         })

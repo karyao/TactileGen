@@ -46,7 +46,7 @@ def _cells(*groups) -> list[Cell]:
     return [Cell(group) for group in groups]
 
 
-def to_braille(text: str) -> tuple[Cell, ...]:
+def to_braille(text: str, *, diagnostics=None, field=None) -> tuple[Cell, ...]:
     """Translate ``text`` to uncontracted UEB cells.
 
     Rules applied:
@@ -59,7 +59,12 @@ def to_braille(text: str) -> tuple[Cell, ...]:
     """
     if not isinstance(text, str) or not text.strip():
         raise ValueError("braille text must be a nonempty string")
+    original = text
     text = " ".join(text.split())
+    if diagnostics is not None:
+        diagnostics.event("completeness", "braille_input", field=field,
+            input_text=original, encoder_text=text, operation="split_join_whitespace",
+            source=diagnostics.field_evidence(field))
     out: list[Cell] = []
     numeric = False
     i = 0

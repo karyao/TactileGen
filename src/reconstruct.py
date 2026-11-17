@@ -29,6 +29,7 @@ from src.contracts import (
     join_legend_assignments,
 )
 from src.legend_matcher import match_legend_to_bars
+from src.text_provenance import consumer_text, text_evidence
 
 MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
@@ -56,7 +57,7 @@ _NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 # --- OCR and detection plumbing ------------------------------------------------
 
-def _text_table(ocr_texts) -> dict[str, tuple[str, float]]:
+def _text_table(ocr_texts, *, diagnostics=None) -> dict[str, tuple[str, float]]:
     """Normalise OCR input to ``{detection_id: (text, confidence)}``."""
     if isinstance(ocr_texts, OCRFrame):
         ocr_texts = ocr_texts.regions
@@ -66,13 +67,17 @@ def _text_table(ocr_texts) -> dict[str, tuple[str, float]]:
         items = ((region.detection_id, region) for region in ocr_texts)
     table = {}
     for key, value in items:
+        convert_confidence = False
         if isinstance(value, RecognizedText):
-            table[key] = (value.text.strip(), value.confidence)
+            original, confidence = value.text, value.confidence
         elif isinstance(value, str):
-            table[key] = (value.strip(), 1.0)
+            original, confidence = value, 1.0
         else:
-            text, confidence = value
-            table[key] = (text.strip(), float(confidence))
+            original, confidence = value
+            convert_confidence = True
+        trimmed = original.strip()
+        table[key] = (trimmed, float(confidence) if convert_confidence else confidence)
+        consumer_text(diagnostics, "reconstruction", key, original, table[key][0], table[key][1])
     return table
 
 
@@ -100,20 +105,38 @@ def _iou(a: Detection, b: Detection) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _dedupe(detections: Iterable[Detection]) -> list[Detection]:
+def _dedupe(detections: Iterable[Detection], *, diagnostics=None) -> list[Detection]:
     kept: list[Detection] = []
     for detection in sorted(detections, key=lambda d: -d.confidence):
-        if all(_iou(detection, other) <= DUPLICATE_IOU for other in kept):
+        blocker = None
+        overlap = None
+        for other in kept:
+            overlap = _iou(detection, other)
+            if not overlap <= DUPLICATE_IOU:
+                blocker = other
+                break
+        if blocker is None:
             kept.append(detection)
+        if diagnostics is not None:
+            diagnostics.event("reconstruction", "detection_deduplication",
+                detection_id=detection.id, role=detection.role,
+                outcome="duplicate" if blocker else "retained",
+                retained_detection_id=blocker.id if blocker else detection.id,
+                duplicate_iou=DUPLICATE_IOU, measured_iou=overlap if blocker else None)
     return kept
 
 
-def _group_roles(frame: DetectionFrame, min_confidence: float) -> dict[str, list[Detection]]:
+def _group_roles(frame: DetectionFrame, min_confidence: float, *, diagnostics=None) -> dict[str, list[Detection]]:
     roles: dict[str, list[Detection]] = {}
     for detection in frame.detections:
-        if detection.confidence >= min_confidence:
+        accepted = detection.confidence >= min_confidence
+        if diagnostics is not None:
+            diagnostics.event("reconstruction", "detection_confidence",
+                detection_id=detection.id, role=detection.role, confidence=detection.confidence,
+                threshold=min_confidence, outcome="retained" if accepted else "below_confidence")
+        if accepted:
             roles.setdefault(detection.role, []).append(detection)
-    return {role: _dedupe(items) for role, items in roles.items()}
+    return {role: _dedupe(items, diagnostics=diagnostics) for role, items in roles.items()}
 
 
 def _best(detections: list[Detection]) -> Detection | None:
@@ -128,29 +151,49 @@ def _inside(point: tuple[float, float], box: Detection, margin_x=0.0, margin_y=0
 
 # --- y calibration -------------------------------------------------------------
 
-def _normalized_tick_text(text: str) -> str:
-    return (text.strip().replace("−", "-").replace("–", "-")
-            .replace(",", "").replace(" ", "").lstrip("$"))
+def _normalized_tick_text(text: str, *, steps=None) -> str:
+    operations = (
+        ("strip", lambda value: value.strip()),
+        ("unicode_minus", lambda value: value.replace("−", "-")),
+        ("en_dash", lambda value: value.replace("–", "-")),
+        ("remove_commas", lambda value: value.replace(",", "")),
+        ("remove_spaces", lambda value: value.replace(" ", "")),
+        ("leading_dollar_signs", lambda value: value.lstrip("$")),
+    )
+    for name, operation in operations:
+        before, text = text, operation(text)
+        if steps is not None:
+            steps.append({"operation": name, "before": before, "after": text})
+    return text
 
 
-def parse_tick_value(text: str) -> tuple[float, str | None] | None:
-    """Parse an axis label to ``(value, unit)``; ``None`` if it is not a number.
-
-    K/M/B suffixes are expanded into the value (``1.5M`` -> 1500000.0); only
-    ``%`` is kept as a unit.
-    """
-    cleaned = _normalized_tick_text(text)
+def parse_tick_value(text: str, *, diagnostics=None, detection_id=None) -> tuple[float, str | None] | None:
+    """Parse an axis label to (value, unit), preserving existing numeric rules."""
+    steps = [] if diagnostics is not None else None
+    cleaned = _normalized_tick_text(text, steps=steps)
+    normalized = cleaned
     unit = None
     if cleaned.endswith("%"):
         unit, cleaned = "%", cleaned[:-1]
+        if steps is not None:
+            steps.append({"operation": "percent_unit", "before": cleaned + "%", "after": cleaned})
     scale = 1.0
     if cleaned and cleaned[-1].upper() in _SUFFIX and not cleaned[-1].isdigit():
         scale = _SUFFIX[cleaned[-1].upper()]
-        cleaned = cleaned[:-1]
-    if not _NUMBER.fullmatch(cleaned):
-        return None
-    value = float(cleaned) * scale
-    return (value, unit) if math.isfinite(value) else None
+        before, cleaned = cleaned, cleaned[:-1]
+        if steps is not None:
+            steps.append({"operation": "suffix_expansion", "before": before,
+                          "after": cleaned, "multiplier": scale})
+    matched = bool(_NUMBER.fullmatch(cleaned))
+    value = float(cleaned) * scale if matched else None
+    result = (value, unit) if matched and math.isfinite(value) else None
+    if diagnostics is not None:
+        diagnostics.event("reconstruction", "numeric_parse", detection_id=detection_id,
+            consumer_text=text, normalized_text=normalized, numeric_text=cleaned,
+            transformations=steps, multiplier=scale, unit=unit, converted_value=value,
+            result=result, text_evidence=text_evidence(diagnostics, detection_id),
+            reason="parsed" if result else "nonfinite" if matched else "invalid_number")
+    return result
 
 
 def _calibrate(ticks: list[tuple[float, float]], *, diagnostics: AnalysisDiagnostics | None = None):
@@ -163,21 +206,42 @@ def _calibrate(ticks: list[tuple[float, float]], *, diagnostics: AnalysisDiagnos
     ys = sorted(y for y, _ in ticks)
     gaps = [b - a for a, b in zip(ys, ys[1:]) if b - a > 0]
     tolerance = max(3.0, 0.2 * statistics.median(gaps)) if gaps else 3.0
+    if diagnostics is not None:
+        diagnostics.event("reconstruction", "calibration_inputs", ticks=ticks,
+            sorted_y=ys, positive_gaps=gaps, tolerance_pixels=tolerance,
+            tolerance_floor=3.0, median_gap_fraction=0.2)
     best = None
     tied_sets: set[frozenset[int]] = set()
     for i, j in itertools.combinations(range(len(ticks)), 2):
         (yi, vi), (yj, vj) = ticks[i], ticks[j]
         if yi == yj or vi == vj:
+            if diagnostics is not None:
+                diagnostics.event("reconstruction", "calibration_candidate", pair=[i, j],
+                    outcome="skipped", reason="equal_y" if yi == yj else "equal_value")
             continue
         a = (vj - vi) / (yj - yi)
         b = vi - a * yi
         residuals = [abs(v - (a * y + b)) / abs(a) for y, v in ticks]
         inliers = frozenset(k for k, r in enumerate(residuals) if r <= tolerance)
         score = (len(inliers), -sum(residuals[k] ** 2 for k in inliers))
+        if diagnostics is not None:
+            diagnostics.event("reconstruction", "calibration_candidate", pair=[i, j],
+                a=a, b=b, residuals_pixels=residuals, inlier_indexes=sorted(inliers), score=score,
+                selection="new_best" if best is None or score > best[0] else
+                          "same_inlier_count" if score[0] == best[0][0] else "not_selected")
         if best is None or score > best[0]:
             best, tied_sets = (score, inliers, a, b, residuals), {inliers}
         elif score[0] == best[0][0]:
             tied_sets.add(inliers)
+    if diagnostics is not None:
+        diagnostics.event("reconstruction", "calibration_selection",
+            outcome="rejected" if best is None or len(best[1]) < 2 else "selected",
+            selected_score=best[0] if best else None,
+            inlier_indexes=sorted(best[1]) if best else [],
+            competing_inlier_sets=sorted([sorted(group) for group in tied_sets]),
+            ambiguous=len(tied_sets) > 1,
+            flag="chart_interpretation_blocked" if best is None or len(best[1]) < 2 else
+                 "y_calibration_ambiguous" if len(tied_sets) > 1 else None)
     if best is None or len(best[1]) < 2:
         raise ChartInterpretationError("y-axis calibration needs at least 2 consistent ticks")
     inliers = sorted(best[1])
@@ -336,9 +400,24 @@ def _rescue_value(rgb: np.ndarray, centre_x: float, width: float, baseline: floa
 
 # --- main ----------------------------------------------------------------------
 
-def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: str):
+def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: str,
+           *, diagnostics=None, frame=None):
     detection = _best(roles.get(role, []))
     text, ocr_conf = texts.get(detection.id, ("", 0.0)) if detection else ("", 0.0)
+    if diagnostics is not None:
+        candidates = [d.id for d in frame.detections if d.role == role] if frame else []
+        reason = ("no_detection" if not candidates else "filtered_out") if detection is None else (
+            "absent_ocr" if detection.id not in texts else "empty_text" if not text else "read")
+        evidence = text_evidence(diagnostics, detection.id) if detection else {}
+        event_id = diagnostics.event("reconstruction", "title_selection", role=role, field=key,
+            candidate_ids=candidates, retained_ids=[d.id for d in roles.get(role, [])],
+            detection_id=detection.id if detection else None, text=text, ocr_confidence=ocr_conf,
+            reason=reason, text_evidence=evidence,
+            filter_evidence_ids=[e["event_id"] for e in diagnostics.record["events"]
+                                 if e.get("detection_id") in candidates
+                                 and e["code"] in ("detection_confidence", "detection_deduplication")],
+            flag=missing_flag if detection is None or not text else None)
+        diagnostics.field_source(key, [detection.id] if detection else [], [event_id])
     if detection is None or not text:
         flags.append(missing_flag)
         return None, detection
@@ -346,7 +425,8 @@ def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: s
     return text, detection
 
 
-def _bar_less_series(pending, entries, frame, texts, rgb, legend, taken_names, n_categories):
+def _bar_less_series(pending, entries, frame, texts, rgb, legend, taken_names, n_categories,
+                     *, diagnostics=None):
     """Series with no visible bars for legend entries no bar matched.
 
     Returns ``(added, skipped)``: ``added`` is ``(legend position, SeriesSpec)`` pairs and
@@ -369,12 +449,22 @@ def _bar_less_series(pending, entries, frame, texts, rgb, legend, taken_names, n
             reason = "low_confidence"
         elif legend is not None and not _inside(_centre(swatch), legend, 4, 4):
             reason = "outside_legend"
-        elif text.casefold() in names:
+        elif (name_key := text.casefold()) in names:
             reason = "duplicate_name"
         elif colour is None:
             reason = "unreadable_swatch"
         else:
             reason = None
+        if diagnostics is not None:
+            diagnostics.event("reconstruction", "legend_entry_decision",
+                label_id=label.id, swatch_id=swatch.id, text=text,
+                text_evidence=text_evidence(diagnostics, label.id),
+                swatch_confidence=swatch.confidence, label_confidence=label.confidence,
+                ocr_confidence=text_confidence, confidence_threshold=LEGEND_ENTRY_MIN_CONFIDENCE,
+                first_failing_guard=reason, outcome="skipped" if reason else "added",
+                duplicate_name_key=name_key if reason in (None, "duplicate_name") else None,
+                existing_name_keys=sorted(names) if reason in (None, "duplicate_name") else None,
+                flag=f"legend_entry_skipped:{reason}:{text or entry.label_id}" if reason else None)
         if reason is not None:
             skipped.append(f"legend_entry_skipped:{reason}:{text or entry.label_id}")
             continue
@@ -416,11 +506,13 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     labels, or fewer than two consistent y ticks. Everything else unresolved is
     reported through ``flags``.
     """
-    texts = _text_table(ocr_texts)
+    if diagnostics is not None:
+        diagnostics.record["spec_sources"] = {}
+    texts = _text_table(ocr_texts, diagnostics=diagnostics)
 
     def trace(code, **evidence):
         if diagnostics is not None:
-            diagnostics.event("reconstruction", code, **evidence)
+            return diagnostics.event("reconstruction", code, **evidence)
 
     if legend_mapping is None:
         legend_ocr = (
@@ -434,7 +526,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         bar.id: assignment
         for bar, assignment in join_legend_assignments(frame, legend_mapping)
     }
-    roles = _group_roles(frame, min_confidence)
+    roles = _group_roles(frame, min_confidence, diagnostics=diagnostics)
     trace("detection_filter", min_confidence=min_confidence, duplicate_iou=DUPLICATE_IOU,
           retained_ids=[d.id for items in roles.values() for d in items],
           excluded=[{"id": d.id, "reason": "below_confidence" if d.confidence < min_confidence
@@ -455,6 +547,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
           retained_bar_ids=[d.id for d in bars],
           excluded_bar_ids=[d.id for d in roles.get("vertical_bar", []) if d not in bars])
     if not bars:
+        trace("reconstruction_blocked", reason="no_bars_inside_plot",
+              flag="chart_interpretation_blocked")
         raise ChartInterpretationError("no vertical bars detected inside the plot area")
     bars.sort(key=lambda d: _centre(d)[0])
 
@@ -469,23 +563,55 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                       key=lambda d: _centre(d)[0])
     trace("tick_selection", x_label_ids=[d.id for d in x_labels],
           y_label_ids=[d.id for d in y_labels], margin_x=mx, margin_y=my)
+    for role, labels, lower, upper, axis in (
+        ("x_tick_label", x_labels, plot.box.x1 - mx if plot else None,
+         plot.box.x2 + mx if plot else None, 0),
+        ("y_tick_label", y_labels, plot.box.y1 - my if plot else None,
+         plot.box.y2 + my if plot else None, 1),
+    ):
+        if diagnostics is not None:
+            trace("tick_spatial_selection", role=role,
+                candidate_ids=[d.id for d in roles.get(role, [])],
+                accepted_bounds=[lower, upper],
+                decisions=[{"detection_id": d.id, "coordinate": _centre(d)[axis],
+                            "outcome": "retained" if d in labels else "outside_plot_band"}
+                           for d in roles.get(role, [])])
     if not x_labels:
+        trace("reconstruction_blocked", reason="no_x_labels", role="x_tick_label",
+              detected_ids=[d.id for d in frame.detections if d.role == "x_tick_label"],
+              flag="chart_interpretation_blocked")
         raise ChartInterpretationError("no x tick labels detected")
 
     # y calibration
     parsed = []
     for detection in y_labels:
-        value = parse_tick_value(texts.get(detection.id, ("", 0.0))[0])
-        trace("y_tick_parse", detection_id=detection.id,
-              raw_text=next((r.text for r in ocr_texts.regions if r.detection_id == detection.id), "")
-                       if isinstance(ocr_texts, OCRFrame) else texts.get(detection.id, ("", 0))[0],
-              normalized_text=_normalized_tick_text(texts.get(detection.id, ("", 0))[0]),
-              ocr_confidence=texts.get(detection.id, ("", 0))[1],
-              y=_centre(detection)[1], parsed_value=value[0] if value else None,
-              reason="numeric_candidate" if value else "unparseable")
+        value = parse_tick_value(texts.get(detection.id, ("", 0.0))[0],
+                                 diagnostics=diagnostics, detection_id=detection.id)
+        if diagnostics is not None:
+            consumed = text_evidence(diagnostics, detection.id)
+            numeric = next(e for e in reversed(diagnostics.record["events"])
+                           if e["code"] == "numeric_parse" and e["detection_id"] == detection.id)
+            trace("y_tick_parse", detection_id=detection.id,
+                  raw_text=consumed["input_text"], consumer_text=texts.get(detection.id, ("", 0))[0],
+                  input_presence=consumed["input_presence"], normalized_text=numeric["normalized_text"],
+                  evidence_ids=[numeric["event_id"], *consumed["evidence_ids"]],
+                  ocr_confidence=texts.get(detection.id, ("", 0))[1],
+                  y=_centre(detection)[1], parsed_value=value[0] if value else None,
+                  reason="numeric_candidate" if value else "unparseable")
         if value is not None:
             parsed.append((detection, *value))
+    if diagnostics is not None:
+        source_ids = [d.id for d, _, _ in parsed]
+        link = trace("calibration_tick_sources", ticks=[
+            {"index": k, "detection_id": d.id, "y": _centre(d)[1], "value": v, "unit": unit,
+             "parse_evidence_ids": [e["event_id"] for e in diagnostics.record["events"]
+                                    if e["code"] == "numeric_parse" and e["detection_id"] == d.id]}
+            for k, (d, v, unit) in enumerate(parsed)])
+        diagnostics.field_source("y_axis.ticks", source_ids, [link])
     if len(parsed) < 2:
+        trace("reconstruction_blocked", reason="insufficient_readable_y_ticks",
+              readable_ids=[d.id for d, _, _ in parsed], required_count=2,
+              flag="chart_interpretation_blocked")
         raise ChartInterpretationError("fewer than 2 readable y tick labels")
     a, b, inliers, ambiguous = _calibrate(
         [(_centre(d)[1], v) for d, v, _ in parsed], diagnostics=diagnostics)
@@ -494,17 +620,30 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         "reason": "retained" if k in inliers else "numeric_outlier"}
         for k, (d, v, _) in enumerate(parsed)])
     good = [parsed[k] for k in inliers]
+    if diagnostics is not None:
+        diagnostics.field_source("y_axis.ticks", [d.id for d, _, _ in sorted(good, key=lambda t: t[1])],
+            [link, *diagnostics.evidence_for("y_calibration"),
+             *diagnostics.evidence_for("calibration_selection")])
     dropped = len(y_labels) - len(good)
     if dropped:
         parsed_ids = {d.id for d, _, _ in parsed}
-        trace("y_ticks_dropped", count=dropped,
+        trace("y_ticks_dropped", count=dropped, flag=f"y_ticks_dropped:{dropped}",
               unparseable_ids=[d.id for d in y_labels if d.id not in parsed_ids],
               numeric_outlier_ids=[d.id for k, (d, _, _) in enumerate(parsed) if k not in inliers])
     if dropped:
         flags.append(f"y_ticks_dropped:{dropped}")
     if ambiguous:
         flags.append("y_calibration_ambiguous")
-    if any(_LEADING_ZERO.match(texts[d.id][0].strip()) for d, _, _ in good):
+
+    def leading_zero(detection):
+        text = texts[detection.id][0].strip()
+        matched = bool(_LEADING_ZERO.match(text))
+        trace("leading_zero_check", detection_id=detection.id, text=text,
+              pattern=_LEADING_ZERO.pattern, matched=matched,
+              flag="y_tick_leading_zero" if matched else None)
+        return matched
+
+    if any(leading_zero(d) for d, _, _ in good):
         flags.append("y_tick_leading_zero")
     tick_values = [v for _, v, _ in sorted(good, key=lambda t: t[1])]
     trace("y_ticks_not_arithmetic" if not _is_arithmetic(tick_values) else "y_tick_spacing",
@@ -563,6 +702,14 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     for j, d in enumerate(x_labels):
         text, ocr_conf = texts.get(d.id, ("", 0.0))
         unreadable = _unreadable_category(text) if category_guard else not text
+        if diagnostics is not None:
+            evidence = text_evidence(diagnostics, d.id)
+            event_id = trace("category_text_check", detection_id=d.id, category_index=j,
+                text=text, ocr_confidence=ocr_conf, category_guard=category_guard,
+                rule="no_alphanumeric" if category_guard else "empty_text",
+                unreadable=unreadable, unreadable_confidence=UNREADABLE_CATEGORY_CONFIDENCE,
+                text_evidence=evidence, flag="category_unreadable" if unreadable else None)
+            diagnostics.field_source(f"category[{j}]", [d.id], [event_id])
         label_confidence.append(
             UNREADABLE_CATEGORY_CONFIDENCE if unreadable else d.confidence * ocr_conf)
         if unreadable:
@@ -665,6 +812,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     # Record immediately so failures retain evidence. Keep the original cluster
     # index and recorded event reference for legend-only series that shift indexes.
     series_events = []
+    series_sources = {}
 
     def trace_series(code, **evidence):
         if diagnostics is not None:
@@ -725,6 +873,17 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         series.append(SeriesSpec(
             name, _hex(None if centre is None else tuple(int(v) for v in centre)), row,
             value_rescued=rescued, value_confidence=value_conf))
+        if diagnostics is not None:
+            identity = cluster_identities[c]
+            event_id = trace("series_text_source", text=name, name_source="legend_mapping",
+                         text_evidence=text_evidence(diagnostics, identity[1]) if identity else None,
+                         label_id=identity[1] if identity else None,
+                         swatch_id=identity[0] if identity else None,
+                         bar_ids=[bars[k].id for k in members],
+                         reason="matched_label" if name else "unresolved_name")
+            source = diagnostics.field_source(f"series_name[{c}]",
+                [identity[1]] if identity and name else [], [event_id])
+            series_sources[id(series[-1])] = source
     if rescued_total:
         flags.append(f"bars_rescued:{rescued_total}")
     if rescued_zero:
@@ -753,11 +912,24 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         if settled:
             added, skipped = _bar_less_series(
                 pending, legend_mapping.entries, frame, texts, rgb, legend,
-                [s.name for s in series], len(categories))
+                [s.name for s in series], len(categories), diagnostics=diagnostics)
         else:
             skipped = [f"legend_entry_skipped:bars_not_settled:{entry.name or entry.label_id}"
                        for entry in pending]
         flags.extend(skipped)
+        if diagnostics is not None and not settled:
+            for entry, flag in zip(pending, skipped):
+                trace("legend_entry_decision", label_id=entry.label_id, swatch_id=entry.swatch_id,
+                      first_failing_guard="bars_not_settled", outcome="skipped", flag=flag)
+        if diagnostics is not None:
+            for position, item in added:
+                entry = legend_mapping.entries[position]
+                event_id = trace("series_text_source", label_id=entry.label_id,
+                                 swatch_id=entry.swatch_id, text=item.name,
+                                 text_evidence=text_evidence(diagnostics, entry.label_id),
+                                 name_source="consumer_text", no_visible_bars=True)
+                series_sources[id(item)] = {"detection_ids": [entry.label_id],
+                    "evidence_ids": [event_id], "availability": "available"}
         if added:
             visible_series = series
             series, reordered = _in_legend_order(
@@ -769,14 +941,25 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             if reordered:
                 flags.append("legend_order_differs")
 
+    if diagnostics is not None:
+        sources = diagnostics.record.setdefault("spec_sources", {})
+        for key in list(sources):
+            if key.startswith("series_name["):
+                del sources[key]
+        for index, item in enumerate(series):
+            sources[f"series_name[{index}]"] = series_sources[id(item)]
+
     # titles
     title, title_box = _title("chart_title", roles, texts, flags, confidence,
-                              "title", "title_missing")
+                              "title", "title_missing", diagnostics=diagnostics, frame=frame)
     x_title, _ = _title("x_axis_title", roles, texts, flags, confidence,
-                        "x_axis_title", "x_axis_title_missing")
+                        "x_axis_title", "x_axis_title_missing", diagnostics=diagnostics, frame=frame)
     y_title, _ = _title("y_axis_title", roles, texts, flags, confidence,
-                        "y_axis_title", "y_axis_title_missing")
+                        "y_axis_title", "y_axis_title_missing", diagnostics=diagnostics, frame=frame)
     if title_box is not None and title_box.box.x2 >= frame.width - TITLE_EDGE_PX:
+        trace("title_edge_check", detection_id=title_box.id, x2=title_box.box.x2,
+              accepted_maximum=frame.width - TITLE_EDGE_PX, threshold_pixels=TITLE_EDGE_PX,
+              flag="title_touches_right_edge")
         flags.append("title_touches_right_edge")
 
     # adjacency: every neighbouring gap is under 10% of the bar width
