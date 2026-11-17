@@ -473,7 +473,10 @@ def analyze_image(
     try:
         with stage("ocr"):
             backend = ocr_backend if ocr_backend is not None else TesseractBackend()
-            ocr_frame = run_ocr(image, frame, backend, language)
+            ocr_frame = run_ocr(
+                image, frame, backend, language,
+                **({"diagnostics": diagnostics} if diagnostics is not None else {}),
+            )
             if diagnostics is not None:
                 diagnostics.snapshot("ocr", ocr_frame)
                 readable = sum(bool(r.text.strip()) for r in ocr_frame.regions)

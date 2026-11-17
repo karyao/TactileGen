@@ -260,6 +260,10 @@ class AnalysisDiagnostics:
             with ZipFile(temporary_path, "w", ZIP_DEFLATED) as archive:
                 archive.writestr("diagnostics.json", json.dumps(
                     self.record, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
+                if "ocr_trace" in self.record:
+                    archive.writestr("ocr_trace.json", json.dumps(
+                        self.record["ocr_trace"], indent=2, ensure_ascii=False,
+                        allow_nan=False) + "\n")
                 lines = [f"Analysis run: {self.run_id}", f"Outcome: {self.record['outcome']}",
                          "Coordinates: pixels, origin at top left; y increases downward.",
                          "OCR crops are source crops, before backend preprocessing.",
