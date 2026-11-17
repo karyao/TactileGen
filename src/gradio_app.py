@@ -785,8 +785,9 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             message = "Analysis failed. Check the terminal and try another image."
         finally:
             diagnostics.finish(failed=failed)
-            diagnostics.persist(artifact_root)
+            record_path = diagnostics.persist(artifact_root)
             diagnostic_path = diagnostics.export_zip(artifact_root)
+            diagnostics.log_summary(record_path=record_path, archive_path=diagnostic_path)
         if updates is None:
             updates = result_updates(ready_status(), error_message=message)
         diagnostic_text = f"Analysis run: `{diagnostics.run_id}`"

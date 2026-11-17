@@ -176,8 +176,9 @@ def main():
         diagnostics.finish(failed=failed)
         destination = root / name
         destination.mkdir(exist_ok=True)
-        diagnostics.persist(destination)
+        record_path = diagnostics.persist(destination)
         archive_path = diagnostics.export_zip(destination)
+        diagnostics.log_summary(record_path=record_path, archive_path=archive_path)
         assert archive_path is not None
         # Assets use generated relative paths, identical to their archive layout.
         for filename, data in diagnostics.assets.items():

@@ -22,6 +22,41 @@ from tests.test_gradio_app import make_spec
 
 
 class DiagnosticsTest(unittest.TestCase):
+    def test_stage_start_is_logged_before_execution_and_completion(self):
+        for outcome in ("succeeded", "failed", "blocked"):
+            with self.subTest(outcome=outcome):
+                collector = AnalysisDiagnostics(settings={})
+                blocked_errors = (ValueError,) if outcome == "blocked" else ()
+                with self.assertLogs("src.gradio_app", level="INFO") as logs:
+                    with (contextlib.nullcontext() if outcome == "succeeded"
+                          else self.assertRaisesRegex(ValueError, "OCR unavailable")):
+                        with collector.stage("ocr", blocked_errors=blocked_errors):
+                            self.assertEqual(len(logs.records), 1)
+                            self.assertEqual(logs.records[0].levelno, logging.INFO)
+                            self.assertEqual(logs.records[0].getMessage(),
+                                             f"[run {collector.run_id}] stage=ocr outcome=started")
+                            stage = collector.record["stages"]["ocr"]
+                            self.assertIsNotNone(stage["started_at"])
+                            self.assertIsNone(stage["outcome"])
+                            self.assertIsNone(stage["ended_at"])
+                            if outcome != "succeeded":
+                                raise ValueError("OCR unavailable")
+                self.assertEqual(len(logs.records), 2)
+                self.assertIn(f"stage=ocr outcome={outcome} duration=", logs.output[1])
+                self.assertEqual(logs.records[1].levelno,
+                                 logging.ERROR if outcome == "failed" else logging.INFO)
+                self.assertEqual(collector.record["stages"]["ocr"]["outcome"], outcome)
+                self.assertTrue(all(f"[run {collector.run_id}]" in line for line in logs.output))
+                self.assertIn("stage=ocr outcome=started", collector._log_entries[1])
+
+    def test_skipped_stage_has_no_start_message(self):
+        collector = AnalysisDiagnostics(settings={})
+        with self.assertLogs("src.gradio_app", level="INFO") as logs:
+            collector.skip("ocr", "no text regions")
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("stage=ocr outcome=skipped reason=no text regions", logs.output[0])
+        self.assertIsNone(collector.record["stages"]["ocr"]["started_at"])
+
     def test_event_normalizes_nested_non_finite_evidence(self):
         collector = AnalysisDiagnostics(settings={})
         nested = {"values": [float("inf"), {"negative": float("-inf")}],
@@ -124,6 +159,8 @@ class DiagnosticsTest(unittest.TestCase):
                 collector.finish()
                 with tempfile.TemporaryDirectory() as temporary:
                     path = collector.persist(Path(temporary))
+                    archive_path = collector.export_zip(Path(temporary))
+                    collector.log_summary(record_path=path, archive_path=archive_path)
             self.assertEqual(len(logger.handlers), 1)
             output = terminal.getvalue()
             self.assertEqual(output.count("analysis started"), 1)
@@ -141,6 +178,7 @@ class DiagnosticsTest(unittest.TestCase):
              patch("src.diagnostics.os.replace", side_effect=OSError("disk full")), \
              self.assertLogs("src.gradio_app", level="INFO") as logs:
             self.assertIsNone(collector.persist(Path(temporary)))
+            collector.log_summary(record_path=None, archive_path=None)
             self.assertEqual(list(Path(temporary).rglob("*.tmp")), [])
         self.assertEqual(collector.record["outcome"], "succeeded")
         self.assertIn("disk full", "\n".join(logs.output))
@@ -233,6 +271,13 @@ class DiagnosticsTest(unittest.TestCase):
                               records[6]["warnings"])
                 self.assertEqual(records[6]["outcome"], "completed_with_warnings")
                 terminal = "\n".join(logs.output)
+                self.assertEqual(terminal.count("analysis outcome="), 8)
+                for record in records:
+                    run_logs = [line for line in logs.output if f"[run {record['run_id']}]" in line]
+                    self.assertEqual(sum("analysis outcome=" in line for line in run_logs), 1)
+                    self.assertIn("analysis outcome=", run_logs[-1])
+                    self.assertIn(f"warnings={len(record['warnings'])}", run_logs[-1])
+                    self.assertIn("diagnostic ZIP created", run_logs[-2])
                 for record, path in zip(records, paths):
                     self.assertIn(f"[run {record['run_id']}]", terminal)
                     self.assertIn(str(path), terminal)

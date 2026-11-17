@@ -1,6 +1,7 @@
 """Archive integrity, navigable explanations, and export failure isolation."""
 
 from html.parser import HTMLParser
+from contextlib import nullcontext
 import json
 import logging
 from unittest.mock import patch
@@ -182,6 +183,56 @@ def test_serialization_failure_is_specific_and_does_not_escape(tmp_path):
     assert diagnostics.export_zip(tmp_path) is None
     assert 'snapshot serialization' in diagnostics.export_error
     assert diagnostics.record['exceptions'][-1]['stage'] == 'diagnostic_export'
+
+
+@pytest.mark.parametrize('case', ['success', 'warnings', 'early_failure', 'storage_failure', 'export_failure'])
+def test_final_summary_reports_context_and_actual_artifacts(tmp_path, caplog, case):
+    diagnostics = AnalysisDiagnostics(settings={})
+    if case != 'early_failure':
+        diagnostics.record['completeness_status'] = 'needs_input' if case == 'warnings' else 'ready'
+    if case == 'warnings':
+        diagnostics.warning('sample_warning', 'reconstruction')
+    diagnostics.finish(failed=case == 'early_failure')
+    original_outcome = diagnostics.record['outcome']
+    # Capture directly, independent of handlers installed by application tests.
+    caplog.clear()
+    logger = logging.getLogger('src.gradio_app')
+    with patch.object(logger, 'handlers', [caplog.handler]), \
+         patch.object(logger, 'propagate', False), \
+         caplog.at_level(logging.INFO, logger='src.gradio_app'):
+        with (patch('src.diagnostics.os.replace', side_effect=OSError('disk full'))
+              if case == 'storage_failure' else nullcontext()):
+            record_path = diagnostics.persist(tmp_path)
+        with (patch('src.diagnostics.os.replace', side_effect=OSError('rename failed'))
+              if case == 'export_failure' else nullcontext()):
+            archive_path = diagnostics.export_zip(tmp_path)
+        diagnostics.log_summary(record_path=record_path, archive_path=archive_path)
+    messages = [record.getMessage() for record in caplog.records]
+    summaries = [message for message in messages if 'analysis outcome=' in message]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert messages[-1] == summary
+    assert f'[run {diagnostics.run_id}]' in summary
+    assert f'outcome={original_outcome} duration=' in summary
+    assert f"completeness={diagnostics.record['completeness_status'] or 'unavailable'}" in summary
+    assert f"warnings={len(diagnostics.record['warnings'])}" in summary
+    assert f"record={record_path or 'unavailable'} zip={archive_path or 'unavailable'}" in summary
+    assert (record_path is None) == (case == 'storage_failure')
+    assert (archive_path is None) == (case == 'export_failure')
+    assert diagnostics.record['outcome'] == original_outcome
+    created = [message for message in messages if 'diagnostic ZIP created' in message]
+    if archive_path is None:
+        assert not created
+        assert any('diagnostic ZIP export failed' in message for message in messages)
+    else:
+        assert archive_path.is_file()
+        assert created == [f'[run {diagnostics.run_id}] diagnostic ZIP created path={archive_path}']
+        assert messages[-2] == created[0]
+        with ZipFile(archive_path) as archive:
+            log = archive.read('analysis.log').decode()
+        assert 'diagnostic ZIP created' not in log
+        assert 'analysis outcome=' not in log
+        assert any(summary in line for line in diagnostics._log_entries)
 
 
 def test_logs_are_run_local_and_archives_snapshot_the_original_analysis(tmp_path):

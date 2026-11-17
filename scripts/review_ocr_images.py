@@ -105,8 +105,9 @@ def main():
             decoded = cv2.imdecode(np.frombuffer(saved, np.uint8), cv2.IMREAD_UNCHANGED)
             np.testing.assert_array_equal(decoded, candidate)
         diagnostics.finish()
-        diagnostics.persist(destination)
-        diagnostics.export_zip(destination)
+        record_path = diagnostics.persist(destination)
+        archive_path = diagnostics.export_zip(destination)
+        diagnostics.log_summary(record_path=record_path, archive_path=archive_path)
         (destination / 'gallery.html').write_text(gallery(diagnostics), encoding='utf-8')
     (root / 'REVIEW.md').write_text(
         '# Plan 3 review checkpoint\n\n'

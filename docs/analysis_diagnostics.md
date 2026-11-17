@@ -69,6 +69,12 @@ shutdown. Later review edits do not change the original analysis archive.
 Logging is collector-owned, so concurrent runs do not capture each other's
 messages. It does not collect arbitrary third-party engine stdout or global logs.
 
+The terminal logs successful ZIP creation after the archive is finalized, then
+one completion summary with outcome, duration, completeness status, warning count,
+and JSON/ZIP paths (or `unavailable`). The warning count counts recorded warning
+entries. These final messages remain in the collector's retained log but are not
+inside the ZIP's `analysis.log`, which was captured before export completed.
+
 ## Validation and review checkpoint
 
 ```sh

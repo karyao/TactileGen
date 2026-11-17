@@ -174,6 +174,7 @@ class AnalysisDiagnostics:
         item = self.record["stages"][name]
         item["started_at"] = _utc_now()
         started = time.monotonic()
+        self.log("stage=%s outcome=started", name)
         try:
             yield
         except Exception as exc:
@@ -348,6 +349,7 @@ class AnalysisDiagnostics:
                     archive.writestr(name, data)
             operation = "archive finalization"
             os.replace(temporary_path, path)
+            self.log("diagnostic ZIP created path=%s", path)
             return path
         except Exception as exc:
             self.export_error = f"{operation}: {type(exc).__name__}: {exc}"
@@ -384,6 +386,12 @@ class AnalysisDiagnostics:
                     temporary_path.unlink(missing_ok=True)
                 except OSError:
                     pass
-        self.log("analysis outcome=%s duration=%.3fs record=%s", self.record["outcome"],
-                 self.record["duration_seconds"], path or "unavailable")
         return path
+
+    def log_summary(self, *, record_path: Path | None, archive_path: Path | None) -> None:
+        """Summarize a finished analysis after persistence and export complete."""
+        self.log("analysis outcome=%s duration=%.3fs completeness=%s warnings=%d record=%s zip=%s",
+                 self.record["outcome"], self.record["duration_seconds"],
+                 self.record["completeness_status"] or "unavailable",
+                 len(self.record["warnings"]), record_path or "unavailable",
+                 archive_path or "unavailable")
