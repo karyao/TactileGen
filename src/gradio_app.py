@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import html
 import json
 import logging
 import re
 import tempfile
 import uuid
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -18,12 +20,14 @@ from src.borealis import BOREALIS_CSS, borealis_theme
 from src.contract_io import write_ocr_frame
 from src.contracts import (
     ChartInterpretationError,
+    TEXT_ROLES,
     DetectionFrame,
     LegendMappingFrame,
     OCRFrame,
     VerticalBarSpec,
 )
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
+from src.diagnostics import AnalysisDiagnostics, configure_analysis_logging
 from src.legend_matcher import match_legend_to_bars
 from src.ocr import run_ocr
 from src.presentation import (
@@ -95,6 +99,7 @@ class AnalysisResult:
     spec: VerticalBarSpec | None = None
     completeness: Completeness | None = None
     reconstruction_warning: str | None = None
+    diagnostics: AnalysisDiagnostics | None = None
 
 
 @dataclass(frozen=True)
@@ -435,34 +440,75 @@ def analyze_image(
     ocr_backend=None,
     device: str | None = None,
     progress: Callable[..., None] | None = None,
+    diagnostics: AnalysisDiagnostics | None = None,
 ) -> AnalysisResult:
     """Validate, detect, recognize text, summarize, and annotate one chart."""
     import cv2
 
-    _report_progress(progress, 0.05, "Validating image")
-    path, image = decode_upload(image_path)
-    _report_progress(progress, 0.20, "Detecting chart elements")
-    frame = run_detection(
-        model, path, confidence=confidence, nms_iou=nms_iou, device=device
-    )
-    if image.shape[:2] != (frame.height, frame.width):
-        raise ValueError("image dimensions do not match the detection frame")
+    def stage(name, **kwargs):
+        return diagnostics.stage(name, **kwargs) if diagnostics is not None else nullcontext()
+
+    with stage("validation"):
+        _report_progress(progress, 0.05, "Validating image")
+        path, image = decode_upload(image_path)
+        if diagnostics is not None:
+            diagnostics.record["image"] = {"name": path.name, "width": image.shape[1], "height": image.shape[0]}
+    with stage("detection"):
+        _report_progress(progress, 0.20, "Detecting chart elements")
+        frame = run_detection(
+            model, path, confidence=confidence, nms_iou=nms_iou, device=device
+        )
+        if image.shape[:2] != (frame.height, frame.width):
+            raise ValueError("image dimensions do not match the detection frame")
+        if diagnostics is not None:
+            diagnostics.snapshot("detections", frame)
+            diagnostics.source_images(image, frame)
+            diagnostics.record["counts"].update(
+                detections=len(frame.detections),
+                text_regions=sum(d.role in TEXT_ROLES for d in frame.detections),
+            )
     _report_progress(progress, 0.60, "Reading detected text")
     ocr_frame = None
     ocr_warning = None
     try:
-        backend = ocr_backend if ocr_backend is not None else TesseractBackend()
-        ocr_frame = run_ocr(image, frame, backend, language)
+        with stage("ocr"):
+            backend = ocr_backend if ocr_backend is not None else TesseractBackend()
+            ocr_frame = run_ocr(
+                image, frame, backend, language,
+                **({"diagnostics": diagnostics} if diagnostics is not None else {}),
+            )
+            if diagnostics is not None:
+                diagnostics.snapshot("ocr", ocr_frame)
+                readable = sum(bool(r.text.strip()) for r in ocr_frame.regions)
+                diagnostics.record["counts"].update(
+                    ocr_returned_regions=len(ocr_frame.regions), ocr_readable=readable,
+                    ocr_empty=len(ocr_frame.regions) - readable,
+                )
+                diagnostics.log(
+                    "ocr text_regions=%s returned=%s readable=%s empty=%s",
+                    diagnostics.record["counts"]["text_regions"], len(ocr_frame.regions),
+                    readable, len(ocr_frame.regions) - readable,
+                )
     except Exception:
-        LOGGER.exception("Chart text recognition failed")
+        if diagnostics is not None:
+            diagnostics.warning("ocr_unavailable", "ocr")
+        else:
+            LOGGER.exception("Chart text recognition failed")
         ocr_warning = OCR_WARNING
     _report_progress(progress, 0.80, "Matching legend series")
     legend_mapping = None
     legend_warning = None
     try:
-        legend_mapping = match_legend_to_bars(image, frame, ocr_frame)
+        with stage("legend_matching"):
+            legend_mapping = match_legend_to_bars(image, frame, ocr_frame,
+                **({"diagnostics": diagnostics} if diagnostics is not None else {}))
+            if diagnostics is not None:
+                diagnostics.snapshot("legend", legend_mapping)
     except Exception:
-        LOGGER.exception("Legend-to-bar matching failed")
+        if diagnostics is not None:
+            diagnostics.warning("legend_matching_unavailable", "legend_matching")
+        else:
+            LOGGER.exception("Legend-to-bar matching failed")
         legend_warning = LEGEND_WARNING
     _report_progress(progress, 0.90, "Reconstructing chart values")
     spec = None
@@ -470,31 +516,56 @@ def analyze_image(
     reconstruction_warning = None
     if ocr_frame is None or legend_mapping is None:
         reconstruction_warning = RECONSTRUCTION_WARNING
+        if diagnostics is not None:
+            missing = [name for name, value in (("ocr", ocr_frame),
+                       ("legend_matching", legend_mapping)) if value is None]
+            diagnostics.skip("reconstruction", "unavailable dependencies: " + ", ".join(missing))
+            diagnostics.warning("reconstruction_unavailable", "reconstruction")
     else:
         try:
-            reconstructed = reconstruct_vbar(
-                frame, ocr_frame, image, legend_mapping=legend_mapping
-            )
-            candidate = replace(
-                reconstructed,
-                flags=[*reconstructed.flags, *cut_off_flags(frame, image)],
-            )
-            assessment = check_completeness(candidate)
-            spec = candidate
-            completeness = assessment
+            with stage("reconstruction", blocked_errors=(ChartInterpretationError,)):
+                reconstructed = reconstruct_vbar(
+                    frame, ocr_frame, image, legend_mapping=legend_mapping,
+                    **({"diagnostics": diagnostics} if diagnostics is not None else {})
+                )
+                candidate = replace(
+                    reconstructed,
+                    flags=[*reconstructed.flags, *cut_off_flags(
+                        frame, image,
+                        **({"diagnostics": diagnostics} if diagnostics is not None else {}))],
+                )
+                if diagnostics is not None:
+                    diagnostics.snapshot("spec", candidate)
+                    diagnostics.record["spec_flags"] = list(candidate.flags)
+                    for flag in candidate.flags:
+                        diagnostics.warning(flag.split(":", 1)[0], "reconstruction", flag=flag)
+                assessment = check_completeness(
+                    candidate, **({"diagnostics": diagnostics} if diagnostics is not None else {}))
+                spec = candidate
+                completeness = assessment
         except ChartInterpretationError as exc:
+            if diagnostics is not None:
+                diagnostics.warning("chart_interpretation_blocked", "reconstruction")
             completeness = completeness_from_error(exc, frame)
         except Exception:
-            LOGGER.exception("Chart reconstruction failed")
+            if diagnostics is not None:
+                diagnostics.warning("reconstruction_unavailable", "reconstruction")
+            else:
+                LOGGER.exception("Chart reconstruction failed")
             reconstruction_warning = RECONSTRUCTION_WARNING
-    _report_progress(progress, 0.95, "Rendering annotations")
-    overlay = render_detection_overlay(image, frame, legend_mapping=legend_mapping)
-    rgb_overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-    _report_progress(progress, 1.0, "Analysis result ready")
+    if diagnostics is not None and completeness is not None:
+        diagnostics.record["completeness_status"] = completeness.status
+        diagnostics.snapshot("completeness", completeness)
+    with stage("presentation"):
+        _report_progress(progress, 0.95, "Rendering annotations")
+        overlay = render_detection_overlay(image, frame, legend_mapping=legend_mapping)
+        if diagnostics is not None:
+            diagnostics.image("annotated.png", overlay)
+        rgb_overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+        summary = summarize_detections(frame, ocr=ocr_frame, legend_mapping=legend_mapping)
+        _report_progress(progress, 1.0, "Analysis result ready")
     return AnalysisResult(
-        summary=summarize_detections(
-            frame, ocr=ocr_frame, legend_mapping=legend_mapping
-        ),
+        summary=summary,
         overlay_rgb=rgb_overlay,
         detection_count=len(frame.detections),
         detection_frame=frame,
@@ -505,6 +576,7 @@ def analyze_image(
         spec=spec,
         completeness=completeness,
         reconstruction_warning=reconstruction_warning,
+        diagnostics=diagnostics,
     )
 
 
@@ -527,6 +599,7 @@ def _spec_download_path(
 def build_app(model, *, ocr_backend=None, device: str | None = None):
     """Build the interface around an already-loaded model without launching it."""
     gr = _import_gradio()
+    configure_analysis_logging()
     backend = ocr_backend if ocr_backend is not None else TesseractBackend()
     artifacts = tempfile.TemporaryDirectory(prefix="tactilegen-gradio-ocr-")
     atexit.register(artifacts.cleanup)
@@ -615,6 +688,8 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 value=alert_message(error_message) if error_message else "",
                 visible=error_message is not None,
             ),
+            gr.update(value=None, visible=False),
+            gr.update(value="", visible=False),
         )
 
     def ready_results():
@@ -633,7 +708,14 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
         )
 
     def analyze_event(image_path, confidence, nms_iou, language, progress=gr.Progress()):
+        diagnostics = AnalysisDiagnostics(settings={
+            "confidence": confidence, "nms_iou": nms_iou,
+            "device": device, "language": language,
+        })
+        failed = False
+        updates = None
         try:
+            diagnostics.capture_metadata(model, backend, language)
             result = analyze_image(
                 model,
                 image_path,
@@ -643,59 +725,82 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                 ocr_backend=backend,
                 device=device,
                 progress=progress,
+                diagnostics=diagnostics,
             )
-            ocr_count = len(result.ocr_frame.regions) if result.ocr_frame is not None else None
-            rows = (
-                ocr_rows(result.detection_frame, result.ocr_frame)
-                if result.ocr_frame is not None else []
-            )
-            download = (
-                _download_path(artifact_root, image_path, result.ocr_frame)
-                if result.ocr_frame is not None else None
-            )
-            mapping_rows = (
-                legend_rows(result.detection_frame, result.legend_mapping)
-                if result.legend_mapping is not None else []
-            )
-            show_mapping = result.legend_mapping is not None and bool(mapping_rows)
-            spec_data = asdict(result.spec) if result.spec is not None else None
-            review = (
-                build_review_model(result.spec, result.completeness)
-                if result.spec is not None and result.completeness is not None else None
-            )
-            spec_download = (
-                _spec_download_path(artifact_root, image_path, result.spec)
-                if result.spec is not None else None
-            )
-            return result_updates(
-                complete_status(result.detection_count, ocr_count),
-                summary=result.summary,
-                overlay=result.overlay_rgb,
-                ocr_table=rows if result.ocr_frame is not None else None,
-                ocr_download_path=download,
-                legend_table=mapping_rows if show_mapping else None,
-                completeness_text=(
-                    completeness_summary(result.completeness)
-                    if result.completeness is not None else None
-                ),
-                review_model=review,
-                generate_enabled=(
-                    result.completeness is not None
-                    and result.completeness.status != "cannot_build"
-                ),
-                spec_json=spec_data,
-                spec_download_path=spec_download,
-                ocr_warning=result.ocr_warning,
-                legend_warning=result.legend_warning,
-                reconstruction_warning=result.reconstruction_warning,
-            )
+            with diagnostics.stage("result_preparation"):
+                ocr_count = len(result.ocr_frame.regions) if result.ocr_frame is not None else None
+                rows = (
+                    ocr_rows(result.detection_frame, result.ocr_frame)
+                    if result.ocr_frame is not None else []
+                )
+                download = (
+                    _download_path(artifact_root, image_path, result.ocr_frame)
+                    if result.ocr_frame is not None else None
+                )
+                mapping_rows = (
+                    legend_rows(result.detection_frame, result.legend_mapping)
+                    if result.legend_mapping is not None else []
+                )
+                show_mapping = result.legend_mapping is not None and bool(mapping_rows)
+                spec_data = asdict(result.spec) if result.spec is not None else None
+                review = (
+                    build_review_model(result.spec, result.completeness)
+                    if result.spec is not None and result.completeness is not None else None
+                )
+                spec_download = (
+                    _spec_download_path(artifact_root, image_path, result.spec)
+                    if result.spec is not None else None
+                )
+                updates = result_updates(
+                    complete_status(result.detection_count, ocr_count),
+                    summary=result.summary,
+                    overlay=result.overlay_rgb,
+                    ocr_table=rows if result.ocr_frame is not None else None,
+                    ocr_download_path=download,
+                    legend_table=mapping_rows if show_mapping else None,
+                    completeness_text=(
+                        completeness_summary(result.completeness)
+                        if result.completeness is not None else None
+                    ),
+                    review_model=review,
+                    generate_enabled=(
+                        result.completeness is not None
+                        and result.completeness.status != "cannot_build"
+                    ),
+                    spec_json=spec_data,
+                    spec_download_path=spec_download,
+                    ocr_warning=result.ocr_warning,
+                    legend_warning=result.legend_warning,
+                    reconstruction_warning=result.reconstruction_warning,
+                )
         except UploadValidationError as exc:
-            LOGGER.info("Rejected upload: %s", exc)
+            failed = True
+            diagnostics.fail(exc)
+            diagnostics.warning("upload_rejected", "validation")
             message = str(exc)
-        except Exception:
-            LOGGER.exception("Chart analysis failed")
+        except Exception as exc:
+            failed = True
+            diagnostics.fail(exc)
+            diagnostics.warning("analysis_failed", "analysis")
             message = "Analysis failed. Check the terminal and try another image."
-        return result_updates(ready_status(), error_message=message)
+        finally:
+            diagnostics.finish(failed=failed)
+            record_path = diagnostics.persist(artifact_root)
+            diagnostic_path = diagnostics.export_zip(artifact_root)
+            diagnostics.log_summary(record_path=record_path, archive_path=diagnostic_path)
+        if updates is None:
+            updates = result_updates(ready_status(), error_message=message)
+        diagnostic_text = f"Analysis run: `{diagnostics.run_id}`"
+        if diagnostic_path is None:
+            diagnostic_text += " — Diagnostic export failed. Check the terminal for details."
+            if diagnostics.export_error:
+                detail = html.escape(diagnostics.export_error).replace("\n", " ")
+                diagnostic_text += " " + re.sub(r"([\\`*_{}\[\]()#+.!|>])", r"\\\1", detail)
+        else:
+            diagnostic_text += " — Extract the ZIP and open **report.md** to follow findings to their evidence."
+        return (*updates[:-2],
+                gr.update(value=diagnostic_path, visible=diagnostic_path is not None),
+                gr.update(value=diagnostic_text, visible=True))
 
     def update_review_event(model, rows):
         if model is None:
@@ -1014,8 +1119,14 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         "Analysis details", open=False, elem_classes="borealis-details",
                     ):
                         gr.Markdown(
-                            "Inspect detected regions, recognized text, and legend mappings.",
+                            "Inspect detected regions, recognized text, and legend mappings. "
+                            "For diagnostic explanations, extract the diagnostics ZIP and open report.md.",
                             elem_classes="borealis-helper",
+                        )
+                        diagnostics_info = gr.Markdown("", visible=False)
+                        diagnostics_download = gr.DownloadButton(
+                            "Download analysis diagnostics (ZIP)", value=None,
+                            visible=False, variant="secondary",
                         )
                         summary_output = gr.Markdown(
                             "",
@@ -1075,38 +1186,6 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         )
 
 
-        image_input.change(
-            ready_results,
-            outputs=[
-                status_output,
-                empty_output,
-                summary_output,
-                annotated_output,
-                ocr_output,
-                ocr_download,
-                legend_output,
-                completeness_output,
-                review_state,
-                review_panel,
-                review_fields,
-                review_values,
-                review_error_output,
-                generate_button,
-                spec_output,
-                spec_download,
-                generation_gallery,
-                generation_report_output,
-                generation_download,
-                generation_error_output,
-                ocr_warning_output,
-                legend_warning_output,
-                reconstruction_warning_output,
-                error_output,
-            ],
-            queue=False,
-            api_visibility="private",
-        )
-
         controls = [
             image_input, confidence, nms_iou, language, analyze_button, clear_button
         ]
@@ -1135,7 +1214,15 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             legend_warning_output,
             reconstruction_warning_output,
             error_output,
+            diagnostics_download,
+            diagnostics_info,
         ]
+        image_input.change(
+            ready_results,
+            outputs=result_components,
+            queue=False,
+            api_visibility="private",
+        )
         start = analyze_button.click(
             begin_analysis,
             outputs=[*controls, *result_components],

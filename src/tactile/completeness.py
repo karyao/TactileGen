@@ -130,17 +130,30 @@ YEAR_SPREAD = 50
 SHORT_CATEGORY_MEDIAN = 4
 
 
-def _suspicious_categories(spec: VerticalBarSpec) -> list[tuple[int, str]]:
+def _suspicious_categories(spec: VerticalBarSpec, *, diagnostics=None) -> list[tuple[int, str]]:
     """Categories that read cleanly but look like OCR misreads, skipping any the user supplied."""
     supplied = {int(f.split(":", 1)[1]) for f in spec.flags if f.startswith("category_supplied:")}
     cats = spec.categories
     found: list[tuple[int, str]] = []
-    if cats and statistics.median(len(c.strip()) for c in cats) >= SHORT_CATEGORY_MEDIAN:
+    median_length = statistics.median(len(c.strip()) for c in cats) if cats else None
+    if cats and median_length >= SHORT_CATEGORY_MEDIAN:
+        if diagnostics is not None:
+            for j, c in enumerate(cats):
+                _finding(diagnostics, "single_character_category", f"category[{j}]",
+                    text=c, length=len(c.strip()), median_length=median_length,
+                    median_length_threshold=SHORT_CATEGORY_MEDIAN,
+                    triggered=len(c.strip()) == 1, supplied_exemption=j in supplied)
         found += [(j, f"Category {j} ({c!r}) is a single character but the other categories "
                       "are longer, so it was probably misread.")
                   for j, c in enumerate(cats) if len(c.strip()) == 1]
     if cats and all(re.fullmatch(r"\d{4}", c) for c in cats):
         middle = statistics.median(int(c) for c in cats)
+        if diagnostics is not None:
+            for j, c in enumerate(cats):
+                _finding(diagnostics, "year_category_outlier", f"category[{j}]",
+                    text=c, median_year=middle, distance=abs(int(c) - middle),
+                    threshold=YEAR_SPREAD, triggered=abs(int(c) - middle) > YEAR_SPREAD,
+                    supplied_exemption=j in supplied)
         found += [(j, f"Category {j} ({c!r}) is more than {YEAR_SPREAD} years from the "
                       f"median year ({middle:g}), so it was probably misread.")
                   for j, c in enumerate(cats) if abs(int(c) - middle) > YEAR_SPREAD]
@@ -155,7 +168,7 @@ TOP_EDGE_PIXELS = 2   # a y-axis title box starting this close to the top is cut
 _DARK = 128           # greyscale value below which a pixel is ink
 
 
-def cut_off_flags(frame, image) -> list[str]:
+def cut_off_flags(frame, image, *, diagnostics=None) -> list[str]:
     """Flags for titles the image edge cuts off: ``title_cut_off``, ``y_axis_title_cut_off``.
 
     ``image`` is a BGR array as ``cv2.imread`` returns it. Uses the same title
@@ -169,11 +182,25 @@ def cut_off_flags(frame, image) -> list[str]:
     if title is not None:
         gray = image[:, :, :3] @ np.array([0.114, 0.587, 0.299])
         rows = gray[int(title.box.y1):math.ceil(title.box.y2), -EDGE_COLUMNS:]
-        if int((rows < _DARK).sum()) >= EDGE_INK_PIXELS:
+        ink_count = int((rows < _DARK).sum())
+        if diagnostics is not None:
+            diagnostics.event("reconstruction", "title_cutoff_check", field="title",
+                detection_id=title.id, dark_pixel_count=ink_count,
+                dark_threshold=_DARK, edge_columns=EDGE_COLUMNS,
+                row_bounds=[int(title.box.y1), math.ceil(title.box.y2)],
+                required_ink_pixels=EDGE_INK_PIXELS, triggered=ink_count >= EDGE_INK_PIXELS,
+                flag="title_cut_off" if ink_count >= EDGE_INK_PIXELS else None)
+        if ink_count >= EDGE_INK_PIXELS:
             flags.append("title_cut_off")
     y_title = _best(roles.get("y_axis_title", []))
-    if y_title is not None and y_title.box.y1 <= TOP_EDGE_PIXELS:
-        flags.append("y_axis_title_cut_off")
+    if y_title is not None:
+        if diagnostics is not None:
+            diagnostics.event("reconstruction", "title_cutoff_check", field="y_axis_title",
+                detection_id=y_title.id, y1=y_title.box.y1, threshold=TOP_EDGE_PIXELS,
+                triggered=y_title.box.y1 <= TOP_EDGE_PIXELS,
+                flag="y_axis_title_cut_off" if y_title.box.y1 <= TOP_EDGE_PIXELS else None)
+        if y_title.box.y1 <= TOP_EDGE_PIXELS:
+            flags.append("y_axis_title_cut_off")
     return flags
 
 
@@ -187,13 +214,16 @@ def _unreadable_categories(spec: VerticalBarSpec) -> list[int]:
     return sorted(j for j in marked if j < len(spec.categories))
 
 
-def _unencodable(text: str) -> str | None:
+def _unencodable(text: str, *, diagnostics=None, field=None) -> str | None:
     """Characters the layout's braille encoder rejects in ``text``, or None if it encodes."""
     try:
-        to_braille(text)
+        to_braille(text, **({"diagnostics": diagnostics, "field": field} if diagnostics is not None else {}))
+        _finding(diagnostics, "braille_encoding", field, text=text, triggered=False)
         return None
     except ValueError as exc:
         bad = sorted({ch for ch in text if not ch.isspace() and _rejects(ch)})
+        _finding(diagnostics, "braille_encoding", field, text=text, triggered=True,
+                 rejected_characters=bad, error=str(exc))
         return " ".join(repr(ch) for ch in bad) if bad else str(exc)
 
 
@@ -205,7 +235,25 @@ def _rejects(char: str) -> bool:
         return True
 
 
-def check_completeness(spec: VerticalBarSpec) -> Completeness:
+def _finding(diagnostics, rule, field=None, **evidence):
+    if diagnostics is None:
+        return None
+    source = diagnostics.field_evidence(field) if field else None
+    links = list(evidence.pop("evidence_ids", source["evidence_ids"] if source else []))
+    if evidence.get("flag"):
+        links.extend(diagnostics.evidence_for(evidence["flag"].split(":", 1)[0], flag=evidence["flag"]))
+    if rule == "braille_encoding":
+        links.extend([event["event_id"] for event in diagnostics.record["events"]
+                      if event["code"] == "braille_input" and event.get("field") == field][-1:])
+    if rule == "missing_item":
+        links.extend(event["event_id"] for event in diagnostics.record["events"]
+                     if event["code"] == "completeness_check" and event.get("field") == field
+                     and event.get("triggered"))
+    return diagnostics.event("completeness", "completeness_check", rule=rule, field=field,
+        source=source, evidence_ids=list(dict.fromkeys(links)), **evidence)
+
+
+def check_completeness(spec: VerticalBarSpec, *, diagnostics=None) -> Completeness:
     blockers: list[str] = []
     forceable = True
     for flag in spec.flags:
@@ -213,6 +261,8 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
         if message:
             blockers.append(f"{message} ({_flag_name(flag)}) {NEXT_STEPS}")
             forceable = forceable and _flag_name(flag) in FORCEABLE_FLAGS
+            _finding(diagnostics, "blocking_flag", flag=flag, triggered=True,
+                     evidence_ids=diagnostics.evidence_for(_flag_name(flag), flag=flag) if diagnostics else [])
     if not spec.categories:
         blockers.append(f"No category labels were read. {NEXT_STEPS}")
         forceable = False
@@ -238,12 +288,18 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
         if name == "legend_order_differs":
             notes.append("The legend order differs from the left-to-right bar order, so series "
                          "with bars keep the bar order and series with no visible bars follow.")
+        if name in {"y_ticks_dropped", "y_ticks_not_arithmetic", "title_touches_right_edge",
+                    "legend_entry_skipped"}:
+            _finding(diagnostics, "flag_note", flag=flag, triggered=True,
+                evidence_ids=diagnostics.evidence_for(name, flag=flag) if diagnostics else [])
     bar_less = [series.name for series in spec.series if series.no_visible_bars]
     if bar_less:
         notes.append("No bars are visible for: " + ", ".join(bar_less)
                      + " (they are listed in the key).")
 
     if blockers:
+        _finding(diagnostics, "blocked_early_return", triggered=True,
+                 blockers=blockers, skipped_checks=["missing_text", "suspicious_categories", "braille"])
         return Completeness(CANNOT_BUILD, notes, [], blockers, forceable)
 
     missing: list[MissingItem] = []
@@ -258,18 +314,28 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
     elif "y_axis_title_cut_off" in spec.flags:
         missing.append(MissingItem("y_axis_title", CUT_OFF_REASON.format(what="y-axis title"),
                                    "--y-title"))
+    if diagnostics is not None:
+        for item in missing:
+            missing_flag = item.field + "_missing"
+            is_missing = getattr(spec, item.field) is None or missing_flag in spec.flags
+            cause = missing_flag if is_missing else item.field + "_cut_off"
+            _finding(diagnostics, "missing_or_cutoff_title", item.field, triggered=True,
+                     reason=item.reason, flag=cause if cause in spec.flags else None)
     for j in _unreadable_categories(spec):
+        _finding(diagnostics, "unreadable_category", f"category[{j}]", triggered=True,
+                 text=spec.categories[j], confidence_marker=f"category[{j}]" in spec.confidence)
         shown = spec.categories[j] or "(empty)"
         missing.append(MissingItem(
             f"category[{j}]", f"Category {j} was unreadable (read as {shown!r}).",
             f"--category {j}=TEXT"))
     listed_now = {m.field for m in missing}
-    for j, reason in _suspicious_categories(spec):
+    for j, reason in _suspicious_categories(spec, diagnostics=diagnostics):
         if f"category[{j}]" not in listed_now:
             missing.append(MissingItem(f"category[{j}]", reason, f"--category {j}=TEXT"))
     if len(spec.series) > 1:
         for i, series in enumerate(spec.series):
             if not series.name:
+                _finding(diagnostics, "missing_series_name", f"series_name[{i}]", triggered=True)
                 colour = f" (colour {series.source_color})" if series.source_color else ""
                 missing.append(MissingItem(
                     f"series_name[{i}]", f"Series {i}{colour} has no legend name.",
@@ -288,11 +354,18 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
     for name, label, cli_flag, text in strings:
         if name in listed or not text:
             continue
-        bad = _unencodable(text)
+        bad = _unencodable(text, diagnostics=diagnostics, field=name)
         if bad:
             missing.append(MissingItem(
                 name, f"{label} ({text!r}) has characters that cannot be written in "
                       f"braille: {bad}. It was probably misread.", cli_flag))
+    if diagnostics is not None:
+        for item in missing:
+            _finding(diagnostics, "missing_item", item.field, triggered=True,
+                     reason=item.reason, cli_flag=item.cli_flag)
+        diagnostics.event("completeness", "completeness_outcome",
+                          status=NEEDS_INPUT if missing else READY,
+                          missing_fields=[item.field for item in missing])
     return Completeness(NEEDS_INPUT if missing else READY, notes, missing, [], False)
 
 

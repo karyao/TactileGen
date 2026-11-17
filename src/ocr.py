@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
@@ -22,6 +22,9 @@ from src.contracts import (
     RecognizedText,
 )
 from src.contract_io import load_detection_frame, write_ocr_frame
+
+if TYPE_CHECKING:
+    from src.diagnostics import AnalysisDiagnostics
 
 
 @dataclass(frozen=True)
@@ -68,12 +71,16 @@ def run_ocr(
     frame: DetectionFrame,
     backend: OCRBackend,
     language: str,
+    *,
+    diagnostics: AnalysisDiagnostics | None = None,
 ) -> OCRFrame:
     """Recognize all detected text roles in their original detection order.
 
     Backends receive a read-only view of the complete image and the authoritative
     detection. They must not return geometry; boxes remain in ``DetectionFrame``.
     ``None`` and blank text are treated as an attempted but unreadable region.
+    Optional diagnostics capture built-in batch attempts; legacy backends retain
+    their original call signatures and expose only their adapter results.
     """
     if not isinstance(frame, DetectionFrame):
         raise TypeError("frame must be a DetectionFrame")
@@ -84,39 +91,115 @@ def run_ocr(
     if not callable(recognize):
         raise TypeError("backend must provide a callable recognize method")
 
+    if diagnostics is not None:
+        diagnostics.source_images(image, frame)
+
     readonly_image = image.view()
     readonly_image.setflags(write=False)
     text_detections = tuple(
         detection for detection in frame.detections if detection.role in TEXT_ROLES
     )
     recognize_many = getattr(backend, "recognize_many", None)
-    if callable(recognize_many):
-        results = recognize_many(readonly_image, text_detections, language=language)
+    trace = None
+    records = []
+    if diagnostics is not None:
+        from src.ocr_trace import BatchTrace, adapter_evidence, trace_record
+        trace = trace_record(diagnostics)
+        for detection in text_detections:
+            item = {"detection_id": detection.id, "submission": "not_submitted",
+                    "adapter_output_availability": "unavailable", "adapter_result": None,
+                    "application_result": None, "selected_attempt_id": None,
+                    "selection": "unresolved"}
+            trace["results"].append(item)
+            records.append(item)
+    traced_many = getattr(backend, "recognize_many_traced", None)
+    if diagnostics is not None and callable(traced_many):
+        batch_start = len(trace["batches"])
+        try:
+            results = traced_many(readonly_image, text_detections, language=language,
+                                  diagnostics=diagnostics)
+        finally:
+            batches = trace["batches"][batch_start:]
+            for item in records:
+                item["batch_ids"] = [b["batch_id"] for b in batches]
+                attempts = [a for a in trace["attempts"]
+                            if a["batch_id"] in item["batch_ids"]
+                            and a["detection_id"] == item["detection_id"]]
+                if any(a["submission"] == "submitted" for a in attempts):
+                    item["submission"] = "submitted"
+                selected = next((a for a in attempts if a["selection"] == "selected"), None)
+                item["selected_attempt_id"] = selected["attempt_id"] if selected else None
+    elif callable(recognize_many):
+        if diagnostics is None:
+            results = recognize_many(readonly_image, text_detections, language=language)
+        else:
+            batch = BatchTrace(diagnostics, type(backend).__name__, text_detections, internal=False)
+            for item in records:
+                item.update(submission="submitted", batch_ids=[batch.batch["batch_id"]])
+            with batch.capture():
+                batch.batch["operation"] = "recognize_many"
+                results = recognize_many(readonly_image, text_detections, language=language)
+                batch.raw([adapter_evidence(r) for r in results]
+                          if isinstance(results, (list, tuple)) else adapter_evidence(results))
+                # A returned batch is successful only after its response passes
+                # the same contract checks used by callers without diagnostics.
+                return _finish_ocr(frame, text_detections, results, batched=True,
+                                   records=records)
+    else:
+        results = []
+        for index, detection in enumerate(text_detections):
+            if diagnostics is None:
+                result = recognize(readonly_image, detection, language=language)
+            else:
+                batch = BatchTrace(diagnostics, type(backend).__name__, (detection,), internal=False)
+                records[index].update(submission="submitted", batch_ids=[batch.batch["batch_id"]])
+                with batch.capture():
+                    batch.batch["operation"] = "recognize"
+                    result = recognize(readonly_image, detection, language=language)
+                    batch.raw(adapter_evidence(result))
+                records[index].update(adapter_output_availability="available",
+                                      adapter_result=adapter_evidence(result))
+            results.append(result)
+
+    return _finish_ocr(
+        frame, text_detections, results,
+        batched=callable(recognize_many) or (diagnostics is not None and callable(traced_many)),
+        records=records if diagnostics is not None else None,
+    )
+
+
+def _finish_ocr(frame, text_detections, results, *, batched, records=None) -> OCRFrame:
+    """Validate adapter responses and publish application results on success."""
+    if batched:
         if not isinstance(results, (tuple, list)) or len(results) != len(text_detections):
             raise TypeError(
                 "backend recognize_many must return one OCRBackendResult or None per detection"
             )
-    else:
-        results = [
-            recognize(readonly_image, detection, language=language)
-            for detection in text_detections
-        ]
+    if records is not None:
+        from src.ocr_trace import adapter_evidence
+
+        for item, result in zip(records, results, strict=True):
+            item.update(adapter_output_availability="available", adapter_result=adapter_evidence(result))
 
     regions = []
     for detection, result in zip(text_detections, results, strict=True):
         if result is None:
             regions.append(RecognizedText(detection.id, "", 0.0))
-            continue
-        if not isinstance(result, OCRBackendResult):
-            raise TypeError("backend recognize must return OCRBackendResult or None")
-        if not isinstance(result.text, str):
-            raise TypeError("backend result text must be a string")
-        if not result.text.strip():
-            regions.append(RecognizedText(detection.id, "", 0.0))
-            continue
-        regions.append(RecognizedText(detection.id, result.text, result.confidence))
-
-    return OCRFrame(frame.source_key, tuple(regions))
+        else:
+            if not isinstance(result, OCRBackendResult):
+                raise TypeError("backend recognize must return OCRBackendResult or None")
+            if not isinstance(result.text, str):
+                raise TypeError("backend result text must be a string")
+            if not result.text.strip():
+                regions.append(RecognizedText(detection.id, "", 0.0))
+            else:
+                regions.append(RecognizedText(detection.id, result.text, result.confidence))
+    ocr_frame = OCRFrame(frame.source_key, tuple(regions))
+    if records is not None:
+        for item, result, region in zip(records, results, regions, strict=True):
+            item["selection"] = "unreadable" if result is None else "returned"
+            item["application_result"] = {"text": region.text, "confidence": region.confidence}
+    return ocr_frame
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

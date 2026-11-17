@@ -74,6 +74,41 @@ With the Tesseract executable installed, this starts the frontend with YOLO
 detection and Tesseract OCR. Gradio remains optional for users who only need
 the command-line detector.
 
+Every Analyze chart event writes a temporary diagnostic JSON record, including
+rejected uploads and failed analyses. Terminal summaries include a unique run
+ID, stage outcomes, OCR totals, warning codes, and the record path:
+
+```text
+INFO [run <UUID>] analysis outcome=succeeded duration=0.123s record=/.../diagnostics/<UUID>.json
+```
+
+Records contain settings, available model/backend and package metadata, stage
+timings, completeness status, and exception tracebacks. OCR totals distinguish
+readable and empty results; unavailable counts remain null after OCR failure.
+Partial results use `completed_with_warnings`, while fatal analysis errors use
+`failed`. Files remain available until the app exits.
+
+To download and inspect an analysis:
+
+1. After selecting **Analyze chart**, expand **Analysis details** and select
+   **Download analysis diagnostics (ZIP)**. Downloads are available for blocked
+   and failed analyses too, with the evidence collected before failure.
+2. Save and extract the entire ZIP before clearing the form or starting another
+   analysis, which resets the displayed download.
+3. Open `report.md` in a Markdown viewer. Start with **Findings**, then follow
+   decision evidence and **OCR attempts** links to inspect text, source crops,
+   recognition inputs, and selected results.
+
+The archive always includes `report.md`, `manifest.json`, `diagnostics.json`, and
+`analysis.log`, with stage outputs, annotated detections, and OCR images when
+available. It also retains `report.txt` for compatibility. The full uploaded
+image is omitted. The run ID matches the terminal logs.
+
+See the [diagnostics walkthrough](docs/analysis_diagnostics.md#download-and-read-diagnostics)
+for the full steps, or [start with setup](docs/analysis_diagnostics.md#start-the-app).
+The same guide includes archive contents and an optional developer reference. Those instructions generate
+new evidence without requiring any existing files under ignored `output/`.
+
 ## Read detected text with Tesseract
 
 The standalone OCR command uses the text labels and boxes in YOLO's detection

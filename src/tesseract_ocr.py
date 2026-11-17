@@ -14,6 +14,7 @@ import numpy as np
 from src.contracts import Detection
 from src.ocr import OCRBackendResult
 from src.ocr_crop import crop_text_region
+from src.ocr_trace import BatchTrace
 
 
 _LANGUAGE_EXPRESSION = re.compile(r"[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*")
@@ -52,22 +53,24 @@ def _grayscale(image: np.ndarray) -> np.ndarray:
 
 
 def _orientations(crop: np.ndarray, detection: Detection) -> tuple[np.ndarray, ...]:
+    return tuple(crop if rotation == 0 else cv2.rotate(
+        crop, cv2.ROTATE_90_CLOCKWISE if rotation == 90 else cv2.ROTATE_90_COUNTERCLOCKWISE
+    ) for rotation in _candidate_rotations(detection))
+
+
+def _candidate_rotations(detection: Detection) -> tuple[int, ...]:
     box = detection.box
-    if box.y2 - box.y1 <= _TALL_ASPECT_RATIO * (box.x2 - box.x1):
-        return (crop,)
-    return (
-        crop,
-        cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE),
-        cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE),
-    )
+    return ((0, 90, -90) if box.y2 - box.y1 > _TALL_ASPECT_RATIO * (box.x2 - box.x1)
+            else (0,))
 
 
 def _recognition_candidates(
-    image: np.ndarray, detection: Detection, neighbors: Sequence[Detection] = ()
+    image: np.ndarray, detection: Detection, neighbors: Sequence[Detection] = (),
+    *, metadata: list | None = None,
 ) -> tuple[np.ndarray, ...]:
     crop = crop_text_region(image, detection, neighbors)
     candidates = []
-    for oriented in _orientations(crop, detection):
+    for orientation_index, oriented in enumerate(_orientations(crop, detection)):
         gray = _grayscale(oriented)
         scale = min(_MAX_UPSCALE, max(1, math.ceil(_TARGET_TEXT_HEIGHT / gray.shape[0])))
         if scale > 1:
@@ -82,6 +85,10 @@ def _recognition_candidates(
             gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU
         )
         candidates.extend((gray, thresholded))
+        if metadata is not None:
+            for variant in ("grayscale", "otsu_binary"):
+                metadata.append({"rotation_degrees_clockwise": (0, 90, -90)[orientation_index],
+                                 "variant": variant, "upscale_factor": scale})
     return tuple(candidates)
 
 
@@ -119,6 +126,15 @@ class TesseractBackend:
             raise ValueError("timeout_seconds must be a positive finite number")
         self.timeout_seconds = float(timeout_seconds)
         self._installed_languages: frozenset[str] | None = None
+
+    def diagnostic_metadata(self, *, language: str) -> dict:
+        """Describe configuration without probing or starting Tesseract."""
+        return {
+            "language_behavior": "requested language expression forwarded to Tesseract",
+            "effective_language": language,
+            "config": _TESSERACT_CONFIG,
+            "timeout_seconds": self.timeout_seconds,
+        }
 
     def _languages(self, pytesseract) -> frozenset[str]:
         if self._installed_languages is None:
@@ -190,8 +206,24 @@ class TesseractBackend:
         so batching changes process startup cost but not preprocessing,
         orientation selection, confidence selection, or returned text.
         """
+        return self._recognize_many(image, detections, language=language)
+
+    def recognize_many_traced(self, image, detections, *, language, diagnostics):
+        """Return ordinary batch results and retain the original token dictionary."""
+        trace = BatchTrace(diagnostics, "tesseract", detections)
+        with trace.capture():
+            return self._recognize_many(image, detections, language=language, trace=trace)
+
+    def _recognize_many(self, image, detections, *, language, trace=None):
         if not detections:
             return ()
+        if trace is not None:
+            for detection in detections:
+                for rotation_index, rotation in enumerate(_candidate_rotations(detection)):
+                    for variant_index, variant in enumerate(("grayscale", "otsu_binary")):
+                        trace.attempt(detection, rotation_index * 2 + variant_index,
+                                      rotation_degrees_clockwise=rotation, variant=variant,
+                                      upscale_factor=None)
         pytesseract = _load_pytesseract()
         self._validate_language(pytesseract, language)
         try:
@@ -202,7 +234,15 @@ class TesseractBackend:
         pages = []
         owners = []
         for detection_index, detection in enumerate(detections):
-            for candidate in _recognition_candidates(image, detection, detections):
+            metadata = [] if trace is not None else None
+            candidates = _recognition_candidates(image, detection, detections, metadata=metadata)
+            if trace is not None:
+                for offset, details in enumerate(metadata):
+                    trace.attempts[len(pages) + offset]["preprocessing"] = details
+            for candidate in candidates:
+                if trace is not None:
+                    trace.attempts[len(pages)]["tiff_page_number"] = len(pages) + 1
+                    trace.input_image(len(pages), candidate, channel_layout="GRAY")
                 pages.append(Image.fromarray(candidate))
                 owners.append(detection_index)
 
@@ -215,6 +255,8 @@ class TesseractBackend:
                     compression="tiff_deflate",
                 )
                 try:
+                    if trace is not None:
+                        trace.submit("image_to_data")
                     data = pytesseract.image_to_data(
                         temporary.name,
                         lang=language,
@@ -234,6 +276,8 @@ class TesseractBackend:
             for page in pages:
                 page.close()
 
+        if trace is not None:
+            trace.raw(data)
         page_numbers = data.get("page_num")
         if not isinstance(page_numbers, list):
             raise RuntimeError("Tesseract batch output did not contain page numbers")
@@ -247,17 +291,35 @@ class TesseractBackend:
         if set(indexes_by_page) != set(range(1, len(pages) + 1)):
             raise RuntimeError("Tesseract batch output pages differ from input candidates")
 
+        if trace is not None:
+            for page_number, indexes in indexes_by_page.items():
+                # Full batch is authoritative if malformed columns cannot be grouped.
+                trace.output(page_number - 1, {
+                    "row_indexes": indexes,
+                    "fields": {key: [values[index] for index in indexes if index < len(values)]
+                               for key, values in data.items() if isinstance(values, (list, tuple))},
+                    "text_kind": "tokens",
+                })
         best: list[OCRBackendResult | None] = [None] * len(detections)
+        winners = {}
         for page_number in range(1, len(pages) + 1):
+            if trace is not None:
+                trace.attempts[page_number - 1]["processing"] = "processing"
             indexes = indexes_by_page[page_number]
             page_data = {
                 key: [values[index] for index in indexes]
                 for key, values in data.items()
             }
             result = _candidate_result(page_data)
+            if trace is not None:
+                trace.converted(page_number - 1, result)
             owner = owners[page_number - 1]
             if result is not None and (
                 best[owner] is None or result.confidence > best[owner].confidence
             ):
                 best[owner] = result
+                if trace is not None:
+                    winners[detections[owner].id] = trace.attempts[page_number - 1]["attempt_id"]
+        if trace is not None:
+            trace.selected(winners)
         return tuple(best)

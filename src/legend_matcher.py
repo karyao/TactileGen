@@ -5,6 +5,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from src.diagnostics import AnalysisDiagnostics
+from src.text_provenance import consumer_text
+
 from src.contracts import (
     Detection,
     DetectionFrame,
@@ -304,7 +307,7 @@ def _unavailable_scores(
 
 
 def _score_legend_to_bars(
-    image, detections: DetectionFrame, ocr: OCRFrame | None
+    image, detections: DetectionFrame, ocr: OCRFrame | None, *, diagnostics=None
 ) -> _LegendScores:
     """Compute reusable color errors without applying acceptance thresholds."""
     import numpy as np
@@ -328,7 +331,11 @@ def _score_legend_to_bars(
     if unavailable_status is not None:
         return _unavailable_scores(detections.source_key, bars, unavailable_status)
 
-    text_by_id = {region.detection_id: region.text.strip() for region in ocr.regions}
+    text_by_id = {}
+    for region in ocr.regions:
+        text_by_id[region.detection_id] = region.text.strip()
+        consumer_text(diagnostics, "legend_matching", region.detection_id,
+                      region.text, text_by_id[region.detection_id], region.confidence)
     candidates = [
         _LegendCandidate(swatch, label, text_by_id.get(label.id) or None)
         for swatch, label in pairs
@@ -425,10 +432,18 @@ def match_legend_to_bars(
     *,
     max_error: float = 0.03,
     min_margin: float = 0.01,
+    diagnostics: AnalysisDiagnostics | None = None,
 ) -> LegendMappingFrame:
     """Return one deterministic, in-memory legend assignment per vertical bar."""
-    return _classify_legend_scores(
-        _score_legend_to_bars(image, detections, ocr),
-        max_error=max_error,
-        min_margin=min_margin,
-    )
+    scores = _score_legend_to_bars(image, detections, ocr,
+        **({"diagnostics": diagnostics} if diagnostics is not None else {}))
+    result = _classify_legend_scores(scores, max_error=max_error, min_margin=min_margin)
+    if diagnostics is not None:
+        for scored, assignment in zip(scores.bars, result.assignments, strict=True):
+            diagnostics.event("legend_matching", "legend_assignment",
+                bar_id=scored.bar_id, best_error=scored.best_error,
+                runner_up_error=scored.runner_up_error, max_error=max_error,
+                min_margin=min_margin, status=assignment.status,
+                swatch_id=scored.candidate.swatch.id if scored.candidate else None,
+                label_id=scored.candidate.label.id if scored.candidate else None)
+    return result
