@@ -19,9 +19,7 @@ from src.diagnostics import AnalysisDiagnostics
 from src.ocr import run_ocr
 from src.rapidocr_ocr import RapidOCRBackend
 from src.tesseract_ocr import TesseractBackend
-from tests.test_rapidocr_ocr import fake_rapidocr, output
-from tests.test_tesseract_ocr import fake_pytesseract
-from tests.test_ocr_trace import tesseract_data
+from tests.test_ocr import fake_rapidocr, output, fake_pytesseract, tesseract_data
 
 
 def gallery(diagnostics):
