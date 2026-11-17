@@ -1173,38 +1173,6 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         )
 
 
-        image_input.change(
-            ready_results,
-            outputs=[
-                status_output,
-                empty_output,
-                summary_output,
-                annotated_output,
-                ocr_output,
-                ocr_download,
-                legend_output,
-                completeness_output,
-                review_state,
-                review_panel,
-                review_fields,
-                review_values,
-                review_error_output,
-                generate_button,
-                spec_output,
-                spec_download,
-                generation_gallery,
-                generation_report_output,
-                generation_download,
-                generation_error_output,
-                ocr_warning_output,
-                legend_warning_output,
-                reconstruction_warning_output,
-                error_output,
-            ],
-            queue=False,
-            api_visibility="private",
-        )
-
         controls = [
             image_input, confidence, nms_iou, language, analyze_button, clear_button
         ]
@@ -1236,6 +1204,12 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             diagnostics_download,
             diagnostics_info,
         ]
+        image_input.change(
+            ready_results,
+            outputs=result_components,
+            queue=False,
+            api_visibility="private",
+        )
         start = analyze_button.click(
             begin_analysis,
             outputs=[*controls, *result_components],

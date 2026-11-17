@@ -582,6 +582,29 @@ class GradioAppTest(unittest.TestCase):
         self.assertIn('role="alert"', error_updates[23]["value"])
         self.assertEqual(len(ready()), len(analyze.outputs))
 
+    def test_image_change_clears_diagnostics_with_all_analysis_results(self):
+        demo = build_app(object(), device="cpu")
+        reset = next(fn for fn in demo.fns.values() if fn.api_name == "ready_results")
+        analyze = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
+        config = demo.get_config_file()
+        image = next(component for component in config["components"]
+                     if component["props"].get("label") == "Vertical bar chart image")
+        event = next(dependency for dependency in config["dependencies"]
+                     if any(tuple(target) == (image["id"], "change")
+                            for target in dependency["targets"]))
+
+        self.assertEqual(event["outputs"], [output._id for output in reset.outputs])
+        self.assertEqual(reset.outputs, analyze.outputs)
+        self.assertFalse(event["queue"])
+        self.assertEqual(event["api_visibility"], "private")
+        updates = reset.fn()
+        self.assertEqual(len(updates), len(reset.outputs))
+        self.assertEqual(reset.outputs[-2].label, "Download analysis diagnostics (ZIP)")
+        self.assertIsNone(updates[-2]["value"])
+        self.assertFalse(updates[-2]["visible"])
+        self.assertEqual(updates[-1]["value"], "")
+        self.assertFalse(updates[-1]["visible"])
+
     def test_app_factory_wires_controls_states_and_private_events(self):
         with patch("src.gradio_app.load_model") as load, \
              patch("gradio.Blocks.launch") as launch:
