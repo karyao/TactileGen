@@ -15,6 +15,7 @@ MAX_IMAGE_PIXELS = 40_000_000
 SUPPORTED_FORMATS = frozenset({"PNG", "JPEG", "WEBP"})
 EXAMPLE_IMAGE = Path(__file__).parents[2] / "tests/fixtures/contracts/val/example.png"
 DEFAULT_OCR_LANGUAGE = "eng"
+DEFAULT_OCR_ENGINE = "rapidocr"
 OCR_WARNING = (
     "Text recognition was unavailable. Detection results are still shown. "
     "Check the terminal for details."

@@ -83,9 +83,15 @@ python3.12 -m pip install -r requirements-app.txt
 python3.12 -m src.gradio_app
 ```
 
-With the Tesseract executable installed, this starts the frontend with YOLO
-detection and Tesseract OCR. Without Tesseract (for example on Windows), add
-`--ocr rapidocr` after `pip install -r requirements-ocr.txt`. The frontend and
+This starts the frontend with YOLO detection and RapidOCR. Use the **OCR engine**
+dropdown to choose RapidOCR or Tesseract before each analysis. To start with
+Tesseract selected, use `python3.12 -m src.gradio_app --ocr tesseract`.
+Clear restores the startup selection. Engines load on first use and are reused;
+RapidOCR may download its models on first use. Tesseract requires its executable
+on PATH and the requested language packs installed. **Tesseract language** under
+**Advanced settings** applies only to Tesseract; RapidOCR uses its multilingual
+model. If the chosen engine fails, detection results remain available, and you
+can select the other engine and analyze again. The frontend and
 `src.tactile.pipeline` use [`models/yolo_bars_hv/best.pt`](models/yolo_bars_hv/best.pt),
 fine-tuned on vertical and horizontal bars, and handle both. Gradio remains
 optional for users who only need the command-line detector.
@@ -175,7 +181,7 @@ python3.12 -m src.ocr \
   --output output/demo/chart_rapidocr.json
 ```
 
-Tesseract remains the default and is still used by the Gradio application. The
+Tesseract remains the standalone OCR command's default; Gradio defaults to RapidOCR. The
 multilingual PP-OCRv6 model ignores the shared `--language` option.
 
 ## Make a tactile graphic

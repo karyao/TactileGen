@@ -1,7 +1,9 @@
 # Finding your way around the Gradio app
 
-Start with `src/gradio_app.py`. It reads command-line options, loads the detector
-and OCR backend, calls `build_app()`, and starts the server. The command is still:
+Start with `src/gradio_app.py`. It reads command-line options, loads the detector,
+calls `build_app()`, and starts the server. OCR engines are selected in the browser
+and loaded on first use by `gradio_ui/ocr.py`. RapidOCR is the default;
+`--ocr tesseract` changes the initial selection. The command is still:
 
 ```bash
 python3.12 -m src.gradio_app

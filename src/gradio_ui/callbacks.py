@@ -53,7 +53,8 @@ def create_callbacks(
     *,
     gr,
     model,
-    backend,
+    backends,
+    initial_ocr_engine: str,
     device: str | None,
     initial_imgsz: int,
     artifact_root: Path,
@@ -169,15 +170,17 @@ def create_callbacks(
         )
 
     def analyze_event(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
+                      ocr_engine=initial_ocr_engine,
                       progress=gr.Progress()):
         diagnostics = AnalysisDiagnostics(settings={
             "confidence": confidence, "nms_iou": nms_iou,
             "device": device, "language": language, "imgsz": imgsz,
+            "ocr_engine": ocr_engine,
         })
         failed = False
         updates = None
         try:
-            diagnostics.capture_metadata(model, backend, language)
+            diagnostics.capture_metadata(model, None, language)
             diagnostics.detection_request(imgsz)
             result = analyze_image(
                 model,
@@ -186,7 +189,7 @@ def create_callbacks(
                 nms_iou,
                 imgsz=imgsz,
                 language=language,
-                ocr_backend=backend,
+                ocr_backend_factory=lambda: backends.resolve(ocr_engine),
                 device=device,
                 progress=progress,
                 diagnostics=diagnostics,
@@ -440,6 +443,7 @@ def create_callbacks(
             nms_iou=gr.update(value=DEFAULT_NMS_IOU, interactive=True),
             language=gr.update(value=DEFAULT_OCR_LANGUAGE, interactive=True),
             inference_size=gr.update(value=initial_imgsz, interactive=True),
+            ocr_engine=gr.update(value=initial_ocr_engine, interactive=True),
             analyze_button=gr.update(interactive=True),
             clear_button=gr.update(interactive=True),
             size_presets=tuple(

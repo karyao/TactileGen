@@ -83,6 +83,7 @@ class Controls:
     nms_iou: Any
     language: Any
     inference_size: Any
+    ocr_engine: Any
     analyze_button: Any
     clear_button: Any
     size_presets: tuple[Any, ...]
@@ -94,6 +95,7 @@ class Controls:
             self.nms_iou,
             self.language,
             self.inference_size,
+            self.ocr_engine,
             self.analyze_button,
             self.clear_button,
             *self.size_presets,
