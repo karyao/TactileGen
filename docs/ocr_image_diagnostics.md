@@ -1,5 +1,7 @@
 # OCR image diagnostics (Plan 3)
 
+For the complete user-facing download, see [Analysis diagnostics](analysis_diagnostics.md).
+
 For links from parsing and completeness findings to this evidence, see
 [OCR warning provenance (Plan 4)](ocr_warning_provenance.md).
 

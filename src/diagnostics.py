@@ -90,6 +90,8 @@ class AnalysisDiagnostics:
 
     def __init__(self, *, settings: dict):
         self.assets = {}
+        self._log_entries = []
+        self.export_error = None
         self._source_frames = []
         self._started = time.monotonic()
         self.record = {
@@ -116,6 +118,8 @@ class AnalysisDiagnostics:
         return self.record["run_id"]
 
     def log(self, message: str, *args, level: int = logging.INFO) -> None:
+        rendered = message % args if args else message
+        self._log_entries.append(f"{_utc_now()} {logging.getLevelName(level)} [run {self.run_id}] {rendered}")
         LOGGER.log(level, "[run %s] " + message, self.run_id, *args)
 
     def capture_metadata(self, model, backend, language: str) -> None:
@@ -318,40 +322,37 @@ class AnalysisDiagnostics:
                 self.exception("diagnostic_images", exc)
 
     def export_zip(self, artifact_root: Path) -> Path | None:
-        """Export the complete evidence atomically, retaining JSON persistence."""
-        path = artifact_root / "diagnostics" / f"{self.run_id}.zip"
+        """Package one immutable analysis snapshot; errors never replace results."""
+        path = artifact_root / "diagnostics" / f"analysis-diagnostics-{self.run_id}.zip"
         temporary_path = None
+        operation = "snapshot serialization"
+        self.export_error = None
         try:
+            from src.diagnostics_report import build_bundle
+
+            # Freeze before report rendering so all members describe the same run.
+            record = json.loads(json.dumps(self.record, ensure_ascii=False, allow_nan=False))
+            assets = dict(self.assets)
+            log_lines = list(self._log_entries)
+            for error in record["exceptions"]:
+                log_lines.extend([f"[run {self.run_id}] exception stage={error['stage']} "
+                                  f"type={error['type']}: {error['message']}", error["traceback"]])
+            operation = "report generation"
+            members = build_bundle(record, assets, "\n".join(log_lines) + "\n")
+            operation = "archive writing"
             path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as stream:
                 temporary_path = Path(stream.name)
             with ZipFile(temporary_path, "w", ZIP_DEFLATED) as archive:
-                archive.writestr("diagnostics.json", json.dumps(
-                    self.record, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
-                if "ocr_trace" in self.record:
-                    archive.writestr("ocr_trace.json", json.dumps(
-                        self.record["ocr_trace"], indent=2, ensure_ascii=False,
-                        allow_nan=False) + "\n")
-                lines = [f"Analysis run: {self.run_id}", f"Outcome: {self.record['outcome']}",
-                         "Coordinates: pixels, origin at top left; y increases downward.",
-                         "OCR crops are source crops, before backend preprocessing.",
-                         "Warnings show evidence, not verified ground truth.", ""]
-                for name, item in self.record["stages"].items():
-                    lines.append(f"{name}: {item['outcome']} ({item['duration_seconds']} seconds) {item['reason'] or ''}")
-                for key in ("settings", "metadata", "warnings", "events", "outputs", "exceptions"):
-                    lines.extend(["", key.upper(), json.dumps(self.record[key], indent=2,
-                                  ensure_ascii=False, allow_nan=False)])
-                archive.writestr("report.txt", "\n".join(lines) + "\n")
-                for name, value in self.record["outputs"].items():
-                    archive.writestr(f"{name}.json", json.dumps(value, indent=2,
-                                     ensure_ascii=False, allow_nan=False) + "\n")
-                for name, data in self.assets.items():
+                for name, data in members.items():
                     archive.writestr(name, data)
+            operation = "archive finalization"
             os.replace(temporary_path, path)
             return path
         except Exception as exc:
+            self.export_error = f"{operation}: {type(exc).__name__}: {exc}"
             self.exception("diagnostic_export", exc)
-            self.log("diagnostic ZIP export failed: %s", exc, level=logging.ERROR)
+            self.log("diagnostic ZIP export failed during %s: %s", operation, exc, level=logging.ERROR)
             return None
         finally:
             if temporary_path is not None:

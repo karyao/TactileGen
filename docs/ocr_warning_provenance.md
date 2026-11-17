@@ -1,5 +1,8 @@
 # OCR parsing and warning provenance (Plan 4)
 
+The user-facing report and diagnostic download are now described in
+[Analysis diagnostics](analysis_diagnostics.md).
+
 The run collector now links existing OCR-related findings to the decisions that
 produced them. Instrumentation observes the original analysis. It does not change
 recognition, numeric parsing, thresholds, warning wording, calibration selection,

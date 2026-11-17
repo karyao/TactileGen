@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import html
 import json
 import logging
 import re
@@ -791,6 +792,11 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
         diagnostic_text = f"Analysis run: `{diagnostics.run_id}`"
         if diagnostic_path is None:
             diagnostic_text += " — Diagnostic export failed. Check the terminal for details."
+            if diagnostics.export_error:
+                detail = html.escape(diagnostics.export_error).replace("\n", " ")
+                diagnostic_text += " " + re.sub(r"([\\`*_{}\[\]()#+.!|>])", r"\\\1", detail)
+        else:
+            diagnostic_text += " — Extract the ZIP and open **report.md** to follow findings to their evidence."
         return (*updates[:-2],
                 gr.update(value=diagnostic_path, visible=diagnostic_path is not None),
                 gr.update(value=diagnostic_text, visible=True))
@@ -1112,7 +1118,8 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         "Analysis details", open=False, elem_classes="borealis-details",
                     ):
                         gr.Markdown(
-                            "Inspect detected regions, recognized text, and legend mappings.",
+                            "Inspect detected regions, recognized text, and legend mappings. "
+                            "For diagnostic explanations, extract the diagnostics ZIP and open report.md.",
                             elem_classes="borealis-helper",
                         )
                         diagnostics_info = gr.Markdown("", visible=False)
