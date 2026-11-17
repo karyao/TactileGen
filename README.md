@@ -88,22 +88,26 @@ readable and empty results; unavailable counts remain null after OCR failure.
 Partial results use `completed_with_warnings`, while fatal analysis errors use
 `failed`. Files remain available until the app exits.
 
-In **Analysis details**, select **Download analysis diagnostics (ZIP)** to save
-`report.txt`, `diagnostics.json`, completed stage outputs, the decoded input,
-annotated detections, and OCR source crops. The run ID matches the terminal logs.
-The download is available for blocked and failed analyses too, with the evidence
-collected before failure. Starting another analysis or clearing the form resets
-the displayed download.
+To download and inspect an analysis:
 
-To investigate a warning, search its code in `report.txt` or the structured events
-in `diagnostics.json`. Tick events include raw OCR text, parsed values, retained
-and rejected IDs, calibration coefficients and pixel residuals. Unparseable
-labels are distinguished from numeric outliers. Baseline events record the
-calculated zero position and accepted bounds; category and series events record
-conflicting assignments, counts, legend scores, and rescue outcomes. Follow a
-detection ID to `detections.json`, `ocr.json`, and its `source_crop` event to find
-the matching image in `ocr_crops/`. Crops show the shared OCR source selection
-before backend preprocessing; evidence does not establish ground-truth text.
+1. After selecting **Analyze chart**, expand **Analysis details** and select
+   **Download analysis diagnostics (ZIP)**. Downloads are available for blocked
+   and failed analyses too, with the evidence collected before failure.
+2. Save and extract the entire ZIP before clearing the form or starting another
+   analysis, which resets the displayed download.
+3. Open `report.md` in a Markdown viewer. Start with **Findings**, then follow
+   decision evidence and **OCR attempts** links to inspect text, source crops,
+   recognition inputs, and selected results.
+
+The archive always includes `report.md`, `manifest.json`, `diagnostics.json`, and
+`analysis.log`, with stage outputs, annotated detections, and OCR images when
+available. It also retains `report.txt` for compatibility. The full uploaded
+image is omitted. The run ID matches the terminal logs.
+
+See the [diagnostics walkthrough](docs/analysis_diagnostics.md#download-and-read-diagnostics)
+for the full steps, or [start with setup](docs/analysis_diagnostics.md#start-the-app).
+The same guide includes archive contents and an optional developer reference. Those instructions generate
+new evidence without requiring any existing files under ignored `output/`.
 
 ## Read detected text with Tesseract
 
