@@ -56,12 +56,12 @@ from src.gradio_ui.settings import (
     SUPPORTED_FORMATS,
     EXAMPLE_IMAGE,
     DEFAULT_OCR_LANGUAGE,
+    DEFAULT_OCR_ENGINE,
     OCR_WARNING,
     LEGEND_WARNING,
     RECONSTRUCTION_WARNING,
     LOGGER,
 )
-from src.tesseract_ocr import TesseractBackend
 
 
 def _port(value: str) -> int:
@@ -101,8 +101,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--ocr",
         choices=("tesseract", "rapidocr"),
-        default="tesseract",
-        help="OCR engine (default tesseract; rapidocr needs no system install)",
+        default=DEFAULT_OCR_ENGINE,
+        help="Initial OCR engine (default rapidocr; selectable in the browser)",
     )
     return parser.parse_args(argv)
 
@@ -113,14 +113,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         _import_gradio()
         model = load_model(args.weights)
-        if args.ocr == "rapidocr":
-            from src.rapidocr_ocr import RapidOCRBackend
-            ocr_backend = RapidOCRBackend()
-        else:
-            ocr_backend = TesseractBackend()
         demo = build_app(
             model,
-            ocr_backend=ocr_backend,
+            ocr_engine=args.ocr,
             device=args.device,
             imgsz=args.imgsz,
         )

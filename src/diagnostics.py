@@ -143,9 +143,9 @@ class AnalysisDiagnostics:
                 backend_info.update(json.loads(json.dumps(details, allow_nan=False)))
         except Exception as exc:
             backend_info["metadata_error"] = f"{type(exc).__name__}: {exc}"
-        self.record["metadata"] = {
+        self.record["metadata"].update({
             "packages": packages, "model": _model_metadata(model), "ocr": backend_info,
-        }
+        })
 
     def detection_request(self, imgsz) -> dict:
         """Initialize run-owned size evidence, including runs rejected before detection."""

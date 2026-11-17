@@ -22,7 +22,8 @@ If the app is already running, continue to [Download and read diagnostics](#down
    .venv/bin/python -m pip install -r requirements-app.txt
    ```
 
-2. Install the Tesseract executable and English language data using your system
+2. RapidOCR is selected by default and loads its models on first use. To use
+   Tesseract instead, install its executable and English language data using your system
    package manager. On macOS with Homebrew, run `brew install tesseract`; on
    Ubuntu/Debian, run `sudo apt-get install tesseract-ocr tesseract-ocr-eng`.
    Confirm that `tesseract --version` works and `tesseract --list-langs` lists `eng`.
@@ -32,7 +33,8 @@ If the app is already running, continue to [Download and read diagnostics](#down
    .venv/bin/python -m src.gradio_app --weights models/yolo_vbars/best.pt
    ```
 
-4. Open the local URL printed in the terminal.
+4. Open the local URL printed in the terminal. Choose **OCR engine** before each
+   analysis. `--ocr tesseract` changes the startup selection; Clear restores it.
 
 ## Download and read diagnostics
 

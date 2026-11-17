@@ -123,11 +123,14 @@ def analyze_image(
     imgsz: int = DEFAULT_IMGSZ,
     language: str = DEFAULT_OCR_LANGUAGE,
     ocr_backend=None,
+    ocr_backend_factory: Callable[[], Any] | None = None,
     device: str | None = None,
     progress: Callable[..., None] | None = None,
     diagnostics: AnalysisDiagnostics | None = None,
 ) -> AnalysisResult:
     """Validate, detect, recognize text, summarize, and annotate one chart."""
+    if ocr_backend is not None and ocr_backend_factory is not None:
+        raise ValueError("Supply either ocr_backend or ocr_backend_factory, not both")
     import cv2
 
     def stage(name, **kwargs):
@@ -171,7 +174,12 @@ def analyze_image(
     ocr_warning = None
     try:
         with stage("ocr"):
-            backend = ocr_backend if ocr_backend is not None else TesseractBackend()
+            backend = (
+                ocr_backend_factory() if ocr_backend_factory is not None
+                else ocr_backend if ocr_backend is not None else TesseractBackend()
+            )
+            if diagnostics is not None:
+                diagnostics.capture_metadata(model, backend, language)
             ocr_frame = run_ocr(
                 image, frame, backend, language,
                 **diagnostic_options,

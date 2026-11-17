@@ -18,23 +18,24 @@ from src.gradio_ui.callbacks import create_callbacks
 from src.gradio_ui.components import Controls, AnalysisComponents, GenerationComponents
 from src.gradio_ui.dependencies import import_gradio
 from src.gradio_ui.formatting import ready_status
-from src.gradio_ui.settings import EXAMPLE_IMAGE, DEFAULT_OCR_LANGUAGE
+from src.gradio_ui.settings import EXAMPLE_IMAGE, DEFAULT_OCR_LANGUAGE, DEFAULT_OCR_ENGINE
+from src.gradio_ui.ocr import OCRBackendResolver
 from src.presentation import LEGEND_TABLE_HEADERS, OCR_TABLE_HEADERS
-from src.tesseract_ocr import TesseractBackend
 
 
 def build_app(
     model,
     *,
     ocr_backend=None,
+    ocr_engine: str = DEFAULT_OCR_ENGINE,
     device: str | None = None,
     imgsz: int = DEFAULT_IMGSZ,
 ):
-    """Build the interface around an already-loaded model without launching it."""
+    """Build without launching; an injected backend serves ``ocr_engine`` only."""
     initial_imgsz = validate_imgsz(imgsz)
     gr = import_gradio()
     configure_analysis_logging()
-    backend = ocr_backend if ocr_backend is not None else TesseractBackend()
+    backends = OCRBackendResolver(ocr_engine, ocr_backend)
     artifacts = tempfile.TemporaryDirectory(prefix="tactilegen-gradio-ocr-")
     atexit.register(artifacts.cleanup)
     artifact_root = Path(artifacts.name)
@@ -54,7 +55,7 @@ def build_app(
                 )
 
             with gr.Row(elem_classes="borealis-workspace-grid"):
-                controls = _build_controls(gr, initial_imgsz)
+                controls = _build_controls(gr, initial_imgsz, ocr_engine)
                 results = _build_results(gr)
 
         generation = GenerationComponents(
@@ -71,7 +72,8 @@ def build_app(
             generation_error_output=results.generation_error_output,
         )
         callbacks = create_callbacks(
-            gr=gr, model=model, backend=backend, device=device,
+            gr=gr, model=model, backends=backends, device=device,
+            initial_ocr_engine=ocr_engine,
             initial_imgsz=initial_imgsz, artifact_root=artifact_root,
             controls=controls, results=results, generation=generation,
         )
@@ -96,6 +98,7 @@ def build_app(
                 controls.nms_iou,
                 controls.language,
                 controls.inference_size,
+                controls.ocr_engine,
             ],
             outputs=results.components(),
             show_progress="full",
@@ -146,7 +149,7 @@ def build_app(
     return demo.queue(default_concurrency_limit=1, max_size=4)
 
 
-def _build_controls(gr, initial_imgsz: int) -> Controls:
+def _build_controls(gr, initial_imgsz: int, initial_ocr_engine: str) -> Controls:
     """Create the upload/settings panel and its action buttons."""
     with gr.Column(elem_classes="borealis-control-rail"):
         gr.Markdown("## Chart input", elem_classes="borealis-section-title")
@@ -183,6 +186,13 @@ def _build_controls(gr, initial_imgsz: int) -> Controls:
             step=0.05,
             label="Minimum detection confidence",
             info="Hide detections below this confidence score.",
+            elem_classes="borealis-setting",
+        )
+        ocr_engine = gr.Dropdown(
+            choices=[("RapidOCR", "rapidocr"), ("Tesseract", "tesseract")],
+            value=initial_ocr_engine,
+            label="OCR engine",
+            info="Choose the text recognition engine for the next analysis.",
             elem_classes="borealis-setting",
         )
         with gr.Accordion(
@@ -229,8 +239,9 @@ def _build_controls(gr, initial_imgsz: int) -> Controls:
             )
             language = gr.Textbox(
                 value=DEFAULT_OCR_LANGUAGE,
-                label="OCR language",
-                info="Tesseract language code, such as eng or eng+fra.",
+                label="Tesseract language",
+                info=("Tesseract code, such as eng or eng+fra. "
+                      "RapidOCR uses its multilingual model and ignores this field."),
                 elem_classes="borealis-setting",
             )
         with gr.Row(elem_classes="borealis-actions"):
@@ -244,6 +255,7 @@ def _build_controls(gr, initial_imgsz: int) -> Controls:
         nms_iou=nms_iou,
         language=language,
         inference_size=inference_size,
+        ocr_engine=ocr_engine,
         analyze_button=analyze_button,
         clear_button=clear_button,
         size_presets=tuple(size_presets),
