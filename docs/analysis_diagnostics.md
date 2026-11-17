@@ -6,6 +6,7 @@ Run all commands from the repository root.
 
 - [Start the app](#start-the-app)
 - [Download and read diagnostics](#download-and-read-diagnostics)
+- [Compare YOLO inference sizes](#compare-yolo-inference-sizes)
 - [Understand missing evidence](#understand-missing-evidence)
 - [Archive contents](#archive-contents)
 - [Developer reference](#developer-reference)
@@ -56,6 +57,81 @@ If the app is already running, continue to [Download and read diagnostics](#down
 Reports explain recorded decisions; they do not verify recognition accuracy or
 ground-truth text. Real OCR results may differ with the chart and engine version.
 The app does not highlight issue regions interactively.
+
+## Compare YOLO inference sizes
+
+The default requested size is **640 pixels**. To start with a different value:
+
+```sh
+python3.12 -m src.gradio_app --imgsz 960
+```
+
+Change **YOLO inference size (pixels)** under **Advanced settings** before an
+analysis to override that value for the next run. Clear restores the startup
+value. Quick-select buttons offer **640**, **960**, and **1280** pixels. Custom
+values must be integers from **1 to 1280**, enforced by the shared inference
+validator, CLI, and UI. The maximum bounds per-request work; it does not guarantee
+performance on every device. Sizes need not be multiples of the model stride.
+
+In `diagnostics.json`, `settings.imgsz` is the requested size.
+`metadata.detection` distinguishes three measurements:
+
+| Field | Meaning |
+| --- | --- |
+| `requested_imgsz` | The scalar size submitted to YOLO |
+| `effective_imgsz` | YOLO's checked target `[height, width]`, after size adjustment |
+| `tensor_shape` | Observed inference input `[batch, channels, height, width]`, excluding warmup |
+| `unavailable_reasons` | Reasons for measurements that remain null |
+
+For example, requesting 641 with a stride-32 model can produce an effective
+size of `[672, 672]`, while rectangular padding produces an actual tensor of
+`[1, 3, 512, 672]` for a 320-by-240 chart. These dimensions describe model input;
+detection boxes, OCR crops, and overlays still use original-image coordinates.
+Read the same fields in the settings/metadata sections of `report.md` or
+`report.txt`, or the detection measurement line in `analysis.log`.
+
+Measurements remain null if the relevant stage has not executed or a custom model
+does not expose observation hooks. Failed runs retain whatever was observed
+before failure; original-image dimensions are never substituted for tensor shape.
+
+To compare sizes manually:
+
+1. Keep the chart image, checkpoint, device, confidence, NMS IoU, OCR engine, and
+   OCR language fixed. Use the same running app and avoid other inference work.
+2. Test **640, 960, and 1280**. At each size, run one analysis to warm up, then
+   collect three more analyses. Download each diagnostics ZIP before starting the
+   next analysis, and label the extracted folders with size and repetition.
+3. Compare the median `stages.detection.duration_seconds` at each size. Compare
+   `duration_seconds` separately for total analysis time. Detection-stage timing
+   includes wrapper and evidence work; it is not pure model-forward latency.
+4. Inspect the annotated detections and OCR results for known small labels on the
+   same charts. Record missed labels, incorrect detections, and recognition errors;
+   a larger detection count alone does not establish better accuracy.
+
+This procedure enables exploratory comparisons; it does not add an automated
+benchmark or establish accuracy without reference annotations.
+
+### Measure detection accuracy from the standalone CLI
+
+`src.baseline.yolo_bars` accepts `--imgsz` for `predict`, `evaluate`, and
+`validate` (default **640**, maximum **1280**). For example:
+
+```sh
+python3.12 -m src.baseline.yolo_bars evaluate --weights models/yolo_bars_hv/best.pt --data-root dataset_yolo_vbars_clean --output-dir output/eval-960 --imgsz 960 --batch 1
+```
+
+Repeat at **640**, **960**, and **1280**, using a separate output directory for
+each run. Keep the checkpoint, dataset, split, confidence, matching IoU, batch,
+device, and bar role fixed. Add `--bar-role horizontal_bar` and a dataset with
+horizontal annotations when scoring horizontal bars. `evaluate` measures bar
+precision/recall/F1 against annotations; `validate` measures standard detection
+mAP across chart parts. Both record the requested size as `imgsz` in
+`metrics.json`, including each result when evaluating multiple matching IoUs.
+
+The recorded size is the requested target, not an observed tensor shape.
+Prediction batching, validation preprocessing, and stride adjustment can change
+the actual input dimensions; compare runs within the same command and settings.
+Larger sizes increase resource use, so start with `--batch 1` for these comparisons.
 
 ## Understand missing evidence
 

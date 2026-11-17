@@ -147,6 +147,20 @@ class AnalysisDiagnostics:
             "packages": packages, "model": _model_metadata(model), "ocr": backend_info,
         }
 
+    def detection_request(self, imgsz) -> dict:
+        """Initialize run-owned size evidence, including runs rejected before detection."""
+        requested = _normalize_event_evidence(imgsz)
+        self.record["settings"]["imgsz"] = requested
+        evidence = {
+            "requested_imgsz": requested, "effective_imgsz": None, "tensor_shape": None,
+            "unavailable_reasons": {
+                "effective_imgsz": "Prediction setup has not been observed",
+                "tensor_shape": "Inference input has not been observed",
+            },
+        }
+        self.record["metadata"]["detection"] = evidence
+        return evidence
+
     def exception(self, stage: str, exc: Exception) -> None:
         evidence = {"stage": stage, "type": type(exc).__name__, "message": str(exc),
                     "traceback": "".join(traceback.format_exception(

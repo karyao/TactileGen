@@ -109,6 +109,13 @@ class GradioAppTest(unittest.TestCase):
         self.assertEqual(args.port, DEFAULT_PORT)
         self.assertIsNone(args.device)
         self.assertEqual(args.ocr, "tesseract")
+        self.assertEqual(args.imgsz, 640)
+        self.assertEqual(parse_args(["--imgsz", "641"]).imgsz, 641)
+        self.assertEqual(parse_args(["--imgsz", "1280"]).imgsz, 1280)
+        for value in ("0", "-1", "640.5", "no", "True", "1281", "100000"):
+            with self.subTest(imgsz=value), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    parse_args(["--imgsz", value])
         self.assertEqual(parse_args(["--ocr", "rapidocr"]).ocr, "rapidocr")
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
@@ -131,6 +138,67 @@ class GradioAppTest(unittest.TestCase):
                     returned_path, image = decode_upload(path)
                     self.assertEqual(returned_path, path)
                     self.assertEqual(image.shape, (80, 100, 3))
+
+    def test_analysis_forwards_custom_size_and_collector(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = self._image(Path(temporary))
+            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            diagnostics = AnalysisDiagnostics(settings={})
+            with patch("src.gradio_app.run_detection", return_value=frame) as detect, \
+                 patch("src.gradio_app.run_ocr", return_value=OCRFrame(frame.source_key, ())):
+                analyze_image(object(), image, .25, .7, imgsz=1280, diagnostics=diagnostics)
+            self.assertEqual(detect.call_args.kwargs["imgsz"], 1280)
+            self.assertIs(detect.call_args.kwargs["diagnostics"], diagnostics)
+            self.assertEqual(diagnostics.record["settings"]["imgsz"], 1280)
+
+    def test_size_control_uses_startup_default_forwards_selection_and_resets(self):
+        demo = build_app(object(), ocr_backend=object(), imgsz=960)
+        try:
+            binding = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
+            control = next(c for c in binding.inputs if c.label == "YOLO inference size (pixels)")
+            self.assertEqual(control.value, 960)
+            self.assertEqual(control.maximum, 1280)
+            presets = [fn for fn in demo.fns.values()
+                       if fn.outputs == [control] and not fn.inputs]
+            self.assertEqual([fn.fn() for fn in presets], [640, 960, 1280])
+            self.assertIsNone(control.precision)  # Never round fractional input into a valid size.
+            for selected in (None, 1280):
+                with patch("src.gradio_app.analyze_image", side_effect=UploadValidationError("Choose a chart.")) as analyze:
+                    args = (None, .25, .7, "eng")
+                    binding.fn(*args, *(() if selected is None else (selected,)))
+                self.assertEqual(analyze.call_args.kwargs["imgsz"], selected or 960)
+            clear = next(fn for fn in demo.fns.values() if fn.api_name == "clear_all")
+            updates = clear.fn()
+            index = clear.outputs.index(control)
+            self.assertEqual(updates[index]["value"], 960)
+            self.assertTrue(updates[index]["interactive"])
+            finish = next(fn for fn in demo.fns.values() if fn.api_name == "finish_analysis")
+            self.assertIn(control, finish.outputs)
+            self.assertEqual(len(finish.fn()), len(finish.outputs))
+        finally:
+            demo.close(verbose=False)
+
+    def test_invalid_size_is_reported_with_diagnostics_before_inference(self):
+        from zipfile import ZipFile
+
+        demo = build_app(object(), ocr_backend=object())
+        try:
+            binding = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
+            archive_index = next(i for i, c in enumerate(binding.outputs)
+                                 if getattr(c, "label", None) == "Download analysis diagnostics (ZIP)")
+            for size in (640.5, 1281, 100000):
+                with self.subTest(size=size):
+                    with patch("src.gradio_app.run_detection") as detect:
+                        updates = binding.fn(None, .25, .7, "eng", size)
+                    detect.assert_not_called()
+                    with ZipFile(updates[archive_index]["value"]) as archive:
+                        record = json.loads(archive.read("diagnostics.json"))
+                    self.assertEqual(record["settings"]["imgsz"], size)
+                    self.assertEqual(record["stages"]["validation"]["outcome"], "failed")
+                    self.assertIn("imgsz", record["exceptions"][0]["message"])
+                    self.assertIsNone(record["metadata"]["detection"]["tensor_shape"])
+        finally:
+            demo.close(verbose=False)
 
     def test_valid_analysis_forwards_settings_and_swaps_bgr_to_rgb(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -155,7 +223,7 @@ class GradioAppTest(unittest.TestCase):
                     progress=progress,
                 )
             run.assert_called_once_with(
-                model, image_path, confidence=0.4, nms_iou=0.6, device="cpu"
+                model, image_path, confidence=0.4, nms_iou=0.6, device="cpu", imgsz=640
             )
             self.assertIsInstance(result, AnalysisResult)
             self.assertEqual(result.detection_count, 0)
@@ -699,8 +767,8 @@ class GradioAppTest(unittest.TestCase):
 
         begin = next(fn.fn for fn in demo.fns.values() if fn.api_name == "begin_analysis")
         begin_updates = begin()
-        self.assertEqual(len(begin_updates), 6 + len(inference_fn.outputs))
-        self.assertTrue(all(update["interactive"] is False for update in begin_updates[:6]))
+        self.assertEqual(len(begin_updates), 10 + len(inference_fn.outputs))
+        self.assertTrue(all(update["interactive"] is False for update in begin_updates[:10]))
         finish = next(fn.fn for fn in demo.fns.values() if fn.api_name == "finish_analysis")
         self.assertTrue(all(update["interactive"] is True for update in finish()))
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
@@ -930,10 +998,10 @@ class GradioAppTest(unittest.TestCase):
              patch("src.gradio_app.build_app", return_value=demo) as build, \
              patch("src.gradio_app.borealis_theme", return_value=theme):
             main(["--weights", "custom.pt", "--device", "cpu",
-                  "--host", "0.0.0.0", "--port", "9000"])
+                  "--host", "0.0.0.0", "--port", "9000", "--imgsz", "960"])
         load.assert_called_once_with(Path("custom.pt"))
         load_ocr.assert_called_once_with()
-        build.assert_called_once_with(model, ocr_backend=backend, device="cpu")
+        build.assert_called_once_with(model, ocr_backend=backend, device="cpu", imgsz=960)
         kwargs = demo.launch.call_args.kwargs
         self.assertEqual(kwargs["server_name"], "0.0.0.0")
         self.assertEqual(kwargs["server_port"], 9000)

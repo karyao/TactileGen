@@ -26,7 +26,10 @@ from src.contracts import (
     OCRFrame,
     VerticalBarSpec,
 )
-from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
+from src.detection import (
+    DEFAULT_CONFIDENCE, DEFAULT_IMGSZ, DEFAULT_NMS_IOU, MAX_IMGSZ,
+    load_model, run_detection, validate_imgsz,
+)
 from src.diagnostics import AnalysisDiagnostics, configure_analysis_logging
 from src.legend_matcher import match_legend_to_bars
 from src.ocr import run_ocr
@@ -377,10 +380,21 @@ def _port(value: str) -> int:
     return port
 
 
+def _imgsz(value: str) -> int:
+    try:
+        return validate_imgsz(int(value))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"imgsz must be a positive integer between 1 and {MAX_IMGSZ}"
+        ) from exc
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--device", help="Ultralytics device, e.g. cpu or mps")
+    parser.add_argument("--imgsz", type=_imgsz, default=DEFAULT_IMGSZ,
+                        help=f"Initial YOLO inference size in pixels (1–{MAX_IMGSZ}; default: {DEFAULT_IMGSZ})")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=_port, default=DEFAULT_PORT)
     parser.add_argument("--ocr", choices=("tesseract", "rapidocr"), default="tesseract",
@@ -440,6 +454,7 @@ def analyze_image(
     confidence: float,
     nms_iou: float,
     *,
+    imgsz: int = DEFAULT_IMGSZ,
     language: str = DEFAULT_OCR_LANGUAGE,
     ocr_backend=None,
     device: str | None = None,
@@ -452,7 +467,13 @@ def analyze_image(
     def stage(name, **kwargs):
         return diagnostics.stage(name, **kwargs) if diagnostics is not None else nullcontext()
 
+    if diagnostics is not None:
+        diagnostics.detection_request(imgsz)
     with stage("validation"):
+        try:
+            validate_imgsz(imgsz)
+        except ValueError as exc:
+            raise UploadValidationError(str(exc)) from exc
         _report_progress(progress, 0.05, "Validating image")
         path, image = decode_upload(image_path)
         if diagnostics is not None:
@@ -460,7 +481,8 @@ def analyze_image(
     with stage("detection"):
         _report_progress(progress, 0.20, "Detecting chart elements")
         frame = run_detection(
-            model, path, confidence=confidence, nms_iou=nms_iou, device=device
+            model, path, confidence=confidence, nms_iou=nms_iou, device=device,
+            imgsz=imgsz, **({"diagnostics": diagnostics} if diagnostics is not None else {}),
         )
         if image.shape[:2] != (frame.height, frame.width):
             raise ValueError("image dimensions do not match the detection frame")
@@ -607,8 +629,10 @@ def _spec_download_path(
     return path
 
 
-def build_app(model, *, ocr_backend=None, device: str | None = None):
+def build_app(model, *, ocr_backend=None, device: str | None = None,
+              imgsz: int = DEFAULT_IMGSZ):
     """Build the interface around an already-loaded model without launching it."""
+    initial_imgsz = validate_imgsz(imgsz)
     gr = _import_gradio()
     configure_analysis_logging()
     backend = ocr_backend if ocr_backend is not None else TesseractBackend()
@@ -714,24 +738,27 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
 
     def begin_analysis():
         return (
-            *(gr.update(interactive=False) for _ in range(6)),
+            *(gr.update(interactive=False) for _ in controls),
             *result_updates(analyzing_status()),
         )
 
-    def analyze_event(image_path, confidence, nms_iou, language, progress=gr.Progress()):
+    def analyze_event(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
+                      progress=gr.Progress()):
         diagnostics = AnalysisDiagnostics(settings={
             "confidence": confidence, "nms_iou": nms_iou,
-            "device": device, "language": language,
+            "device": device, "language": language, "imgsz": imgsz,
         })
         failed = False
         updates = None
         try:
             diagnostics.capture_metadata(model, backend, language)
+            diagnostics.detection_request(imgsz)
             result = analyze_image(
                 model,
                 image_path,
                 confidence,
                 nms_iou,
+                imgsz=imgsz,
                 language=language,
                 ocr_backend=backend,
                 device=device,
@@ -916,7 +943,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             )
 
     def finish_analysis():
-        return tuple(gr.update(interactive=True) for _ in range(6))
+        return tuple(gr.update(interactive=True) for _ in controls)
 
     def clear_all():
         return (
@@ -924,8 +951,10 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
             gr.update(value=DEFAULT_CONFIDENCE, interactive=True),
             gr.update(value=DEFAULT_NMS_IOU, interactive=True),
             gr.update(value=DEFAULT_OCR_LANGUAGE, interactive=True),
+            gr.update(value=initial_imgsz, interactive=True),
             gr.update(interactive=True),
             gr.update(interactive=True),
+            *(gr.update(interactive=True) for _ in size_presets),
             *ready_results(),
         )
 
@@ -986,6 +1015,28 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
                         open=False,
                         elem_classes="borealis-advanced",
                     ):
+                        inference_size = gr.Number(
+                            value=initial_imgsz,
+                            precision=None,
+                            minimum=1,
+                            maximum=MAX_IMGSZ,
+                            step=1,
+                            label="YOLO inference size (pixels)",
+                            info=(f"Maximum {MAX_IMGSZ} pixels. Larger sizes may improve small-element detection and increase runtime. "
+                                  "YOLO may adjust this size to its model stride."),
+                            elem_classes="borealis-setting",
+                        )
+                        with gr.Row():
+                            size_presets = [
+                                gr.Button(label, size="sm", variant="secondary")
+                                for label in ("640 (default)", "960", "1280 (maximum)")
+                            ]
+                        for button, size in zip(size_presets, (640, 960, MAX_IMGSZ)):
+                            button.click(
+                                lambda value=size: value,
+                                inputs=[], outputs=inference_size,
+                                queue=False, api_visibility="private",
+                            )
                         nms_iou = gr.Slider(
                             0.10,
                             0.95,
@@ -1198,7 +1249,8 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
 
 
         controls = [
-            image_input, confidence, nms_iou, language, analyze_button, clear_button
+            image_input, confidence, nms_iou, language, inference_size, analyze_button, clear_button,
+            *size_presets,
         ]
         result_components = [
             status_output,
@@ -1243,7 +1295,7 @@ def build_app(model, *, ocr_backend=None, device: str | None = None):
         )
         analysis = start.then(
             analyze_event,
-            inputs=[image_input, confidence, nms_iou, language],
+            inputs=[image_input, confidence, nms_iou, language, inference_size],
             outputs=result_components,
             show_progress="full",
             show_progress_on=annotated_output,
@@ -1312,7 +1364,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             ocr_backend = RapidOCRBackend()
         else:
             ocr_backend = TesseractBackend()
-        demo = build_app(model, ocr_backend=ocr_backend, device=args.device)
+        demo = build_app(model, ocr_backend=ocr_backend, device=args.device, imgsz=args.imgsz)
         theme = borealis_theme()
     except Exception as exc:
         parser.error(f"Could not start TactileGen: {exc}")

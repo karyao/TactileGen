@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from contextlib import contextmanager
 from pathlib import Path
 
 from src.contracts import CLASS_NAMES, Box, Detection, DetectionFrame
@@ -11,6 +12,74 @@ from src.contracts import CLASS_NAMES, Box, Detection, DetectionFrame
 
 DEFAULT_CONFIDENCE = 0.25
 DEFAULT_NMS_IOU = 0.70
+DEFAULT_IMGSZ = 640
+# Bound per-request inference work; this is an application limit, not a YOLO limit.
+MAX_IMGSZ = 1280
+
+
+def validate_imgsz(imgsz: int) -> int:
+    """Validate the requested scalar size; YOLO handles stride adjustment."""
+    if isinstance(imgsz, bool) or not isinstance(imgsz, int) or imgsz <= 0:
+        raise ValueError("imgsz must be a positive integer")
+    if imgsz > MAX_IMGSZ:
+        raise ValueError(f"imgsz must be at most {MAX_IMGSZ} pixels")
+    return imgsz
+
+
+@contextmanager
+def _inference_evidence(model, diagnostics, evidence):
+    """Observe this prediction without retaining tensors or changing model outputs."""
+    if diagnostics is None:
+        yield
+        return
+    registrations = []
+    handles = []
+
+    def prediction_started(predictor):
+        try:
+            evidence["effective_imgsz"] = [int(n) for n in predictor.imgsz]
+            evidence["unavailable_reasons"].pop("effective_imgsz", None)
+
+            def input_shape(backend, inputs):
+                # Some versions warm up through __call__; others call forward directly.
+                try:
+                    if not predictor.done_warmup:
+                        return
+                    evidence["tensor_shape"] = [int(n) for n in inputs[0].shape]
+                    evidence["unavailable_reasons"].pop("tensor_shape", None)
+                except Exception as exc:
+                    evidence["unavailable_reasons"]["tensor_shape"] = str(exc)
+
+            if not handles:
+                handles.append(predictor.model.register_forward_pre_hook(input_shape))
+        except Exception as exc:
+            for key in ("effective_imgsz", "tensor_shape"):
+                if evidence[key] is None:
+                    evidence["unavailable_reasons"][key] = f"Observation unavailable: {exc}"
+
+    try:
+        # Ultralytics normally shares these lists. Also support an existing predictor
+        # with its own callback list, without registering twice on a shared list.
+        for owner in (model, getattr(model, "predictor", None)):
+            callbacks = getattr(owner, "callbacks", None)
+            if isinstance(callbacks, dict):
+                entries = callbacks.get("on_predict_start")
+                if isinstance(entries, list) and not any(entries is item for item in registrations):
+                    entries.append(prediction_started)
+                    registrations.append(entries)
+        if not registrations:
+            reason = "Model does not expose prediction callbacks"
+            evidence["unavailable_reasons"] = dict.fromkeys(("effective_imgsz", "tensor_shape"), reason)
+        yield
+    finally:
+        for entries in registrations:
+            if prediction_started in entries:
+                entries.remove(prediction_started)
+        for handle in handles:
+            handle.remove()
+        diagnostics.log("detection requested_imgsz=%s effective_imgsz=%s tensor_shape=%s",
+                        evidence["requested_imgsz"], evidence["effective_imgsz"],
+                        evidence["tensor_shape"])
 
 
 def _class_names(names: dict[int, str] | list[str] | tuple[str, ...]) -> tuple[str, ...]:
@@ -83,16 +152,21 @@ def run_detection(
     confidence: float = DEFAULT_CONFIDENCE,
     nms_iou: float = DEFAULT_NMS_IOU,
     device: str | None = None,
+    imgsz: int = DEFAULT_IMGSZ,
+    diagnostics=None,
 ) -> DetectionFrame:
     """Run one-image inference and return the shared detection contract."""
+    evidence = diagnostics.detection_request(imgsz) if diagnostics is not None else None
+    validate_imgsz(imgsz)
     _validate_threshold(confidence, "confidence")
     _validate_threshold(nms_iou, "nms_iou")
     path = Path(image_path)
     if not path.is_file():
         raise FileNotFoundError(f"Missing image: {path}")
     check_model_classes(model)
-    results = list(model.predict(source=str(path), conf=confidence, iou=nms_iou,
-                                 device=device, verbose=False))
+    with _inference_evidence(model, diagnostics, evidence):
+        results = list(model.predict(source=str(path), conf=confidence, iou=nms_iou,
+                                     device=device, verbose=False, imgsz=imgsz))
     if len(results) != 1:
         raise ValueError(f"Expected one model result, got {len(results)}")
     result = results[0]

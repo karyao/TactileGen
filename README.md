@@ -62,6 +62,19 @@ by default. Replace `path/to/chart.png` with your image path. For an example
 image already in the repository, use
 `tests/fixtures/contracts/val/example.png`.
 
+The standalone detector accepts `--imgsz` on **predict**, **evaluate**, and
+**validate**, with the same **640** default and **1280** maximum as Gradio:
+
+```bash
+python3.12 -m src.baseline.yolo_bars predict --image path/to/chart.png --output-dir output/demo-960 --imgsz 960
+python3.12 -m src.baseline.yolo_bars evaluate --data-root dataset_yolo_vbars_clean --output-dir output/eval-960 --imgsz 960 --batch 1
+python3.12 -m src.baseline.yolo_bars validate --data-root dataset_yolo_vbars_clean --output-dir output/map-960 --imgsz 960 --batch 1
+```
+
+`evaluate` reports bar precision/recall/F1; `validate` reports detection mAP.
+Both save the requested `imgsz` in `metrics.json`. See the
+[size comparison guide](docs/analysis_diagnostics.md#compare-yolo-inference-sizes).
+
 To install the detector together with the Gradio application dependencies,
 use the dedicated application requirements file instead:
 
@@ -76,6 +89,18 @@ detection and Tesseract OCR. Without Tesseract (for example on Windows), add
 `src.tactile.pipeline` use [`models/yolo_bars_hv/best.pt`](models/yolo_bars_hv/best.pt),
 fine-tuned on vertical and horizontal bars, and handle both. Gradio remains
 optional for users who only need the command-line detector.
+
+YOLO inference explicitly requests **640 pixels** by default. Set the initial
+size with `python3.12 -m src.gradio_app --imgsz 960`, or change **YOLO inference
+size (pixels)** under **Advanced settings** before each analysis. Clear restores
+the startup size. Quick-select buttons offer **640**, **960**, and **1280** pixels.
+Sizes must be integers from **1 to 1280**; the shared validator rejects larger
+values before inference to bound memory use and runtime. This is an application
+limit, not a guarantee of performance on every device. YOLO may round sizes up
+to its model stride. Larger sizes may help detect small chart elements and increase
+runtime. Diagnostic downloads record the requested size, checked size, and actual
+input tensor shape. See [comparing inference sizes](docs/analysis_diagnostics.md#compare-yolo-inference-sizes)
+for a repeatable manual check.
 
 Every Analyze chart event writes a temporary diagnostic JSON record, including
 rejected uploads and failed analyses. Terminal summaries include a unique run
