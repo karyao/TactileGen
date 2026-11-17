@@ -16,6 +16,7 @@ import tempfile
 import time
 import traceback
 import uuid
+import weakref
 
 
 LOGGER = logging.getLogger("src.gradio_app")
@@ -89,6 +90,7 @@ class AnalysisDiagnostics:
 
     def __init__(self, *, settings: dict):
         self.assets = {}
+        self._source_frames = []
         self._started = time.monotonic()
         self.record = {
             "schema_version": 1,
@@ -224,7 +226,7 @@ class AnalysisDiagnostics:
         if is_dataclass(value):
             self.record["outputs"][name] = asdict(value)
 
-    def image(self, name: str, image) -> None:
+    def image(self, name: str, image) -> bool:
         """Encode visual evidence best-effort; never replace a pipeline failure."""
         try:
             import cv2
@@ -232,21 +234,59 @@ class AnalysisDiagnostics:
             if not ok:
                 raise ValueError("PNG encoding failed")
             self.assets[name] = encoded.tobytes()
+            return True
         except Exception as exc:
             self.exception("diagnostic_images", exc)
+            return False
+
+    def image_evidence(self, filename, image, *, channel_layout):
+        """Describe a lossless PNG, explicitly retaining capture failures."""
+        evidence = {"filename": None, "availability": "unavailable",
+                    "channel_layout": channel_layout}
+        try:
+            evidence.update(width=int(image.shape[1]), height=int(image.shape[0]),
+                            shape=list(image.shape), dtype=str(image.dtype))
+            if str(image.dtype) not in ("uint8", "uint16"):
+                raise ValueError("PNG evidence requires uint8 or uint16 pixels")
+            if not self.image(filename, image):
+                evidence["reason"] = "PNG encoding failed"
+                return evidence
+            evidence.update(filename=filename, availability="available")
+        except Exception as exc:
+            evidence["reason"] = f"{type(exc).__name__}: {exc}"
+            self.exception("diagnostic_images", exc)
+        return evidence
 
     def source_images(self, image, frame) -> None:
+        from dataclasses import asdict
         from src.contracts import TEXT_ROLES
-        from src.ocr_crop import crop_text_region
+        from src.ocr_crop import crop_text_bounds, crop_text_region, crop_policy
+        if any(source() is image and saved == frame for source, saved in self._source_frames):
+            return
+        self._source_frames.append((weakref.ref(image), frame))
         neighbors = tuple(d for d in frame.detections if d.role in TEXT_ROLES)
-        for index, detection in enumerate(neighbors):
-            # Use generated filenames: detection IDs may contain path separators.
-            filename = f"ocr_crops/{index:05d}_{detection.role}.png"
+        sources = self.record.setdefault("ocr_source_crops", [])
+        for detection in neighbors:
+            index = len(sources) + 1
+            filename = f"ocr_crops/{index:05d}.png"
+            item = {"source_crop_id": f"{self.run_id}:ocr-source-{index:05d}",
+                    "run_id": self.run_id, "detection_id": detection.id,
+                    "detection_box": asdict(detection.box),
+                    "crop_policy": crop_policy(detection),
+                    "coordinate_convention": "source pixels; xyxy; right/bottom exclusive",
+                    "image": {"availability": "unavailable", "filename": None}}
+            sources.append(item)
             try:
-                self.image(filename, crop_text_region(image, detection, neighbors))
+                item["crop_bounds"] = list(crop_text_bounds(image, detection, neighbors))
+                crop = crop_text_region(image, detection, neighbors)
+                layout = "GRAY" if crop.ndim == 2 or crop.shape[2] == 1 else (
+                    "BGRA" if crop.shape[2] == 4 else "BGR")
+                item["image"] = self.image_evidence(filename, crop, channel_layout=layout)
                 self.event("ocr", "source_crop", detection_id=detection.id,
-                           filename=filename, preprocessing="before backend preprocessing")
+                           filename=item["image"]["filename"], source_crop_id=item["source_crop_id"],
+                           preprocessing="before backend preprocessing")
             except Exception as exc:
+                item["image"]["reason"] = f"{type(exc).__name__}: {exc}"
                 self.exception("diagnostic_images", exc)
 
     def export_zip(self, artifact_root: Path) -> Path | None:

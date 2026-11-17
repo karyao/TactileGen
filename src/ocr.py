@@ -91,6 +91,9 @@ def run_ocr(
     if not callable(recognize):
         raise TypeError("backend must provide a callable recognize method")
 
+    if diagnostics is not None:
+        diagnostics.source_images(image, frame)
+
     readonly_image = image.view()
     readonly_image.setflags(write=False)
     text_detections = tuple(

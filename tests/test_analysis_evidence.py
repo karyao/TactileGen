@@ -269,7 +269,7 @@ def test_zip_preserves_partial_stage_outputs(tmp_path, failure):
     with ZipFile(path) as archive:
         report = json.loads(archive.read('diagnostics.json'))
         assert 'injected failure' in archive.read('report.txt').decode() if failure else not report['exceptions']
-        assert 'input.png' in archive.namelist()
+        assert 'input.png' not in archive.namelist()
         if failure != 'detection':
             assert 'detections.json' in archive.namelist()
             crops = [e for e in report['events'] if e['code'] == 'source_crop']

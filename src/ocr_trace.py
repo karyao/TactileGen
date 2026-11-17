@@ -60,6 +60,7 @@ class BatchTrace:
     """Own one adapter call and retain evidence even if that call raises."""
 
     def __init__(self, diagnostics, backend, detections, *, internal=True):
+        self.diagnostics = diagnostics
         self.run_id = diagnostics.run_id
         self.record = trace_record(diagnostics)
         self.batch = {
@@ -85,9 +86,20 @@ class BatchTrace:
             "output_unavailability_reason": "not_submitted",
             "selection": "unresolved", "raw_output": None, "adapter_result": None,
         }
+        source = next((s for s in reversed(self.diagnostics.record.get("ocr_source_crops", []))
+                       if s["detection_id"] == detection.id), None)
+        item["source_crop_id"] = source["source_crop_id"] if source else None
+        item["recognition_image"] = {"availability": "unavailable", "filename": None,
+                                     "reason": "recognition_input_not_prepared"}
         self.record["attempts"].append(item)
         self.attempts.append(item)
         return item
+
+    def input_image(self, index, image, *, channel_layout):
+        item = self.attempts[index]
+        number = item["attempt_id"].rsplit("-", 1)[1]
+        item["recognition_image"] = self.diagnostics.image_evidence(
+            f"ocr_inputs/{number}.png", image, channel_layout=channel_layout)
 
     def submit(self, operation):
         self.batch["operation"] = operation

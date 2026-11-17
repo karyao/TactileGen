@@ -174,7 +174,18 @@ class RapidOCRBackend:
         oriented, orientation = self._engine.cls_and_rotate(candidates)
         if trace is not None:
             from src.ocr_trace import snapshot
-            trace.batch["classifier_output"] = snapshot(orientation)
+            labels = getattr(orientation, "cls_res", None)
+            trace.batch["classifier_output"] = {
+                "cls_res": snapshot(labels),
+                "availability": "available" if labels is not None else "unavailable",
+                "elapse": snapshot(getattr(orientation, "elapse", None)),
+            }
+            for index, candidate in enumerate(oriented):
+                if index >= len(trace.attempts):
+                    break
+                trace.input_image(index, candidate, channel_layout="BGR")
+                if isinstance(labels, (list, tuple)) and index < len(labels):
+                    trace.attempts[index]["preprocessing"]["classifier_orientation"] = snapshot(labels[index])
             trace.submit("recognize_txt")
         output = self._engine.recognize_txt(oriented)
         texts = getattr(output, "txts", None)

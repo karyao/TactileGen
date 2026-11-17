@@ -452,7 +452,6 @@ def analyze_image(
         path, image = decode_upload(image_path)
         if diagnostics is not None:
             diagnostics.record["image"] = {"name": path.name, "width": image.shape[1], "height": image.shape[0]}
-            diagnostics.image("input.png", image)
     with stage("detection"):
         _report_progress(progress, 0.20, "Detecting chart elements")
         frame = run_detection(

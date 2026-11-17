@@ -240,6 +240,9 @@ class TesseractBackend:
                 for offset, details in enumerate(metadata):
                     trace.attempts[len(pages) + offset]["preprocessing"] = details
             for candidate in candidates:
+                if trace is not None:
+                    trace.attempts[len(pages)]["tiff_page_number"] = len(pages) + 1
+                    trace.input_image(len(pages), candidate, channel_layout="GRAY")
                 pages.append(Image.fromarray(candidate))
                 owners.append(detection_index)
 

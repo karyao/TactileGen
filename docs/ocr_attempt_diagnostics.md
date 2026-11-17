@@ -1,5 +1,8 @@
 # OCR attempt diagnostics (Plan 2)
 
+For source coordinates and exact recognition input PNGs, see
+[OCR image diagnostics (Plan 3)](ocr_image_diagnostics.md).
+
 `run_ocr(..., diagnostics=collector)` adds `ocr_trace` to the existing
 `AnalysisDiagnostics` record. The app passes its run collector automatically.
 The existing ZIP contains the same section in `diagnostics.json` and a separate
