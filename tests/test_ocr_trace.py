@@ -13,7 +13,7 @@ import numpy as np
 from src.contracts import Box, Detection, DetectionFrame
 from src.diagnostics import AnalysisDiagnostics
 from src.ocr import OCRBackendResult, run_ocr
-from src.ocr_trace import snapshot
+from src.ocr_trace import adapter_evidence, snapshot
 from src.rapidocr_ocr import RapidOCRBackend
 from src.tesseract_ocr import TesseractBackend
 from tests.test_rapidocr_ocr import fake_rapidocr, output
@@ -293,6 +293,83 @@ class OCRTraceTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "batch failed"):
             recognize(backend, (SHORT,), diagnostics)
         self.assertEqual(diagnostics.record["ocr_trace"]["batches"][-1]["outcome"], "failed")
+
+    def test_legacy_batch_invalid_responses_fail_without_changing_exceptions(self):
+        good = OCRBackendResult("first", .8)
+        cases = [None, {}, "bad", [], [good], [good, None, None],
+                 [good, ("bad", .9)], [good, OCRBackendResult(123, .9)]]
+        cases.extend([good, OCRBackendResult("bad confidence", value)]
+                     for value in (True, -.1, 1.1, float("nan"), float("inf")))
+        for response in cases:
+            with self.subTest(response=response):
+                diagnostics = collector()
+                errors = []
+                for current in (None, diagnostics):
+                    backend = types.SimpleNamespace(
+                        recognize=Mock(), recognize_many=Mock(return_value=response))
+                    with self.assertRaises((TypeError, ValueError)) as caught:
+                        recognize(backend, (SHORT, TALL), current)
+                    errors.append((type(caught.exception), str(caught.exception)))
+                    backend.recognize.assert_not_called()
+                    backend.recognize_many.assert_called_once()
+                    self.assertEqual(set(backend.recognize_many.call_args.kwargs), {"language"})
+                self.assertEqual(errors[0], errors[1])
+                trace = diagnostics.record["ocr_trace"]
+                batch, = trace["batches"]
+                self.assertEqual(batch["outcome"], "failed")
+                self.assertEqual(batch["operation"], "interpret_output")
+                self.assertEqual(batch["error"], {
+                    "type": errors[0][0].__name__, "message": errors[0][1]})
+                expected = ([adapter_evidence(r) for r in response]
+                            if isinstance(response, (list, tuple)) else adapter_evidence(response))
+                self.assertEqual(batch["raw_output"], expected)
+                self.assertEqual(batch["raw_output_availability"], "available")
+                self.assertEqual(trace["attempts"], [])
+                for result in trace["results"]:
+                    self.assertEqual(result["submission"], "submitted")
+                    self.assertEqual(result["selection"], "unresolved")
+                    self.assertIsNone(result["application_result"])
+                    self.assertIsNone(result["selected_attempt_id"])
+                diagnostics.finish(failed=True)
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    record = json.loads(diagnostics.persist(root).read_text())
+                    with ZipFile(diagnostics.export_zip(root)) as archive:
+                        self.assertEqual(json.loads(archive.read("diagnostics.json")), record)
+                        self.assertEqual(json.loads(archive.read("ocr_trace.json")), trace)
+
+    def test_legacy_batch_success_preserves_blank_confidence_behavior(self):
+        for response in ([None, OCRBackendResult(" \t\n", float("nan"))],
+                         (OCRBackendResult("", True), OCRBackendResult(" valid ", .8))):
+            with self.subTest(response=response):
+                diagnostics = collector()
+                results = []
+                for current in (None, diagnostics):
+                    backend = types.SimpleNamespace(
+                        recognize=Mock(), recognize_many=Mock(return_value=response))
+                    results.append(recognize(backend, (SHORT, TALL), current))
+                    backend.recognize_many.assert_called_once()
+                    backend.recognize.assert_not_called()
+                self.assertEqual(results[0], results[1])
+                trace = diagnostics.record["ocr_trace"]
+                self.assertEqual(trace["batches"][0]["outcome"], "succeeded")
+                for record, region in zip(trace["results"], results[0].regions, strict=True):
+                    self.assertEqual(record["application_result"], {
+                        "text": region.text, "confidence": region.confidence})
+
+    def test_legacy_batch_engine_exception_remains_an_inference_failure(self):
+        diagnostics = collector()
+        for current in (None, diagnostics):
+            backend = types.SimpleNamespace(
+                recognize=Mock(), recognize_many=Mock(side_effect=RuntimeError("engine failed")))
+            with self.assertRaisesRegex(RuntimeError, "engine failed"):
+                recognize(backend, (SHORT,), current)
+            backend.recognize_many.assert_called_once()
+            backend.recognize.assert_not_called()
+        batch, = diagnostics.record["ocr_trace"]["batches"]
+        self.assertEqual(batch["operation"], "recognize_many")
+        self.assertEqual(batch["outcome"], "failed")
+        self.assertEqual(batch["raw_output_availability"], "unavailable")
 
     def test_ids_are_unique_across_calls_and_runs_and_exports_roundtrip(self):
         first, second = collector(), collector()

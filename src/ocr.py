@@ -138,6 +138,10 @@ def run_ocr(
                 results = recognize_many(readonly_image, text_detections, language=language)
                 batch.raw([adapter_evidence(r) for r in results]
                           if isinstance(results, (list, tuple)) else adapter_evidence(results))
+                # A returned batch is successful only after its response passes
+                # the same contract checks used by callers without diagnostics.
+                return _finish_ocr(frame, text_detections, results, batched=True,
+                                   records=records)
     else:
         results = []
         for index, detection in enumerate(text_detections):
@@ -154,18 +158,28 @@ def run_ocr(
                                       adapter_result=adapter_evidence(result))
             results.append(result)
 
-    if callable(recognize_many) or (diagnostics is not None and callable(traced_many)):
+    return _finish_ocr(
+        frame, text_detections, results,
+        batched=callable(recognize_many) or (diagnostics is not None and callable(traced_many)),
+        records=records if diagnostics is not None else None,
+    )
+
+
+def _finish_ocr(frame, text_detections, results, *, batched, records=None) -> OCRFrame:
+    """Validate adapter responses and publish application results on success."""
+    if batched:
         if not isinstance(results, (tuple, list)) or len(results) != len(text_detections):
             raise TypeError(
                 "backend recognize_many must return one OCRBackendResult or None per detection"
             )
-    if diagnostics is not None:
+    if records is not None:
+        from src.ocr_trace import adapter_evidence
+
         for item, result in zip(records, results, strict=True):
             item.update(adapter_output_availability="available", adapter_result=adapter_evidence(result))
-            item["selection"] = "unreadable" if result is None else "returned"
 
     regions = []
-    for index, (detection, result) in enumerate(zip(text_detections, results, strict=True)):
+    for detection, result in zip(text_detections, results, strict=True):
         if result is None:
             regions.append(RecognizedText(detection.id, "", 0.0))
         else:
@@ -177,11 +191,12 @@ def run_ocr(
                 regions.append(RecognizedText(detection.id, "", 0.0))
             else:
                 regions.append(RecognizedText(detection.id, result.text, result.confidence))
-        if diagnostics is not None:
-            region = regions[-1]
-            records[index]["application_result"] = {"text": region.text, "confidence": region.confidence}
-
-    return OCRFrame(frame.source_key, tuple(regions))
+    ocr_frame = OCRFrame(frame.source_key, tuple(regions))
+    if records is not None:
+        for item, result, region in zip(records, results, regions, strict=True):
+            item["selection"] = "unreadable" if result is None else "returned"
+            item["application_result"] = {"text": region.text, "confidence": region.confidence}
+    return ocr_frame
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

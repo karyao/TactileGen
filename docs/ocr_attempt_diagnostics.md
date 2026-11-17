@@ -45,6 +45,11 @@ Strings, including Unicode and whitespace, are never normalized in raw evidence.
 Both built-in adapters expose `recognize_many_traced`. Existing custom backends
 continue receiving their original call signatures. Their adapter returns are
 recorded, while internal attempts and raw engine evidence are marked unavailable.
+Legacy batch success includes response validation: malformed containers, result
+counts, entries, text, or nonblank confidence values fail the batch at
+`interpret_output`, retaining the response and leaving final selection unresolved.
+An exception from the backend call instead fails at `recognize_many`, with its
+response unavailable. Existing exceptions and blank-text handling are unchanged.
 
 ## Validation and checkpoint
 
@@ -64,3 +69,31 @@ They compare the fake responses with every attempt and final selection for both
 backends, and include batch-failure diagnostic JSON and ZIP files. Review them
 before continuing to Plan 3. These examples are fake-engine evidence, not an
 assessment of real-engine recognition accuracy.
+
+### Real-engine checkpoint
+
+The downloaded run `42d75f60-eb8d-4ea5-a4c4-d837361312a6` was used to compare
+both backends on the same 1296 × 1098 chart and the same detection boxes.
+
+| Backend | Text detections | Attempts | Selected readable results | Evidence checks |
+|---|---:|---:|---:|---|
+| RapidOCR 3.10.0 / ONNX Runtime 1.31.1 | 12 | 14 | 11 | Passed |
+| Tesseract, previously reviewed downloaded run | 12 | 28 | 11 | Passed |
+
+RapidOCR ran one classification call and one recognition call using cached
+models. The real response was independently captured before conversion in that
+same recognition call. Every raw string and confidence, candidate association,
+adapter result, winner, and final application result matched the trace.
+Tesseract's previously retained batch fields were rechecked against all token
+rows, derived results, selected attempts, and application results; no fresh
+Tesseract inference was performed.
+
+The local [real-engine review](../output/ocr-plan2-review/real-engines/REVIEW.md)
+contains every attempt, side-by-side final results, verification JSON, engine
+responses, and the RapidOCR diagnostic ZIP. These files live under ignored
+`output/`; this document retains the checkpoint summary in the repository.
+
+The backends differ on `det-00011`: RapidOCR selected `0`, while Tesseract selected
+`=` from a rotated candidate. Both selections faithfully follow their engine
+responses and existing confidence rule. Changing that OCR behavior is outside
+Plan 2. The checkpoint is ready for user sign-off before proceeding to Plan 3.
