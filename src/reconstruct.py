@@ -662,6 +662,13 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
           rescue_enabled=can_rescue, rescue_requested=rescue_bars,
           baseline_inside=baseline_inside, grouping_is_settled=grouping_is_settled)
     series = []
+    # Legend-only series can shift these indexes after the visible rows are built.
+    series_events = []
+
+    def trace_series(code, **evidence):
+        if diagnostics is not None:
+            series_events.append((code, evidence))
+
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
     for c, members in enumerate(clusters):
@@ -671,11 +678,11 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         for k in members:
             slot = bar_label[k]
             gap = abs(label_x[slot] - _centre(bars[k])[0])
-            trace("category_assignment", series_index=c, bar_id=bars[k].id,
+            trace_series("category_assignment", series_index=c, bar_id=bars[k].id,
                   category_index=slot, label_id=x_labels[slot].id,
                   label=categories[slot], label_x=label_x[slot], bar_x=_centre(bars[k])[0], gap=gap)
             if slot in best_gap:
-                trace("category_ambiguous", series_index=c, category_index=slot,
+                trace_series("category_ambiguous", series_index=c, category_index=slot,
                       competing_bar_ids=[bars[kept[slot]].id, bars[k].id],
                       gaps=[best_gap[slot], gap],
                       selected_bar_id=bars[kept[slot] if gap >= best_gap[slot] else k].id)
@@ -700,13 +707,13 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                 row[j] = _rescue_value(rgb, label_x[j] + offset, bar_width, baseline, a, centre)
                 rescued[j] = True
                 value_conf[j] = RESCUE_CONFIDENCE
-                trace("pixel_rescue", series_index=c, category_index=j,
+                trace_series("pixel_rescue", series_index=c, category_index=j,
                       center_x=label_x[j] + offset, width=bar_width, baseline=baseline,
                       value=row[j], inferred_zero=row[j] == 0.0)
                 n_rescued += 1
                 rescued_zero += row[j] == 0.0
         rescued_total += n_rescued
-        trace("category_count_mismatch" if len(members) + n_rescued != len(categories)
+        trace_series("category_count_mismatch" if len(members) + n_rescued != len(categories)
               else "category_counts", series_index=c, detected_bars=len(members),
               rescued_bars=n_rescued, category_count=len(categories),
               missing_slots=[j for j, v in enumerate(row) if v is None])
@@ -750,10 +757,17 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                        for entry in pending]
         flags.extend(skipped)
         if added:
+            visible_series = series
             series, reordered = _in_legend_order(
                 series, cluster_identities, legend_mapping.entries, added)
+            final_indexes = {id(item): index for index, item in enumerate(series)}
+            for _, evidence in series_events:
+                evidence["series_index"] = final_indexes[id(visible_series[evidence["series_index"]])]
             if reordered:
                 flags.append("legend_order_differs")
+
+    for code, evidence in series_events:
+        trace(code, **evidence)
 
     # titles
     title, title_box = _title("chart_title", roles, texts, flags, confidence,

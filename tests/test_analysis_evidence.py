@@ -1,5 +1,5 @@
 """Diagnostic evidence must explain decisions without changing chart results."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -15,6 +15,7 @@ from src.gradio_app import analyze_image, build_app
 from src.legend_matcher import match_legend_to_bars
 from src.reconstruct import reconstruct_vbar
 from tests.test_reconstruct import base_chart, y_of, Chart, PLOT, _grouped, SIMILAR
+from tests.test_reconstruct import _grouped_with_third_entry, _custom_entries
 
 
 def recorded(chart, **kwargs):
@@ -108,6 +109,7 @@ def test_category_collision_and_rescue_details():
     chart.detections.remove(bar)
     _, diagnostic = recorded(chart)
     assert events(diagnostic, 'pixel_rescue')[0]['value'] == pytest.approx(120, rel=.01)
+    assert all(e['series_index'] == 0 for e in diagnostic.record['events'] if 'series_index' in e)
 
 
 def test_legend_diagnostics_reuse_scores():
@@ -120,6 +122,65 @@ def test_legend_diagnostics_reuse_scores():
         assert scoring.call_count == 1
     assert all(e['status'] == 'no_legend' for e in events(diagnostic, 'legend_assignment'))
     assert len(actual.assignments) == 3
+
+
+@pytest.mark.parametrize('order, names', [
+    ((2, 0, 1), ['Gamma', 'Alpha', 'Beta']),
+    ((0, 2, 1), ['Alpha', 'Gamma', 'Beta']),
+    ((1, 0, 2), ['Alpha', 'Beta', 'Gamma']),
+    ((0, 1, 2), ['Alpha', 'Beta', 'Gamma']),
+])
+@pytest.mark.parametrize('scenario', ['complete', 'rescue', 'missing', 'collision'])
+def test_series_events_follow_final_legend_order(tmp_path, order, names, scenario):
+    chart = _grouped_with_third_entry()
+    _, mapping = _custom_entries(chart, order)
+    if scenario in ('rescue', 'missing'):
+        # Leave Beta's pixels intact so rescue can recover its first value.
+        bars = [d for d in chart.detections if d.role == 'vertical_bar']
+        chart.detections.remove(bars[1])
+        mapping = replace(mapping, assignments=tuple(
+            assignment for assignment in mapping.assignments if assignment.bar_id != bars[1].id))
+    elif scenario == 'collision':
+        box = (215, y_of(70), 235, 340)
+        bar_id = chart.add('vertical_bar', box)
+        chart.paint(box, (60, 180, 60))
+        beta = next(a for a in mapping.assignments if a.series_name == 'Beta')
+        mapping = replace(mapping, assignments=(*mapping.assignments, replace(beta, bar_id=bar_id)))
+    spec, diagnostic = recorded(chart, legend_mapping=mapping,
+                                rescue_bars=scenario != 'missing')
+    assert [s.name for s in spec.series] == names
+    by_bar = {assignment.bar_id: assignment.series_name for assignment in mapping.assignments}
+    indexed = [event for event in diagnostic.record['events'] if 'series_index' in event]
+    assert indexed
+    for event in indexed:
+        series = spec.series[event['series_index']]
+        assert not series.no_visible_bars
+        if event['code'] == 'category_assignment':
+            assert series.name == by_bar[event['bar_id']]
+        elif event['code'] == 'category_ambiguous':
+            assert series.name == 'Beta'
+            assert all(by_bar[bar_id] == series.name for bar_id in event['competing_bar_ids'])
+        elif event['code'] == 'pixel_rescue':
+            assert series.name == 'Beta'
+            assert series.values[event['category_index']] == event['value']
+    counts = [event for event in indexed
+              if event['code'] in ('category_counts', 'category_count_mismatch')]
+    assert [spec.series[event['series_index']].name for event in counts] == ['Alpha', 'Beta']
+    assert len(events(diagnostic, 'pixel_rescue')) == (scenario == 'rescue')
+    assert len(events(diagnostic, 'category_ambiguous')) == (scenario == 'collision')
+    mismatches = events(diagnostic, 'category_count_mismatch')
+    assert len(mismatches) == (scenario in ('missing', 'collision'))
+    assert all(spec.series[event['series_index']].name == 'Beta' for event in mismatches)
+
+    diagnostic.finish()
+    path = diagnostic.persist(tmp_path)
+    assert path is not None
+    persisted = json.loads(path.read_text())
+    assert [e for e in persisted['events'] if 'series_index' in e] == indexed
+    path = diagnostic.export_zip(tmp_path)
+    assert path is not None
+    with ZipFile(path) as archive:
+        assert json.loads(archive.read('diagnostics.json')) == persisted
 
 
 @pytest.mark.parametrize('failure', [None, 'detection', 'ocr', 'legend_matching', 'reconstruction', 'presentation'])
