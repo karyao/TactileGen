@@ -183,6 +183,64 @@ def test_series_events_follow_final_legend_order(tmp_path, order, names, scenari
         assert json.loads(archive.read('diagnostics.json')) == persisted
 
 
+@pytest.mark.parametrize('helper', ['_bar_less_series', '_in_legend_order'])
+def test_series_events_survive_legend_failure(tmp_path, helper):
+    chart = _grouped_with_third_entry()
+    _, mapping = _custom_entries(chart, (2, 0, 1))
+    diagnostic = AnalysisDiagnostics(settings={})
+    failure = RuntimeError('injected legend failure')
+    with patch('src.reconstruct.' + helper, side_effect=failure), pytest.raises(RuntimeError) as caught:
+        with diagnostic.stage('reconstruction'):
+            reconstruct_vbar(chart.frame(), chart.texts, chart.image,
+                             legend_mapping=mapping, diagnostics=diagnostic)
+    assert caught.value is failure
+    assignments = events(diagnostic, 'category_assignment')
+    counts = events(diagnostic, 'category_counts')
+    assert len(assignments) == 6
+    assert len({event['bar_id'] for event in assignments}) == 6
+    by_bar = {assignment.bar_id: assignment.series_name for assignment in mapping.assignments}
+    for event in assignments:
+        assert ('Alpha', 'Beta')[event['series_index']] == by_bar[event['bar_id']]
+    assert [event['series_index'] for event in counts] == [0, 1]
+    indexed = [event for event in diagnostic.record['events'] if 'series_index' in event]
+    assert len(indexed) == 8
+
+    diagnostic.finish(failed=True)
+    path = diagnostic.persist(tmp_path)
+    assert path is not None
+    persisted = json.loads(path.read_text())
+    assert persisted['outcome'] == 'failed'
+    assert [event for event in persisted['events'] if 'series_index' in event] == indexed
+    path = diagnostic.export_zip(tmp_path)
+    assert path is not None
+    with ZipFile(path) as archive:
+        assert json.loads(archive.read('diagnostics.json')) == persisted
+        report = archive.read('report.txt').decode()
+        assert 'category_assignment' in report
+        assert 'category_counts' in report
+        assert 'injected legend failure' in report
+
+
+def test_series_events_survive_failure_while_building_later_series():
+    chart = _grouped_with_third_entry()
+    _, mapping = _custom_entries(chart, (2, 0, 1))
+    bars = [d for d in chart.detections if d.role == 'vertical_bar']
+    chart.detections.remove(bars[1])
+    mapping = replace(mapping, assignments=tuple(
+        assignment for assignment in mapping.assignments if assignment.bar_id != bars[1].id))
+    diagnostic = AnalysisDiagnostics(settings={})
+    failure = RuntimeError('injected rescue failure')
+    with patch('src.reconstruct._rescue_value', side_effect=failure), pytest.raises(RuntimeError) as caught:
+        reconstruct_vbar(chart.frame(), chart.texts, chart.image,
+                         legend_mapping=mapping, diagnostics=diagnostic)
+    assert caught.value is failure
+    assignments = events(diagnostic, 'category_assignment')
+    assert len(assignments) == 5
+    assert [event['series_index'] for event in assignments] == [0, 0, 0, 1, 1]
+    assert [event['series_index'] for event in events(diagnostic, 'category_counts')] == [0]
+    assert not events(diagnostic, 'pixel_rescue')
+
+
 @pytest.mark.parametrize('failure', [None, 'detection', 'ocr', 'legend_matching', 'reconstruction', 'presentation'])
 def test_zip_preserves_partial_stage_outputs(tmp_path, failure):
     chart = base_chart()

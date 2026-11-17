@@ -662,12 +662,14 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
           rescue_enabled=can_rescue, rescue_requested=rescue_bars,
           baseline_inside=baseline_inside, grouping_is_settled=grouping_is_settled)
     series = []
-    # Legend-only series can shift these indexes after the visible rows are built.
+    # Record immediately so failures retain evidence. Keep the original cluster
+    # index and recorded event reference for legend-only series that shift indexes.
     series_events = []
 
     def trace_series(code, **evidence):
         if diagnostics is not None:
-            series_events.append((code, evidence))
+            trace(code, **evidence)
+            series_events.append((evidence["series_index"], diagnostics.record["events"][-1]))
 
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
@@ -761,13 +763,11 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             series, reordered = _in_legend_order(
                 series, cluster_identities, legend_mapping.entries, added)
             final_indexes = {id(item): index for index, item in enumerate(series)}
-            for _, evidence in series_events:
-                evidence["series_index"] = final_indexes[id(visible_series[evidence["series_index"]])]
+            original_to_final = [final_indexes[id(item)] for item in visible_series]
+            for original_index, event in series_events:
+                event["series_index"] = original_to_final[original_index]
             if reordered:
                 flags.append("legend_order_differs")
-
-    for code, evidence in series_events:
-        trace(code, **evidence)
 
     # titles
     title, title_box = _title("chart_title", roles, texts, flags, confidence,
