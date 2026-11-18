@@ -43,7 +43,6 @@ from src.reconstruction.horizontal import (
     reconstruct_hbar,
 )
 from src.tactile.completeness import (
-    LEGEND_COLOUR_WARNING,
     Completeness,
     check_completeness,
     completeness_from_error,
@@ -287,7 +286,11 @@ def analyze_image(
                 legend_mapping = colour_filter.mapping
                 mismatched_bar_ids = colour_filter.mismatched_bar_ids
                 if mismatched_bar_ids:
-                    legend_warning = LEGEND_COLOUR_WARNING.format(n=len(mismatched_bar_ids))
+                    legend_warning = (
+                        f"{len(mismatched_bar_ids)} candidate bar detection(s) could not be "
+                        "matched to the legend. Reconstruction may exclude some candidates; "
+                        "review the series assignments."
+                    )
                 if diagnostics is not None:
                     diagnostics.snapshot("legend", legend_mapping)
                     diagnostics.record["counts"]["colour_mismatched_bars"] = len(mismatched_bar_ids)

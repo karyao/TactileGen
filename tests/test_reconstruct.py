@@ -1466,15 +1466,114 @@ def test_legend_mismatches_preserve_values_or_block_output(horizontal, loose_swa
     assert any("Review the series assignments" in note for note in check_completeness(spec).notes)
 
 
-def test_unaccounted_colour_mismatch_is_a_non_forceable_blocker():
-    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+def _reconstruct_with_mismatch_evidence(chart, mismatch_ids, horizontal):
+    """Exercise supplied mismatch evidence independently of colour sampling."""
+    from functools import partial
+    from src.reconstruction.horizontal import transpose_image
+    from src.reconstruction.legend_matcher import filter_bars_by_legend
+    from src.reconstruction.vertical import _legend_ocr_frame
+
     frame = chart.frame()
-    duplicate = next(d for d in frame.detections if d.role == "vertical_bar")
-    duplicate = replace(duplicate, id="duplicate", confidence=0.3)
-    frame = replace(frame, detections=(*frame.detections, duplicate))
-    spec = reconstruct_vbar(frame, chart.texts, chart.image, mismatched_bar_ids=(duplicate.id,))
+    mapping = filter_bars_by_legend(
+        chart.image, frame, _legend_ocr_frame(frame, _text_table(chart.texts))).mapping
+    # All bars in these fixtures belong to the same series. Supply its semantic
+    # identity explicitly so collision tests exercise slots rather than grouping.
+    identity = next(a for a in mapping.assignments if a.status == "matched")
+    mapping = replace(mapping, assignments=tuple(
+        replace(identity, bar_id=d.id) for d in frame.detections if d.role == "vertical_bar"))
+    diagnostics = AnalysisDiagnostics(settings={})
+    options = dict(legend_mapping=mapping, mismatched_bar_ids=mismatch_ids, rescue_bars=False)
+    if horizontal:
+        # The horizontal wrapper has no diagnostics argument; capture the same
+        # vertical reconstruction events without changing that public interface.
+        with patch("src.reconstruction.horizontal.reconstruct_vbar",
+                   side_effect=partial(reconstruct_vbar, diagnostics=diagnostics)):
+            spec = reconstruct_hbar(transpose_frame(frame), chart.texts,
+                                    transpose_image(chart.image), **options)
+    else:
+        spec = reconstruct_vbar(frame, chart.texts, chart.image,
+                                diagnostics=diagnostics, **options)
+    return spec, diagnostics
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("exclusion", ["below_confidence", "duplicate", "outside_plot"])
+@pytest.mark.parametrize("eligible_mismatch", [False, True])
+def test_excluded_colour_mismatches_do_not_block(horizontal, exclusion, eligible_mismatch):
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    original = bars[0]
+    box = original.box
+    if exclusion == "outside_plot":
+        box = Box(570, 100, 590, 180)
+    candidate_id = chart.add("vertical_bar", (box.x1, box.y1, box.x2, box.y2),
+                             conf=0.1 if exclusion == "below_confidence" else 0.8)
+    mismatch_ids = (candidate_id, bars[1].id) if eligible_mismatch else (candidate_id,)
+    spec, diagnostics = _reconstruct_with_mismatch_evidence(chart, mismatch_ids, horizontal)
+
+    assert spec.series[0].values == pytest.approx([120, 60, 180])
+    assert not any(f.startswith("bar_colour_unaccounted:") for f in spec.flags)
+    assert [f for f in spec.flags if f.startswith("bar_colour_mismatch:")] == (
+        ["bar_colour_mismatch:1"] if eligible_mismatch else [])
     assessment = check_completeness(spec)
+    assert not assessment.blockers
+    notes = [note for note in assessment.notes if "Review the series assignments" in note]
+    assert notes == (["1 detected bar(s) could not be matched to the legend. "
+                      "Review the series assignments."] if eligible_mismatch else [])
+    assert not events(diagnostics, "bar_colour_unaccounted")
+    if exclusion == "below_confidence":
+        decision = next(e for e in events(diagnostics, "detection_confidence")
+                        if e["detection_id"] == candidate_id)
+        assert decision["outcome"] == "below_confidence"
+    elif exclusion == "duplicate":
+        decision = next(e for e in events(diagnostics, "detection_deduplication")
+                        if e["detection_id"] == candidate_id)
+        assert decision["outcome"] == "duplicate"
+        assert decision["retained_detection_id"] == original.id
+        assert decision["measured_iou"] > decision["duplicate_iou"]
+    else:
+        selection, = events(diagnostics, "plot_selection")
+        assert candidate_id in selection["excluded_bar_ids"]
+
+
+def test_excluded_mismatch_retains_original_legend_evidence():
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    box = (570, 100, 590, 180)
+    candidate_id = chart.add("vertical_bar", box)
+    chart.paint(box, GREEN)
+    spec, diagnostics = recorded(chart)
+
+    decision = next(e for e in events(diagnostics, "bar_colour_validation")
+                    if e["bar_id"] == candidate_id)
+    assert decision["outcome"] == "mismatch"
+    assert decision["reason"] == "colour_mismatch"
+    matching, = events(diagnostics, "legend_colour_filter")
+    assert matching["mismatched_bar_ids"] == [candidate_id]
+    selection, = events(diagnostics, "plot_selection")
+    assert candidate_id in selection["excluded_bar_ids"]
+    assert not any(f.startswith("bar_colour_") for f in spec.flags)
+    assert not check_completeness(spec).blockers
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("loser_first", [False, True])
+def test_eligible_colour_mismatch_losing_slot_is_a_non_forceable_blocker(horizontal, loser_first):
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    winner = next(d for d in chart.detections if d.role == "vertical_bar")
+    centre = (winner.box.x1 + winner.box.x2) / 2
+    # Non-overlapping boxes survive deduplication but claim the same category.
+    loser_x = centre + (-40 if loser_first else 40)
+    loser_id = chart.add("vertical_bar", (loser_x - 10, y_of(90), loser_x + 10, ZERO_Y))
+    spec, diagnostics = _reconstruct_with_mismatch_evidence(chart, (loser_id,), horizontal)
+    assert spec.series[0].values == pytest.approx([120, 60, 180])
+    assert "bar_colour_mismatch:1" in spec.flags
     assert "bar_colour_unaccounted:1" in spec.flags
+    collision, = events(diagnostics, "category_ambiguous")
+    assert collision["selected_bar_id"] == winner.id
+    assert set(collision["competing_bar_ids"]) == {winner.id, loser_id}
+    unaccounted, = events(diagnostics, "bar_colour_unaccounted")
+    assert unaccounted["bar_ids"] == [loser_id]
+    assessment = check_completeness(spec)
     assert assessment.status == "cannot_build"
     assert not assessment.forceable
 

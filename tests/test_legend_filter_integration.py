@@ -85,7 +85,11 @@ def test_app_preserves_orientation_frame(legend_case):
     assert diagnostics.record["counts"]["colour_mismatched_bars"] == len(filtered.mismatched_bar_ids)
     assert bool(result.legend_warning) == bool(filtered.mismatched_bar_ids)
     if filtered.mismatched_bar_ids:
-        assert "Review the series assignments" in result.legend_warning
+        assert result.legend_warning == (
+            f"{len(filtered.mismatched_bar_ids)} candidate bar detection(s) could not be "
+            "matched to the legend. Reconstruction may exclude some candidates; "
+            "review the series assignments."
+        )
     assert result.spec == case.spec
     assert reconstruct.call_args.args[0] is filter_call.call_args.args[1]
     assert reconstruct.call_args.kwargs["legend_mapping"] is filtered.mapping

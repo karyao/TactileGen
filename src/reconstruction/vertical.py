@@ -557,6 +557,9 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     trace("plot_selection", plot_id=plot.id if plot else None,
           retained_bar_ids=[d.id for d in bars],
           excluded_bar_ids=[d.id for d in roles.get("vertical_bar", []) if d not in bars])
+    # Only bars accepted for reconstruction can represent unaccounted chart
+    # data. Keep the original mismatch evidence for excluded candidates.
+    eligible_mismatched = mismatched & {bar.id for bar in bars}
     if not bars:
         trace("reconstruction_blocked", reason="no_bars_inside_plot",
               flag="chart_interpretation_blocked")
@@ -895,7 +898,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
 
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
-    unaccounted = mismatched.copy()
+    unaccounted = eligible_mismatched.copy()
     for c, members in enumerate(clusters):
         row: list[float | None] = [None] * len(categories)
         kept: dict[int, int] = {}
@@ -976,8 +979,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         flags.append(f"short_bars_remeasured:{short_bars}")
     if rescued_total:
         flags.append(f"bars_rescued:{rescued_total}")
-    if mismatched:
-        flags.append(f"bar_colour_mismatch:{len(mismatched)}")
+    if eligible_mismatched:
+        flags.append(f"bar_colour_mismatch:{len(eligible_mismatched)}")
     if unaccounted:
         flag = f"bar_colour_unaccounted:{len(unaccounted)}"
         flags.append(flag)
