@@ -36,13 +36,23 @@ class Browser:
 
     async def call(self, name, inputs=(), iterator=None):
         inputs = list(inputs)
-        if name in ("generate_tactile", "update_review"):
+        if name == "update_review" and len(inputs) == 2:
+            model = self.model
+            inputs.append([model.run_id, model.review_revision] if model else None)
+        if name == "generate_tactile" and len(inputs) == 2:
+            model = self.model
+            admitted = await self.call("admit_generation", [*inputs, [model.run_id, model.review_revision] if model else None])
+            token = admitted["data"][3].get("value")
+            inputs.append(token)
+        if name in ("generate_tactile", "update_review", "admit_generation") and isinstance(inputs[1], list):
             inputs[1] = {"data": inputs[1], "headers": ["Field", "Text"]}
         return await self.app.process_api(self.fn(name), inputs, state=self.state,
                                          request=self.request, session_hash=self.key, iterator=iterator)
 
     async def analyze(self):
         inputs = [None, .25, .7, "eng", 640, "rapidocr", "auto"]
+        admitted = await self.call("admit_analysis", inputs)
+        inputs.append(admitted["data"][-2]["value"])
         first = await self.call("analyze", inputs)
         return await self.call("analyze", inputs, first["iterator"])
 
@@ -78,7 +88,7 @@ def test_late_generation_cannot_restore_state(invalidation, failure):
             with patch("src.gradio_ui.callbacks.analyze_image", return_value=result()):
                 initial = await browser.analyze()
                 # Initial and completion yields disable and enable controls without changing their values.
-                assert initial["data"][-1]["interactive"] is True
+                assert initial["data"][-2]["interactive"] is True
                 with patch("src.gradio_ui.callbacks.generate_review_submission", side_effect=blocked):
                     task = asyncio.create_task(browser.call("generate_tactile", [None, review_text_rows(browser.model)]))
                     await wait_started(entered)

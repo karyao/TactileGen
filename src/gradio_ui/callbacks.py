@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 import html
 import re
 from collections.abc import Callable
@@ -45,6 +47,8 @@ class AppCallbacks:
     ready_results: Callable[..., Any]
     orientation_changed: Callable[..., Any]
     analyze_event: Callable[..., Any]
+    admit_analysis: Callable[..., Any]
+    admit_generation: Callable[..., Any]
     update_review_event: Callable[..., Any]
     generate_event: Callable[..., Any]
     clear_all: Callable[..., Any]
@@ -66,6 +70,16 @@ def create_callbacks(
     generation: GenerationComponents,
 ) -> AppCallbacks:
     """Bind app resources once; keep each user action in a small named handler."""
+
+    admissions = {}
+    workers = set()
+    executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tactilegen")
+
+    def retire(key):
+        for token, entry in list(admissions.items()):
+            if entry[0] == key:
+                admissions.pop(token)
+                entry[-1]()
 
     def session(request):
         if request is None or not request.session_hash:
@@ -474,6 +488,7 @@ def create_callbacks(
     async def reset(request, values):
         key = session(request)
         async with tracker.publication(key):
+            retire(key)
             tracker.invalidate(key)
             return GuardedUpdates((*values, *(gr.update(interactive=True) for _ in controls.components())),
                                   key, tracker.latest(key))
@@ -487,12 +502,14 @@ def create_callbacks(
     async def clear_all(request: gr.Request):
         key = session(request)
         async with tracker.publication(key):
+            retire(key)
             tracker.invalidate(key)
             return GuardedUpdates(raw_clear(), key, tracker.latest(key))
 
     async def unload(request: gr.Request):
         key = session(request)
         async with tracker.publication(key):
+            retire(key)
             tracker.remove(key)
 
     def discard_files(paths, generations=()):
@@ -513,9 +530,9 @@ def create_callbacks(
                      for name in ("ocr_download", "spec_download")}
         return [path for path in paths if path not in published]
 
-    async def analyze_event(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
-                            ocr_engine=initial_ocr_engine, bar_orientation="auto",
-                            request: gr.Request = None, progress=gr.Progress()):
+    async def admit_analysis(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
+                             ocr_engine=initial_ocr_engine, bar_orientation="auto",
+                             request: gr.Request = None):
         key = session(request)
         diagnostics = AnalysisDiagnostics(settings={
             "confidence": confidence, "nms_iou": nms_iou, "device": device,
@@ -523,18 +540,74 @@ def create_callbacks(
             "bar_orientation": bar_orientation,
         })
         async with tracker.publication(key):
+            retire(key)
             ticket = tracker.start(key, diagnostics.run_id)
+            args = (image_path, confidence, nms_iou, language, imgsz, ocr_engine, bar_orientation)
+            admissions[diagnostics.run_id] = (key, ticket, args, diagnostics, tracker.retain(key))
+            return GuardedUpdates((*results.updates(**result_updates(analyzing_status())),
+                *(gr.update(interactive=control is controls.clear_button) for control in controls.components()),
+                gr.update(value=diagnostics.run_id)), key, ticket)
+
+    def consume(key, token):
+        if not isinstance(token, str):
+            return None
+        entry = admissions.get(token)
+        if entry is None or entry[0] != key:
+            LOGGER.info("Discarded missing or consumed operation admission")
+            return None
+        admissions.pop(token)
+        if not tracker.current(key, entry[1]):
+            LOGGER.info("Discarded outdated admission for run %s", entry[1].run_id)
+            entry[-1]()
+            return None
+        return entry
+
+    async def run_worker(key, ticket, function, args, owned_files, owned_generations=()):
+        release = tracker.retain(key)
+        abandoned = Event()
+        future = executor.submit(function, *args)
+        workers.add(future)
+        def finished(done):
+            workers.discard(done)
+            if abandoned.is_set():
+                discard_files(owned_files, owned_generations)
+            release()
+        future.add_done_callback(finished)
+        wrapped = asyncio.wrap_future(future)
+        wrapped.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+        try:
+            return await asyncio.shield(wrapped)
+        except asyncio.CancelledError:
+            abandoned.set()
+            if future.done():
+                discard_files(owned_files, owned_generations)
+            async with tracker.publication(key):
+                if tracker.current(key, ticket):
+                    tracker.invalidate(key)
+            raise
+
+    async def analyze_event(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
+                            ocr_engine=initial_ocr_engine, bar_orientation="auto", admission=None,
+                            request: gr.Request = None, progress=gr.Progress()):
+        key = session(request)
+        entry = consume(key, admission)
+        if entry is None:
+            yield tuple(gr.skip() for _ in [*results.components(), *controls.components()])
+            return
+        _, ticket, args, diagnostics, release = entry
+        release()
         # The first yield resets old results and disables settings in this lifecycle.
         yield GuardedUpdates((*results.updates(**result_updates(analyzing_status())),
-               *(gr.update(interactive=False) for _ in controls.components())), key, ticket)
+               *(gr.update(interactive=control is controls.clear_button) for control in controls.components())), key, ticket)
         def report(*args, **kwargs):
             if tracker.current(key, ticket):
                 progress(*args, **kwargs)
         owned_files = []
-        updates = await asyncio.to_thread(
-            analyze_work, image_path, confidence, nms_iou, language, imgsz,
-            ocr_engine, bar_orientation, report, diagnostics, owned_files,
-        )
+        if not tracker.current(key, ticket):
+            yield tuple(gr.skip() for _ in [*results.components(), *controls.components()])
+            return
+        updates = await run_worker(key, ticket, analyze_work,
+            (*args, report, diagnostics, owned_files), owned_files)
         if not tracker.current(key, ticket):
             discard_files(owned_files)
             yield tuple(gr.skip() for _ in [*results.components(), *controls.components()])
@@ -565,22 +638,46 @@ def create_callbacks(
                 return tuple(gr.skip() for _ in range(3))
         return updated
 
-    async def update_review_event(model, rows, request: gr.Request):
+    async def update_review_event(model, rows, stamp=None, request: gr.Request = None):
         key = session(request)
         async with tracker.publication(key):
+            if model is None or stamp != [model.run_id, model.review_revision]:
+                return tuple(gr.skip() for _ in range(3))
             updates = review_update(model, rows, request)
             return GuardedUpdates(updates, key, tracker.latest(key))
 
-    async def generate_event(model, rows, request: gr.Request):
+    async def admit_generation(model, rows, stamp, request: gr.Request):
         key = session(request)
-        if model is None:
-            return generate_work(None, rows)
         async with tracker.publication(key):
-            ticket = tracker.advance(key, model.run_id, model.review_revision)
-        if ticket is None:
+            if (model is None or stamp != [model.run_id, model.review_revision]
+                    or not tracker.matches_review(key, model.run_id, model.review_revision)):
+                return GuardedUpdates((gr.skip(), gr.skip(), gr.skip(), gr.update(value=None)),
+                                      key, tracker.latest(key))
+            try:
+                draft = update_review_draft(model, rows)
+            except ValueError as exc:
+                return GuardedUpdates((gr.skip(), gr.skip(),
+                    gr.update(value=alert_message(str(exc)), visible=True), gr.update(value=None)),
+                    key, tracker.latest(key))
+            changed = draft.draft_values != model.draft_values
+            ticket = tracker.advance(key, model.run_id, model.review_revision, edit=changed)
+            draft = replace(draft, review_revision=ticket.review_revision)
+            token = f"{ticket.run_id}:{ticket.review_revision}:{ticket.generation_token}"
+            retire(key)
+            admissions[token] = (key, ticket, draft, [list(row) for row in rows], tracker.retain(key))
+            return GuardedUpdates((draft, gr.update(value=review_text_rows(draft)),
+                gr.update(value="", visible=False), gr.update(value=token)), key, ticket)
+
+    async def generate_event(model, rows, admission=None, request: gr.Request = None):
+        key = session(request)
+        entry = consume(key, admission)
+        if entry is None:
             return tuple(gr.skip() for _ in generation.components())
+        _, ticket, model, rows, release = entry
+        release()
         owned_files, owned_generations = [], []
-        updates = await asyncio.to_thread(generate_work, model, rows, owned_files, owned_generations)
+        updates = await run_worker(key, ticket, generate_work,
+            (model, rows, owned_files, owned_generations), owned_files, owned_generations)
         if not tracker.current(key, ticket):
             discard_files(owned_files, owned_generations)
             return tuple(gr.skip() for _ in generation.components())
@@ -594,13 +691,19 @@ def create_callbacks(
                               lambda: discard_files(owned_files, owned_generations))
 
     for callback in (ready_results, orientation_changed, clear_all, unload,
-                     analyze_event, update_review_event, generate_event):
+                     analyze_event, update_review_event, generate_event,
+                     admit_analysis, admit_generation):
         callback.__annotations__["request"] = gr.Request
+
+    analyze_event.admit = admit_analysis
+    generate_event.admit = admit_generation
 
     return AppCallbacks(
         ready_results=ready_results,
         orientation_changed=orientation_changed,
         analyze_event=analyze_event,
+        admit_analysis=admit_analysis,
+        admit_generation=admit_generation,
         update_review_event=update_review_event,
         generate_event=generate_event,
         clear_all=clear_all,

@@ -27,6 +27,11 @@ its text and values, and generate tactile SVGs.
   RapidOCR or Tesseract in the **OCR engine** dropdown. Tesseract requires its
   executable and language packs installed; start with `--ocr tesseract` to select
   it by default. **Tesseract language** applies only to Tesseract.
+- **Bar orientation:** leave **Auto** selected, or choose **Vertical** or
+  **Horizontal** and analyze again if the direction is unclear. The result shows
+  the selected direction, automatic/manual source, and suppressed detection count.
+  Changing this preference clears prior review and generated outputs; **Clear**
+  restores Auto. A manual choice requires usable detections in that direction.
 - **Detection size:** choose **640**, **960**, or **1280** under **Advanced settings**,
   or start with `--imgsz 960`. The default is 640; the maximum is 1280. Larger
   sizes may help with small elements but use more memory and take longer.

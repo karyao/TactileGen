@@ -60,6 +60,13 @@ def build_app(
                 controls = _build_controls(gr, initial_imgsz, ocr_engine)
                 results = _build_results(gr)
 
+        analysis_admission = gr.Textbox(visible=False)
+        generation_admission = gr.Textbox(visible=False)
+        review_stamp = gr.JSON(visible=False)
+        demo.review_stamp = review_stamp
+        demo.analysis_controls = controls.components()
+        demo.publication_errors = [results.error_output, results.generation_error_output,
+                                   results.review_error_output]
         generation = GenerationComponents(
             completeness_output=results.completeness_output,
             review_state=results.review_state,
@@ -81,19 +88,19 @@ def build_app(
         )
         controls.image_input.change(
             callbacks.ready_results,
-            outputs=[*results.components(), *controls.components()],
+            outputs=[*results.components(), *controls.components(), review_stamp],
             queue=False,
             api_visibility="private",
         )
         controls.bar_orientation.input(
             callbacks.orientation_changed,
-            outputs=[*results.components(), *controls.components()],
+            outputs=[*results.components(), *controls.components(), review_stamp],
             queue=False,
             api_visibility="private",
         )
         demo.unload(callbacks.unload)
-        controls.analyze_button.click(
-            callbacks.analyze_event,
+        analysis_start = controls.analyze_button.click(
+            callbacks.admit_analysis,
             inputs=[
                 controls.image_input,
                 controls.confidence,
@@ -103,42 +110,57 @@ def build_app(
                 controls.ocr_engine,
                 controls.bar_orientation,
             ],
-            outputs=[*results.components(), *controls.components()],
-            show_progress="full",
-            show_progress_on=results.annotated_output,
-            concurrency_limit=1,
-            concurrency_id="tactilegen-inference",
-            trigger_mode="once",
-            api_name="analyze",
-            api_visibility="private",
+            outputs=[*results.components(), *controls.components(), analysis_admission, review_stamp],
+            queue=False, trigger_mode="once", api_name="admit_analysis", api_visibility="private",
+        )
+        analysis_start.then(
+            callbacks.analyze_event,
+            inputs=[
+                controls.image_input,
+                controls.confidence,
+                controls.nms_iou,
+                controls.language,
+                controls.inference_size,
+                controls.ocr_engine,
+                controls.bar_orientation,
+                analysis_admission,
+            ],
+            outputs=[*results.components(), *controls.components(), review_stamp],
+            show_progress="full", show_progress_on=results.annotated_output,
+            concurrency_limit=1, concurrency_id="tactilegen-inference",
+            api_name="analyze", api_visibility="private",
         )
         results.review_fields.input(
             callbacks.update_review_event,
-            inputs=[results.review_state, results.review_fields],
+            inputs=[results.review_state, results.review_fields, review_stamp],
             outputs=[
                 results.review_state,
                 results.review_fields,
                 results.review_error_output,
+                review_stamp,
             ],
             queue=False,
             api_name="update_review",
             api_visibility="private",
         )
-        results.generate_button.click(
+        generation_start = results.generate_button.click(
+            callbacks.admit_generation,
+            inputs=[results.review_state, results.review_fields, review_stamp],
+            outputs=[results.review_state, results.review_fields, results.review_error_output,
+                     generation_admission, review_stamp],
+            queue=False, api_name="admit_generation", api_visibility="private",
+        )
+        generation_start.then(
             callbacks.generate_event,
-            inputs=[results.review_state, results.review_fields],
-            outputs=generation.components(),
-            show_progress="full",
-            show_progress_on=results.generation_gallery,
-            concurrency_limit=1,
-            concurrency_id="tactilegen-generation",
-            api_name="generate_tactile",
-            api_description="Generate reviewed tactile SVG artifacts.",
-            api_visibility="private",
+            inputs=[results.review_state, results.review_fields, generation_admission],
+            outputs=[*generation.components(), review_stamp],
+            show_progress="full", show_progress_on=results.generation_gallery,
+            concurrency_limit=1, concurrency_id="tactilegen-generation",
+            api_name="generate_tactile", api_visibility="private",
         )
         controls.clear_button.click(
             callbacks.clear_all,
-            outputs=[*controls.components(), *results.components()],
+            outputs=[*controls.components(), *results.components(), review_stamp],
             queue=False,
             api_visibility="private",
         )
