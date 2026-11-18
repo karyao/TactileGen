@@ -63,6 +63,47 @@ class DownloadTest(unittest.TestCase):
             dl.setup("plotqa", self.output, ["val"], True)
             self.assertEqual(transfer.call_count, 3)
 
+    def test_malformed_receipts_are_replaced_and_then_reused(self):
+        asset = {"provider": "drive", "id": "example"}
+        content = b"x"
+        self.output.mkdir()
+        target = self.output / "file"
+        target.write_bytes(content)
+        receipt = self.output / "file.json"
+        valid = {"asset": asset, "size": len(content), "sha256": dl.digest(target)}
+        cases = {"null": None, "list": [], "string": "receipt"}
+        for field in valid:
+            cases[f"missing_{field}"] = {key: value for key, value in valid.items() if key != field}
+        for field, values in {
+            "asset": (None, [], "example", {"provider": "drive", "id": "other"}),
+            "size": (None, "1", 1.0, True, False, 0, -1, 2),
+            "sha256": (None, 123, [], {}, "", "a" * 63, "a" * 65, "g" * 64, "A" * 64),
+        }.items():
+            for index, value in enumerate(values):
+                cases[f"{field}_{index}"] = {**valid, field: value}
+
+        for name, record in cases.items():
+            with self.subTest(receipt=name):
+                receipt.write_text(json.dumps(record))
+                with patch.object(dl, "transfer", side_effect=lambda a, d: d.write_bytes(content)) as transfer:
+                    self.assertEqual(dl.fetch(asset, self.output, "file"), target)
+                    transfer.assert_called_once()
+                    self.assertEqual(target.read_bytes(), content)
+                    self.assertEqual(json.loads(receipt.read_text()), valid)
+                    dl.fetch(asset, self.output, "file")
+                    transfer.assert_called_once()
+
+    def test_valid_receipt_allows_extra_fields(self):
+        asset = {"provider": "drive", "id": "example"}
+        self.output.mkdir()
+        target = self.output / "file"
+        target.write_bytes(b"x")
+        record = {"asset": asset, "size": 1, "sha256": dl.digest(target), "extra": "ignored"}
+        (self.output / "file.json").write_text(json.dumps(record))
+        with patch.object(dl, "transfer") as transfer:
+            self.assertEqual(dl.fetch(asset, self.output, "file"), target)
+            transfer.assert_not_called()
+
     def test_plotqa_setup_rerun_and_split_isolation(self):
         with patch.object(dl, "transfer", side_effect=self.plotqa()) as transfer:
             dl.setup("plotqa", self.output, ["val"])

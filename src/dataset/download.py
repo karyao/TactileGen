@@ -52,6 +52,20 @@ def transfer(asset: dict, destination: Path) -> None:
         shutil.copyfile(cached, destination)
 
 
+def _valid_receipt(record: object, asset: dict) -> bool:
+    """Reject malformed cache metadata before inspecting the cached file."""
+    if not isinstance(record, dict):
+        return False
+    size = record.get("size")
+    checksum = record.get("sha256")
+    return (
+        isinstance(record.get("asset"), dict) and record["asset"] == asset
+        and type(size) is int and size > 0
+        and isinstance(checksum, str) and len(checksum) == 64
+        and all(character in "0123456789abcdef" for character in checksum)
+    )
+
+
 def fetch(asset: dict, cache: Path, name: str) -> Path:
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / name
@@ -61,7 +75,7 @@ def fetch(asset: dict, cache: Path, name: str) -> Path:
             record = json.loads(receipt.read_text())
         except (ValueError, OSError):
             record = {}
-        if (record.get("asset") == asset and target.stat().st_size == record.get("size")
+        if (_valid_receipt(record, asset) and target.stat().st_size == record["size"]
                 and digest(target) == record["sha256"]):
             print(f"Verified cached download: {name}", flush=True)
             return target
