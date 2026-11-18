@@ -816,11 +816,10 @@ class GradioUiTest(GradioTestCase):
         self.assertEqual(event["api_visibility"], "private")
         updates = reset.fn()
         self.assertEqual(len(updates), len(reset.outputs))
-        self.assertEqual(reset.outputs[-2].label, "Download analysis diagnostics (ZIP)")
-        self.assertIsNone(updates[-2]["value"])
-        self.assertFalse(updates[-2]["visible"])
-        self.assertEqual(updates[-1]["value"], "")
-        self.assertFalse(updates[-1]["visible"])
+        for name in ("diagnostics_download", "diagnostics_info", "orientation_output"):
+            index = [field.name for field in fields(AnalysisComponents)].index(name)
+            self.assertFalse(updates[index]["visible"])
+            self.assertEqual(updates[index]["value"], None if name == "diagnostics_download" else "")
 
     def test_app_factory_wires_controls_states_and_private_events(self):
         with patch("src.gradio_app.load_model") as load,\
@@ -876,10 +875,11 @@ class GradioUiTest(GradioTestCase):
         self.assertEqual(inference_fn.concurrency_limit, 1)
         self.assertEqual(inference_fn.concurrency_id, "tactilegen-inference")
 
-        begin = next(fn.fn for fn in demo.fns.values() if fn.api_name == "begin_analysis")
-        begin_updates = begin()
-        self.assertEqual(len(begin_updates), 11 + len(inference_fn.outputs))
-        self.assertTrue(all(update["interactive"] is False for update in begin_updates[:11]))
+        begin = next(fn for fn in demo.fns.values() if fn.api_name == "begin_analysis")
+        begin_updates = begin.fn()
+        control_count = len(begin.outputs) - len(inference_fn.outputs)
+        self.assertEqual(control_count, 12)
+        self.assertTrue(all(update["interactive"] is False for update in begin_updates[:control_count]))
         finish = next(fn.fn for fn in demo.fns.values() if fn.api_name == "finish_analysis")
         self.assertTrue(all(update["interactive"] is True for update in finish()))
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")

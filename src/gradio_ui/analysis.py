@@ -69,7 +69,8 @@ class AnalysisResult:
     orientation_result: BarOrientationResult | None = None
 
 
-def _orientation_summary(result: BarOrientationResult) -> str:
+def orientation_summary(result: BarOrientationResult) -> str:
+    """Describe the decision and any required rerun in the browser."""
     if result.status == "resolved":
         return (
             f"**Bar orientation: {result.orientation}** ({result.source}). "
@@ -85,7 +86,8 @@ def _orientation_summary(result: BarOrientationResult) -> str:
         ),
     }
     return (
-        "**Bar orientation is unclear.** " + explanations[result.reason]
+        "Bar orientation is unclear. Choose Vertical or Horizontal and analyze again. "
+        + explanations[result.reason]
         + " OCR, legend matching, and reconstruction were skipped."
     )
 
@@ -331,7 +333,7 @@ def analyze_image(
             ocr=ocr_frame,
             legend_mapping=legend_mapping,
         )
-        summary = _orientation_summary(orientation_result) + "\n\n" + summary
+        summary = orientation_summary(orientation_result) + "\n\n" + summary
         _report_progress(progress, 1.0, "Analysis result ready")
     return AnalysisResult(
         summary=summary,

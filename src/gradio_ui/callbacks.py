@@ -11,7 +11,7 @@ from typing import Any
 
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU
 from src.diagnostics import AnalysisDiagnostics
-from src.gradio_ui.analysis import UploadValidationError, analyze_image
+from src.gradio_ui.analysis import UploadValidationError, analyze_image, orientation_summary
 from src.gradio_ui.artifacts import write_ocr_download, write_spec_download
 from src.gradio_ui.components import Controls, AnalysisComponents, GenerationComponents
 from src.gradio_ui.formatting import (
@@ -41,6 +41,7 @@ class AppCallbacks:
     """The event handlers registered by the layout builder."""
 
     ready_results: Callable[..., Any]
+    orientation_changed: Callable[..., Any]
     begin_analysis: Callable[..., Any]
     analyze_event: Callable[..., Any]
     update_review_event: Callable[..., Any]
@@ -69,6 +70,7 @@ def create_callbacks(
         *,
         empty_message: str = "",
         summary: str | None = None,
+        orientation_text: str | None = None,
         overlay=None,
         ocr_table: list[list[Any]] | None = None,
         ocr_download_path: Path | None = None,
@@ -152,6 +154,9 @@ def create_callbacks(
             ),
             diagnostics_download=gr.update(value=None, visible=False),
             diagnostics_info=gr.update(value="", visible=False),
+            orientation_output=gr.update(
+                value=orientation_text or "", visible=orientation_text is not None,
+            ),
         )
 
     def ready_results():
@@ -163,6 +168,12 @@ def create_callbacks(
             ),
         ))
 
+    def orientation_changed():
+        return results.updates(**result_updates(
+            ready_status(),
+            empty_message="Bar orientation changed. Select Analyze chart to update the results.",
+        ))
+
     def begin_analysis():
         return (
             *(gr.update(interactive=False) for _ in controls.components()),
@@ -170,12 +181,12 @@ def create_callbacks(
         )
 
     def analyze_event(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
-                      ocr_engine=initial_ocr_engine,
+                      ocr_engine=initial_ocr_engine, bar_orientation="auto",
                       progress=gr.Progress()):
         diagnostics = AnalysisDiagnostics(settings={
             "confidence": confidence, "nms_iou": nms_iou,
             "device": device, "language": language, "imgsz": imgsz,
-            "ocr_engine": ocr_engine,
+            "ocr_engine": ocr_engine, "bar_orientation": bar_orientation,
         })
         failed = False
         updates = None
@@ -188,6 +199,7 @@ def create_callbacks(
                 confidence,
                 nms_iou,
                 imgsz=imgsz,
+                bar_orientation=bar_orientation,
                 language=language,
                 ocr_backend_factory=lambda: backends.resolve(ocr_engine),
                 device=device,
@@ -221,6 +233,10 @@ def create_callbacks(
                 updates = result_updates(
                     complete_status(result.detection_count, ocr_count),
                     summary=result.summary,
+                    orientation_text=(
+                        orientation_summary(result.orientation_result)
+                        if result.orientation_result is not None else None
+                    ),
                     overlay=result.overlay_rgb,
                     ocr_table=rows if result.ocr_frame is not None else None,
                     ocr_download_path=download,
@@ -444,6 +460,7 @@ def create_callbacks(
             language=gr.update(value=DEFAULT_OCR_LANGUAGE, interactive=True),
             inference_size=gr.update(value=initial_imgsz, interactive=True),
             ocr_engine=gr.update(value=initial_ocr_engine, interactive=True),
+            bar_orientation=gr.update(value="auto", interactive=True),
             analyze_button=gr.update(interactive=True),
             clear_button=gr.update(interactive=True),
             size_presets=tuple(
@@ -454,6 +471,7 @@ def create_callbacks(
 
     return AppCallbacks(
         ready_results=ready_results,
+        orientation_changed=orientation_changed,
         begin_analysis=begin_analysis,
         analyze_event=analyze_event,
         update_review_event=update_review_event,

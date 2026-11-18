@@ -83,6 +83,12 @@ def build_app(
             queue=False,
             api_visibility="private",
         )
+        controls.bar_orientation.input(
+            callbacks.orientation_changed,
+            outputs=results.components(),
+            queue=False,
+            api_visibility="private",
+        )
         start = controls.analyze_button.click(
             callbacks.begin_analysis,
             outputs=[*controls.components(), *results.components()],
@@ -99,6 +105,7 @@ def build_app(
                 controls.language,
                 controls.inference_size,
                 controls.ocr_engine,
+                controls.bar_orientation,
             ],
             outputs=results.components(),
             show_progress="full",
@@ -195,6 +202,13 @@ def _build_controls(gr, initial_imgsz: int, initial_ocr_engine: str) -> Controls
             info="Choose the text recognition engine for the next analysis.",
             elem_classes="borealis-setting",
         )
+        bar_orientation = gr.Dropdown(
+            choices=[("Auto", "auto"), ("Vertical", "vertical"), ("Horizontal", "horizontal")],
+            value="auto",
+            label="Bar orientation",
+            info="Choose a direction if Auto is unclear, then analyze again.",
+            elem_classes="borealis-setting",
+        )
         with gr.Accordion(
             "Advanced settings",
             open=False,
@@ -256,6 +270,7 @@ def _build_controls(gr, initial_imgsz: int, initial_ocr_engine: str) -> Controls
         language=language,
         inference_size=inference_size,
         ocr_engine=ocr_engine,
+        bar_orientation=bar_orientation,
         analyze_button=analyze_button,
         clear_button=clear_button,
         size_presets=tuple(size_presets),
@@ -290,6 +305,10 @@ def _build_results(gr) -> AnalysisComponents:
             buttons=["download", "fullscreen"],
             alt_text="Uploaded chart with labeled detection boxes",
             elem_classes="borealis-result-image",
+        )
+        orientation_output = gr.Markdown(
+            "", label="Bar orientation result", visible=False,
+            elem_classes="borealis-summary",
         )
         completeness_output = gr.Markdown(
             "",
@@ -481,5 +500,6 @@ def _build_results(gr) -> AnalysisComponents:
         error_output=error_output,
         diagnostics_download=diagnostics_download,
         diagnostics_info=diagnostics_info,
+        orientation_output=orientation_output,
     )
 

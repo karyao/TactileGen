@@ -43,7 +43,7 @@ def test_ui_initial_selection_clear_and_controls_are_lazy(engine):
             rapid.assert_not_called()
             tesseract.assert_not_called()
             event = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
-            selector = event.inputs[-1]
+            selector = next(c for c in event.inputs if c.label == "OCR engine")
             assert selector.label == "OCR engine"
             assert selector.value == engine
             for name, interactive in (("begin_analysis", False), ("finish_analysis", True)):
