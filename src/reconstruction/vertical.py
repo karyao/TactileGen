@@ -35,6 +35,10 @@ MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
 UNREADABLE_CATEGORY_CONFIDENCE = 0.1
+MIN_DETECTED_BAR_FRACTION = 0.6  # below this share of detected slots, most values are guesses
+BAR_EDGE_TOLERANCE_PX = 5     # a pixel-measured top edge this far from the box edge wins
+SHORT_BAR_MIN_PX = 6          # detected bars shorter than this are re-measured from pixels
+SHORT_BAR_PLOT_FRACTION = 0.03  # ... or shorter than this share of the plot height
 RESCUE_CONFIDENCE = 0.2
 # A legend entry no bar matched becomes a series with no visible bars only when its
 # swatch box, label box and OCR text are all read at least this confidently (GUESS).
@@ -51,7 +55,7 @@ ADJACENT_GAP_RATIO = 0.10
 ARITHMETIC_TOLERANCE = 0.03
 
 _SUFFIX = {"K": 1e3, "M": 1e6, "B": 1e9}
-_LEADING_ZERO = re.compile(r"-?0\d")  # "04": the decimal point of "0.4" was probably lost
+_LEADING_ZERO = re.compile(r"(-?)0(\d+)")  # "04": the decimal point of "0.4" was probably lost
 _NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
@@ -194,6 +198,13 @@ def parse_tick_value(text: str, *, diagnostics=None, detection_id=None) -> tuple
             result=result, text_evidence=text_evidence(diagnostics, detection_id),
             reason="parsed" if result else "nonfinite" if matched else "invalid_number")
     return result
+
+
+def _repair_lost_decimal(text: str) -> str | None:
+    """``"04"`` -> ``"0.4"``: a tick label that is a zero followed by digits lost its decimal point."""
+    cleaned = text.strip().replace("−", "-").replace("–", "-").replace(",", "").replace(" ", "").lstrip("$")
+    match = _LEADING_ZERO.fullmatch(cleaned)
+    return f"{match.group(1)}0.{match.group(2)}" if match else None
 
 
 def _calibrate(ticks: list[tuple[float, float]], *, diagnostics: AnalysisDiagnostics | None = None):
@@ -584,8 +595,11 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
 
     # y calibration
     parsed = []
+    repaired_ids: set[str] = set()
     for detection in y_labels:
-        value = parse_tick_value(texts.get(detection.id, ("", 0.0))[0],
+        text = texts.get(detection.id, ("", 0.0))[0]
+        repaired = _repair_lost_decimal(text)
+        value = parse_tick_value(repaired if repaired else text,
                                  diagnostics=diagnostics, detection_id=detection.id)
         if diagnostics is not None:
             consumed = text_evidence(diagnostics, detection.id)
@@ -600,6 +614,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                   reason="numeric_candidate" if value else "unparseable")
         if value is not None:
             parsed.append((detection, *value))
+            if repaired:
+                repaired_ids.add(detection.id)
     if diagnostics is not None:
         source_ids = [d.id for d, _, _ in parsed]
         link = trace("calibration_tick_sources", ticks=[
@@ -634,17 +650,23 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         flags.append(f"y_ticks_dropped:{dropped}")
     if ambiguous:
         flags.append("y_calibration_ambiguous")
-
-    def leading_zero(detection):
-        text = texts[detection.id][0].strip()
-        matched = bool(_LEADING_ZERO.match(text))
-        trace("leading_zero_check", detection_id=detection.id, text=text,
-              pattern=_LEADING_ZERO.pattern, matched=matched,
-              flag="y_tick_leading_zero" if matched else None)
-        return matched
-
-    if any(leading_zero(d) for d, _, _ in good):
-        flags.append("y_tick_leading_zero")
+    negative_read = any(v < 0 for _, v, _ in parsed)
+    if negative_read:
+        # A minus sign was read on some tick label, even if the fit dropped it. OCR loses
+        # minus signs, so an axis whose surviving ticks are all >= 0 may still be negative.
+        trace("y_tick_negative_read", detection_ids=[d.id for d, v, _ in parsed if v < 0],
+              flag="y_tick_negative_read")
+        flags.append("y_tick_negative_read")
+    repaired_good = [d for d, _, _ in good if d.id in repaired_ids]
+    if repaired_good:
+        trace("y_tick_decimal_repaired", detection_ids=[d.id for d in repaired_good],
+              ambiguous_calibration=bool(ambiguous),
+              flag=f"y_tick_decimal_repaired:{len(repaired_good)}")
+        flags.append(f"y_tick_decimal_repaired:{len(repaired_good)}")
+        if ambiguous:   # two scales fit equally well, so the repair cannot be trusted
+            trace("leading_zero_check", detection_ids=[d.id for d in repaired_good],
+                  matched=True, flag="y_tick_leading_zero")
+            flags.append("y_tick_leading_zero")
     tick_values = [v for _, v, _ in sorted(good, key=lambda t: t[1])]
     trace("y_ticks_not_arithmetic" if not _is_arithmetic(tick_values) else "y_tick_spacing",
           tick_values=tick_values, differences=[v - u for u, v in zip(tick_values, tick_values[1:])],
@@ -730,47 +752,77 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                 if legend is None or _inside(_centre(d), legend, 4, 4)]
     swatch_colors = [_sample_rgb(rgb, d) for d in swatches]
     seeds, _ = _legend_seeds(swatch_colors)
-    matched_groups: dict[tuple[str, str, str], list[int]] = {}
-    identities_by_swatch: dict[str, set[tuple[str, str]]] = {}
-    unresolved = []
-    for index, bar in enumerate(bars):
-        assignment = assignment_by_bar.get(bar.id)
-        if (
-            assignment is None
-            or assignment.status != "matched"
-            or assignment.swatch_id is None
-            or assignment.label_id is None
-            or assignment.series_name is None
-        ):
-            unresolved.append(index)
-            continue
-        identity = (
-            assignment.swatch_id,
-            assignment.label_id,
-            assignment.series_name,
-        )
-        matched_groups.setdefault(identity, []).append(index)
-        identities_by_swatch.setdefault(assignment.swatch_id, set()).add(
-            (assignment.label_id, assignment.series_name)
-        )
 
-    conflicting_swatches = {
-        swatch_id
-        for swatch_id, identities in identities_by_swatch.items()
-        if len(identities) > 1
-    }
-    grouped: list[tuple[list[int], str | None, tuple[str, str, str] | None]] = [
-        (members, None if identity[0] in conflicting_swatches else identity[2], identity)
-        for identity, members in matched_groups.items()
-    ]
-    if unresolved:
-        fallback_clusters, _ = _cluster_colors(
-            [bar_colors[index] for index in unresolved], seeds
+    def group_bars(skip: set[int]):
+        matched_groups: dict[tuple[str, str, str], list[int]] = {}
+        identities_by_swatch: dict[str, set[tuple[str, str]]] = {}
+        unresolved = []
+        for index, bar in enumerate(bars):
+            if index in skip:
+                continue
+            assignment = assignment_by_bar.get(bar.id)
+            if (
+                assignment is None
+                or assignment.status != "matched"
+                or assignment.swatch_id is None
+                or assignment.label_id is None
+                or assignment.series_name is None
+            ):
+                unresolved.append(index)
+                continue
+            identity = (
+                assignment.swatch_id,
+                assignment.label_id,
+                assignment.series_name,
+            )
+            matched_groups.setdefault(identity, []).append(index)
+            identities_by_swatch.setdefault(assignment.swatch_id, set()).add(
+                (assignment.label_id, assignment.series_name)
+            )
+
+        conflicting_swatches = {
+            swatch_id
+            for swatch_id, identities in identities_by_swatch.items()
+            if len(identities) > 1
+        }
+        grouped: list[tuple[list[int], str | None, tuple[str, str, str] | None]] = [
+            (members, None if identity[0] in conflicting_swatches else identity[2], identity)
+            for identity, members in matched_groups.items()
+        ]
+        if unresolved:
+            fallback_clusters, _ = _cluster_colors(
+                [bar_colors[index] for index in unresolved], seeds
+            )
+            grouped.extend(
+                ([unresolved[local_index] for local_index in members], None, None)
+                for members in fallback_clusters
+            )
+        return matched_groups, unresolved, conflicting_swatches, grouped
+
+    # Very short boxes carry mostly outline and antialiasing pixels, so their
+    # colour is unreliable and their height is a few pixels of box noise: leave
+    # them out of grouping and let the rescue re-measure their slots.
+    plot_height = plot.box.y2 - plot.box.y1 if plot is not None else 0.0
+    short_limit = max(SHORT_BAR_MIN_PX, SHORT_BAR_PLOT_FRACTION * plot_height)
+    short = {k for k, bar in enumerate(bars) if bar.box.y2 - bar.box.y1 < short_limit}
+    if not (rescue_bars and baseline_inside) or len(short) == len(bars):
+        short = set()
+    matched_groups, unresolved, conflicting_swatches, grouped = group_bars(short)
+    # Rescue is safe when group membership is settled. With a mixture of
+    # semantic and fallback groups (or conflicting semantic identities), the
+    # same pixels could otherwise be inferred into more than one series.
+    grouping_is_settled = not (
+        (matched_groups and unresolved) or conflicting_swatches
+    )
+    can_rescue = rescue_bars and baseline_inside and grouping_is_settled
+    if short and not can_rescue:
+        short = set()   # nothing will re-measure them, so keep them in their groups
+        matched_groups, unresolved, conflicting_swatches, grouped = group_bars(short)
+        grouping_is_settled = not (
+            (matched_groups and unresolved) or conflicting_swatches
         )
-        grouped.extend(
-            ([unresolved[local_index] for local_index in members], None, None)
-            for members in fallback_clusters
-        )
+        can_rescue = rescue_bars and baseline_inside and grouping_is_settled
+    short_bars = len(short)
     grouped.sort(key=lambda item: min(item[0]))
     clusters = [members for members, _, _ in grouped]
     cluster_names = [name for _, name, _ in grouped]
@@ -790,13 +842,24 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         ambiguous_series = True
 
     bar_width = statistics.median(d.box.x2 - d.box.x1 for d in bars)
-    # Rescue is safe when group membership is settled. With a mixture of
-    # semantic and fallback groups (or conflicting semantic identities), the
-    # same pixels could otherwise be inferred into more than one series.
-    grouping_is_settled = not (
-        (matched_groups and unresolved) or conflicting_swatches
-    )
-    can_rescue = rescue_bars and baseline_inside and grouping_is_settled
+    # The detector sometimes puts a bar's top edge several pixels off while the
+    # box still overlaps the bar well. Check positive bars against the pixels.
+    edges_corrected = 0
+    if can_rescue:
+        for c, members in enumerate(clusters):
+            if cluster_centre[c] is None:
+                continue
+            for k in members:
+                box = bars[k].box
+                if abs(box.y2 - baseline) > abs(box.y1 - baseline):
+                    continue
+                half = RESCUE_STRIP_FRACTION * (box.x2 - box.x1) / 2
+                left = max(0, int(round(_centre(bars[k])[0] - half)))
+                right = min(rgb.shape[1], max(left + 1, int(round(_centre(bars[k])[0] + half))))
+                up = _run_length(rgb, left, right, int(round(baseline)) - 1, -1, cluster_centre[c])
+                if up >= 1 and abs(box.y1 - (round(baseline) - up)) >= BAR_EDGE_TOLERANCE_PX:
+                    values[k] = -a * up
+                    edges_corrected += 1
     trace("series_ambiguous" if ambiguous_series else "series_grouping",
           unresolved_bar_ids=[bars[k].id for k in unresolved],
           conflicting_swatches=sorted(conflicting_swatches),
@@ -809,6 +872,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
           rescue_enabled=can_rescue, rescue_requested=rescue_bars,
           baseline_inside=baseline_inside, grouping_is_settled=grouping_is_settled)
     series = []
+    detected_slots = 0
     # Record immediately so failures retain evidence. Keep the original cluster
     # index and recorded event reference for legend-only series that shift indexes.
     series_events = []
@@ -842,6 +906,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             best_gap[slot] = gap
             kept[slot] = k
             row[slot] = values[k]
+        detected_slots += len(kept)
         rescued = [False] * len(categories)
         value_conf: list[float | None] = [
             bars[kept[j]].confidence if j in kept else None for j in range(len(categories))]
@@ -884,6 +949,15 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             source = diagnostics.field_source(f"series_name[{c}]",
                 [identity[1]] if identity and name else [], [event_id])
             series_sources[id(series[-1])] = source
+    # Share of category x series slots (for series with at least one detected
+    # bar) that had a detected bar; very short bars were detected, just re-measured.
+    slots = len(categories) * len(clusters)
+    if slots and (detected_slots + short_bars) / slots < MIN_DETECTED_BAR_FRACTION:
+        flags.append(f"bars_mostly_missed:{round(100 * (1 - (detected_slots + short_bars) / slots))}")
+    if edges_corrected:
+        flags.append(f"bar_edge_corrected:{edges_corrected}")
+    if short_bars:
+        flags.append(f"short_bars_remeasured:{short_bars}")
     if rescued_total:
         flags.append(f"bars_rescued:{rescued_total}")
     if rescued_zero:

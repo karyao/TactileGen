@@ -1040,7 +1040,7 @@ class GenerationTests(unittest.TestCase):
         result = generate_tactile_artifacts(spec, self.root)
         joined = " ".join(result.notes)
         self.assertIn("not evenly spaced", joined)
-        self.assertIn("treated as 0", joined)
+        self.assertIn("Values below the axis minimum were set to 0", joined)
         self.assertIsInstance(result.pages[0].notes, tuple)
         self.assertIsInstance(result.pages[0].needs_review, tuple)
 
@@ -1056,7 +1056,8 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(raised.exception.stage, "validation")
 
     def test_real_layout_failure_removes_job_directory(self):
-        spec = make_spec(series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
+        spec = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]),
+                         series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
         with self.assertRaises(GenerationError) as raised:
             generate_tactile_artifacts(spec, self.root)
         self.assertEqual(raised.exception.stage, "layout")
@@ -1295,15 +1296,43 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("too narrow", out)
 
-    def test_tiny_negative_is_zeroed_with_a_note_but_a_real_one_is_rejected(self):
-        tiny = pipeline_spec(series=[SeriesSpec(None, "#112233", [-0.1, 20.0, 30.0])])
-        code, out, _, written = self.go(tiny, argv=["--yes"])
+    def test_negative_values_are_zeroed_on_an_axis_from_zero_but_rejected_on_a_negative_axis(self):
+        zero_axis = pipeline_spec(series=[SeriesSpec(None, "#112233", [-0.6, 20.0, 30.0])])
+        code, out, _, written = self.go(zero_axis, argv=["--yes"])
         self.assertEqual((code, written), (0, True))
-        self.assertIn("treated as 0", out)
-        real = pipeline_spec(series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
-        code, _, err, written = self.go(real, argv=["--yes"])
+        self.assertIn("Values below the axis minimum were set to 0", out)
+        negative_axis = pipeline_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]),
+                                  series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
+        code, _, err, written = self.go(negative_axis, argv=["--yes"])
         self.assertEqual((code, written), (1, False))
         self.assertIn("negative bar values are not supported", err)
+
+    def test_clipped_bar_builds_with_a_note_unless_the_axis_is_negative(self):
+        code, out, _, written = self.go(pipeline_spec(flags=["value_clipped_at_axis"]), argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("lower bound", out)
+        spec = pipeline_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]), flags=["value_clipped_at_axis"])
+        for extra in ([], ["--force"]):
+            code, _, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+
+    def test_lost_minus_signs_keep_a_clipped_chart_blocked_even_with_force(self):
+        spec = pipeline_spec(flags=["value_clipped_at_axis", "y_tick_negative_read", "y_ticks_dropped:2"])
+        for extra in ([], ["--force"]):
+            code, out, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+            self.assertIn("runs past the end of the y axis", out)
+
+    def test_bars_mostly_missed_blocks_until_forced(self):
+        spec = pipeline_spec(flags=["bars_mostly_missed:67"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (3, False))
+        self.assertIn("67% of bars were not detected and would be drawn as 0", out)
+        self.assertIn("Re-run with --force to build anyway.", out)
+        code, out, err, written = self.go(spec, argv=["--yes", "--force"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("WARNING: --force", err)
+        self.assertIn("bars_mostly_missed:67", out)
 
     def test_suspicious_category_asks_and_flag_fixes_it(self):
         spec = pipeline_spec(categories=["Germany", "i", "Greece"])
@@ -1577,3 +1606,145 @@ class Pipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoVisibleBarsTest(unittest.TestCase):
+    """Legend entries with no visible bars are keyed, noted, and draw no bars."""
+
+    def chart(self, n_categories=4):
+        categories = tuple(str(2000 + j) for j in range(n_categories))
+        return VerticalBarChart(
+            "demo/legend.png", "Net energy imports", "Years", "Imports",
+            categories,
+            (BarSeries("Low & middle income", (), has_bars=False),
+             BarSeries("Kenya", tuple(13.0 + j for j in range(n_categories))),
+             BarSeries("Vietnam", (), has_bars=False)))
+
+    def note_text(self, layout):
+        return " ".join(label.text for label in layout.labels if label.role == "note")
+
+    def test_every_legend_entry_has_a_key_sample_and_braille_name_in_order(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        samples = sorted(layout.key_samples, key=lambda s: s.y)
+        self.assertEqual([s.series_index for s in samples], [0, 1, 2])
+        series_keys = [l for l in layout.labels if l.role == "key" and str(l.owner_id).startswith("key-sample")]
+        self.assertEqual([l.text for l in series_keys], ["Low & middle income", "Kenya", "Vietnam"])
+        self.assertEqual(len(set(layout.series_textures)), 3)
+        braille = [to_unicode(label.cells) for label in layout.labels if label.id == "key-0"]
+        self.assertEqual(braille, [to_unicode(to_braille("Low & middle income"))])
+
+    def test_only_series_with_bars_draw_bars_and_take_bar_slots(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        self.assertEqual({bar.series_index for bar in layout.bars}, {1})
+        self.assertEqual(len(layout.bars), 4)
+        solo = VerticalBarChart("demo/solo.png", "Net energy imports", "Years", "Imports",
+                                self.chart().categories, (self.chart().series[1],))
+        self.assertAlmostEqual(layout.bars[0].width, layout_vertical_bar_chart(solo).bars[0].width)
+        self.assertEqual(layout.bars[1].texture, layout.series_textures[1])
+
+    def test_the_transcribers_note_names_the_entries_without_saying_zero(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        note = self.note_text(layout)
+        self.assertEqual(note, "No bars are visible for: Low & middle income, Vietnam.")
+        self.assertNotIn("zero", note.lower())
+        note_labels = [l for l in layout.labels if l.role == "note"]
+        self.assertEqual(to_unicode(note_labels[0].cells)[:1], to_unicode(TN_OPEN)[:1])
+        first_key_y = min(l.y for l in layout.labels if str(l.owner_id).startswith("key-sample"))
+        self.assertTrue(all(l.y < first_key_y for l in note_labels))      # notes come before the key
+
+    def test_the_layout_passes_every_rule(self):
+        violations = [v for v in check_layout(layout_vertical_bar_chart(self.chart()))
+                      if v.rule.id != "overview_first"]
+        self.assertEqual(violations, [])
+
+    def test_a_chart_with_bars_for_every_series_is_laid_out_as_before(self):
+        plain = VerticalBarChart("demo/p.png", "T", "X", "Y", ("a", "b", "c"),
+                                 (BarSeries("A", (1.0, 2.0, 3.0)), BarSeries("B", (3.0, 2.0, 1.0))))
+        layout = layout_vertical_bar_chart(plain)
+        self.assertEqual(len(layout.bars), 6)
+        self.assertNotIn("note", {l.role for l in layout.labels})
+        self.assertEqual(layout, layout_vertical_bar_chart(replace(
+            plain, series=tuple(replace(s, has_bars=True) for s in plain.series))))
+
+    def test_a_single_unnamed_series_still_gets_no_key_and_no_note(self):
+        unnamed = VerticalBarChart("demo/u.png", "T", "X", "Y", ("a", "b"), (BarSeries(None, (1.0, 2.0)),))
+        layout = layout_vertical_bar_chart(unnamed)
+        self.assertEqual(layout.key_samples, ())
+        self.assertNotIn("note", {l.role for l in layout.labels})
+        self.assertFalse([l for l in layout.labels if str(l.owner_id).startswith("key-sample")])
+
+    def test_a_divided_graph_puts_the_note_and_every_key_on_the_key_page(self):
+        pages = layout_vertical_bar_chart_pages(self.chart(n_categories=30))
+        self.assertGreater(len(pages), 2)
+        key_page = pages[0]
+        self.assertEqual(key_page.page_kind, "key")
+        self.assertIn("No bars are visible for: Low & middle income, Vietnam.", self.note_text(key_page))
+        self.assertEqual(len(key_page.key_samples), 3)
+        for page in pages[1:]:
+            self.assertNotIn("No bars are visible", self.note_text(page))
+            self.assertEqual(page.key_samples, ())
+            self.assertEqual({bar.series_index for bar in page.bars}, {1})
+        for page in pages:
+            self.assertEqual([v for v in check_layout(page) if v.rule.id != "overview_first"], [])
+
+    def test_more_than_five_legend_entries_are_still_refused(self):
+        series = tuple(BarSeries(f"s{k}", (), has_bars=False) for k in range(5)) + (
+            BarSeries("with bars", (1.0, 2.0)),)
+        with self.assertRaises(ValueError):
+            layout_vertical_bar_chart(VerticalBarChart("demo/m.png", "T", "X", "Y", ("a", "b"), series))
+
+
+class MinimumPlotHeightTest(unittest.TestCase):
+    """A key that leaves the plot too short goes on a key page before the graph page."""
+
+    def short(self):
+        """24811-like: three keyed series, numbered categories and a long y title."""
+        return VerticalBarChart(
+            "demo/short.png", "Net energy imports of a country", "Years",
+            "Net energy imports % of energy use", ("2003", "2004", "2005", "2006"),
+            (BarSeries("Low & middle income", (), has_bars=False),
+             BarSeries("Kenya", (13.0, 14.0, 15.0, 16.0)),
+             BarSeries("Vietnam", (), has_bars=False)))
+
+    def roomy(self):
+        return VerticalBarChart("demo/roomy.png", "T", "X", "Y", ("a", "b", "c"),
+                                (BarSeries("A", (1.0, 2.0, 3.0)), BarSeries("B", (3.0, 2.0, 1.0))))
+
+    def height(self, layout):
+        return layout.plot.y2 - layout.plot.y1
+
+    def test_the_minimum_holds_five_grid_intervals(self):
+        self.assertAlmostEqual(constants.MIN_PLOT_HEIGHT, 5 * GRID_MIN_SPACING)
+
+    def test_the_example_really_is_too_short_on_one_page(self):
+        self.assertLess(self.height(layout_vertical_bar_chart(self.short())),
+                        constants.MIN_PLOT_HEIGHT)
+
+    def test_a_short_plot_moves_the_key_and_note_to_a_key_page(self):
+        pages = layout_vertical_bar_chart_pages(self.short())
+        self.assertEqual([p.page_kind for p in pages], ["key", "graph"])
+        key_page, graph = pages
+        self.assertEqual(len(key_page.key_samples), 3)
+        self.assertIn("No bars are visible for: Low & middle income, Vietnam.",
+                      " ".join(l.text for l in key_page.labels if l.role == "note"))
+        self.assertEqual(graph.key_samples, ())
+        self.assertNotIn("note", {l.role for l in graph.labels})
+        self.assertGreaterEqual(self.height(graph), constants.MIN_PLOT_HEIGHT)
+        self.assertEqual({bar.series_index for bar in graph.bars}, {1})
+        self.assertEqual(len(graph.bars), 4)
+
+    def test_both_pages_pass_every_rule(self):
+        for page in layout_vertical_bar_chart_pages(self.short()):
+            self.assertEqual(check_layout(page), [])
+
+    def test_a_chart_with_enough_plot_stays_on_one_page(self):
+        pages = layout_vertical_bar_chart_pages(self.roomy())
+        self.assertEqual(len(pages), 1)
+        self.assertGreaterEqual(self.height(pages[0]), constants.MIN_PLOT_HEIGHT)
+        self.assertEqual(pages[0], layout_vertical_bar_chart(self.roomy()))
+        self.assertEqual(len(pages[0].key_samples), 2)
+
+    def test_a_single_unnamed_series_has_no_key_to_move(self):
+        unnamed = VerticalBarChart("demo/u.png", "T", "X", "A very long y axis title " * 3,
+                                   tuple(str(j) for j in range(4)), (BarSeries(None, (1.0, 2.0, 3.0, 4.0)),))
+        self.assertEqual(len(layout_vertical_bar_chart_pages(unnamed)), 1)
