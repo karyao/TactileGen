@@ -1238,8 +1238,8 @@ class GradioDiagnosticsTest(unittest.TestCase):
                 self.assertEqual(records[0]["outcome"], "succeeded")
                 self.assertTrue(all(s["outcome"] == "succeeded" for s in records[0]["stages"].values()))
                 self.assertEqual(records[0]["counts"], {
-                    "detections": 3, "text_regions": 2, "ocr_returned_regions": 2,
-                    "ocr_readable": 1, "ocr_empty": 1,
+                    "detections": 3, "text_regions": 2, "effective_detections": 3,
+                    "ocr_returned_regions": 2, "ocr_readable": 1, "ocr_empty": 1,
                 })
                 for record, stage in ((records[1], "validation"), (records[2], "detection"),
                                       (records[5], "result_preparation")):

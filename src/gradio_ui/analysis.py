@@ -8,7 +8,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from src.bar_orientation import BarOrientationResult, resolve_bar_orientation
+from src.bar_orientation import (
+    MIN_BAR_CONFIDENCE,
+    MIN_ORIENTATION_SCORE,
+    MIN_ORIENTATION_SHARE,
+    BarOrientationResult,
+    resolve_bar_orientation,
+)
 from src.contracts import (
     ChartInterpretationError,
     TEXT_ROLES,
@@ -199,7 +205,36 @@ def analyze_image(
                 detections=len(raw_frame.detections),
                 text_regions=sum(d.role in TEXT_ROLES for d in raw_frame.detections),
             )
-    orientation_result = resolve_bar_orientation(raw_frame, bar_orientation)
+    with stage("orientation_resolution"):
+        orientation_result = resolve_bar_orientation(raw_frame, bar_orientation)
+        if diagnostics is not None:
+            resolved = orientation_result.status == "resolved"
+            effective = orientation_result.effective_frame
+            diagnostics.event(
+                "orientation_resolution",
+                "bar_orientation_resolved" if resolved else "bar_orientation_uncertain",
+                preference=orientation_result.preference,
+                status=orientation_result.status,
+                source=orientation_result.source,
+                reason=orientation_result.reason,
+                orientation=orientation_result.orientation,
+                vertical_score=orientation_result.vertical_score,
+                horizontal_score=orientation_result.horizontal_score,
+                min_bar_confidence=MIN_BAR_CONFIDENCE,
+                min_orientation_score=MIN_ORIENTATION_SCORE,
+                min_orientation_share=MIN_ORIENTATION_SHARE,
+                suppressed_ids=list(orientation_result.suppressed_ids),
+                raw_detections=len(raw_frame.detections),
+                effective_detections=len(effective.detections) if resolved else None,
+            )
+            if resolved:
+                assert effective is not None
+                diagnostics.snapshot("effective_detections", effective)
+                diagnostics.record["counts"]["effective_detections"] = (
+                    len(effective.detections))
+            else:
+                diagnostics.warning("bar_orientation_uncertain",
+                                    "orientation_resolution")
     if orientation_result.status == "resolved":
         frame = orientation_result.effective_frame
         assert frame is not None
@@ -321,7 +356,6 @@ def analyze_image(
             reason = "bar_orientation_uncertain: " + orientation_result.reason
             for name in ("ocr", "legend_matching", "reconstruction"):
                 diagnostics.skip(name, reason)
-            diagnostics.warning("bar_orientation_uncertain", "detection")
     with stage("presentation"):
         _report_progress(progress, 0.95, "Rendering annotations")
         overlay = render_detection_overlay(image, frame, legend_mapping=legend_mapping)

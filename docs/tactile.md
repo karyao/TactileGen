@@ -86,10 +86,16 @@ whole graph first; none is generated, so part 1 reports `overview_first`.
 `src/reconstruct_hbar.py` and `src/tactile/layout_hbar.py` handle charts whose
 bars run left to right.
 
-- **Which way the bars run.** `bar_orientation(frame)` says `horizontal` when
-  most confident bar detections are `horizontal_bar`; ties stay vertical. The
-  image pipeline and the Gradio app use it to pick the reconstruction and the
-  layout. Only a detector trained on horizontal bars finds them: the default
+- **Which way the bars run.** The shared resolver `resolve_bar_orientation`
+  (`src/bar_orientation.py`) sums qualifying `vertical_bar` and
+  `horizontal_bar` confidences and picks the side that clearly wins; the image
+  pipeline and the Gradio app use it to pick the reconstruction and the layout.
+  Ambiguous or missing evidence stops with an error asking for
+  `--bar-orientation vertical` or `--bar-orientation horizontal` (the app
+  offers the same manual choice). The score and share thresholds are
+  heuristics, not calibrated probabilities: they enforce a consistent
+  direction, not detection correctness. Only a detector trained on horizontal
+  bars finds them: the default
   checkpoint `models/yolo_bars_hv/best.pt`, fine-tuned from
   `models/yolo_vbars/best.pt` with `notebooks/kaggle_train_bars.ipynb`, scored F1 0.947 on horizontal bars
   and 0.965 on vertical bars (old model 0.966) on the PlotQA test split, IoU 0.5.

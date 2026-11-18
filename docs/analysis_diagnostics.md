@@ -49,7 +49,9 @@ If the app is already running, continue to [Download and read diagnostics](#down
 4. Start with **Findings**. Follow a finding's evidence links to see the original
    OCR text, how it was trimmed or parsed, and the confidence or threshold used.
    For example, a dropped tick can show that OCR returned `"="` and numeric parsing
-   rejected it.
+   rejected it. The **Bar orientation** section states whether the gate resolved a
+   direction, the recorded scores and thresholds behind that decision, and which
+   detections were removed before OCR.
 5. Follow **OCR attempts** links to compare the source crop, images submitted for
    recognition, raw engine output, and selected result. Strings use JSON escapes
    to distinguish tabs, newlines, empty strings, and spaces while preserving Unicode.
@@ -140,6 +142,10 @@ Larger sizes increase resource use, so start with `--batch 1` for these comparis
 - **An analysis failed early:** the ZIP contains what was collected before the
   failure. An upload validation failure has no detection or OCR output. Read
   `manifest.json` and the report for the reasons evidence is unavailable.
+- **The effective frame is missing:** when orientation evidence is ambiguous,
+  no direction is selected, `effective_detections.json` is unavailable, and the
+  report's Bar orientation section says the decision was uncertain.
+  `manifest.json` records the reason.
 - **A warning has no detailed explanation:** some warnings have no linked decision
   evidence. The report says so. Checks skipped after an earlier blocker are not
   presented as executed.
@@ -165,6 +171,7 @@ The filename is `analysis-diagnostics-<run_id>.zip`.
 | `analysis.log` | Run-owned timestamped collector messages and recorded exception tracebacks |
 | `ocr.json` | Available OCR result using the existing versioned OCR interchange contract |
 | `detections.json` | Available detection frame using the existing versioned detection contract |
+| `effective_detections.json` | Available frame after the orientation gate removed opposite-orientation bars |
 | `ocr_trace.json` | Available batch history, raw engine evidence, attempts, and selection |
 | `ocr_crops/` | Source text crops with their coordinates in the diagnostic record |
 | `ocr_inputs/` | Actual recognition API images or Tesseract TIFF-page pixels |
@@ -316,6 +323,11 @@ explicit unavailable source mappings rather than invented detection relationship
 - Confidence filtering records confidence and the floor. Deduplication records
   the first suppressing detection, measured IoU, and threshold. Tick spatial
   selection records candidate IDs, coordinates, accepted bounds, and exclusions.
+- Orientation resolution records the preference, automatic/manual source,
+  reason, selected direction, both side scores with their thresholds, the raw
+  and effective detection counts, and the suppressed detection IDs. An uncertain
+  decision is a `bar_orientation_uncertain` event linked from its warning; a
+  resolved decision is a `bar_orientation_resolved` event.
 - Consumer events preserve input strings before trimming, including Unicode and
   whitespace, for both reconstruction and legend matching. Missing consumer input
   remains distinct from present empty/whitespace text. Legacy mappings and region
@@ -413,6 +425,7 @@ specifications, completeness results, and expected reconstruction errors.
    ```sh
    .venv/bin/python -m pytest \
      tests/test_diagnostics.py tests/gradio/test_gradio_app.py \
+     tests/gradio/test_analysis_orientation.py \
      tests/test_ocr.py tests/test_reconstruct.py \
      tests/test_completeness.py tests/test_legend_matcher.py -q
    ```

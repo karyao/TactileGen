@@ -268,6 +268,15 @@ def test_complete_archive_manifest_links_outputs_and_all_attempts(tmp_path):
             assert source['image']['filename'] in names
 
 
+def test_orientation_section_reports_missing_evidence_without_a_decision(tmp_path):
+    diagnostics = recognized_run()
+    with ZipFile(diagnostics.export_zip(tmp_path)) as archive:
+        report = archive.read('report.md').decode()
+        assert '## Bar orientation' in report
+        assert 'Bar orientation evidence is unavailable; see the stage outcomes.' in report
+        assert_links(report, archive.namelist())
+
+
 def test_early_failure_archive_marks_missing_evidence_and_records_traceback(tmp_path):
     diagnostics = AnalysisDiagnostics(settings={})
     with pytest.raises(ValueError):
