@@ -28,6 +28,7 @@ from src.tactile.constants import (
     KEY_TEXT_CELL,
     LABEL_MAX_GAP,
     LABEL_MIN_GAP,
+    LEAD_LINE_LENGTH,
     MAX_AREA_TEXTURES,
     PRIMARY_LINE_MIN_LENGTH,
     TICK_HALF_LENGTH,
@@ -99,6 +100,10 @@ RULES = {rule.id: rule for rule in (
     Rule("guide_dots", "§6.6.6.6",
          "Labels of horizontal bars are left-aligned, with one blank cell and at least two "
          "guide dots (dot 5) before the vertical axis."),
+    Rule("value_label_clearance", "§3.4.3.12",
+         "A bar value label is centred on its bar, 1/8 to 1/4 inch above it, or raised on a "
+         "lead line of 3/4 inch that touches the bar and ends 1/8 to 1/4 inch from the label. "
+         "(Clearance from everything else is label_clearance.)"),
 )}
 
 
@@ -119,6 +124,7 @@ def check_layout(layout: TactileLayout) -> list[Violation]:
     found += _tick_length(layout)
     found += _numeric_indicator(layout)
     found += _all_bars_labeled(layout)
+    found += _value_labels(layout)
     found += _key_rules(layout)
     found += _y_heading_length(layout)
     found += _heading_placement(layout)
@@ -327,6 +333,39 @@ def _all_bars_labeled(layout):
             yield _violation("all_bars_labeled", f"category {j} has no label")
         elif layout.categories_keyed and j not in keyed:
             yield _violation("all_bars_labeled", f"category {j} is keyed but missing from the key")
+
+
+def _value_labels(layout):
+    for label in layout.labels:
+        if label.role != "value":
+            continue
+        owner = layout.by_id(label.owner_id)
+        raised = owner is not None and getattr(owner, "kind", None) == "lead"
+        bar = layout.by_id(f"bar-{label.id[len('value-'):]}")
+        if bar is None:
+            yield _violation("value_label_clearance", f"{label.id} has no bar", label.id)
+            continue
+        centre = (bar.bounds.x1 + bar.bounds.x2) / 2
+        if abs((label.bounds.x1 + label.bounds.x2) / 2 - centre) > TOLERANCE:
+            yield _violation("value_label_clearance", f"{label.id} is not centred on {bar.id}",
+                             label.id, bar.id)
+        if raised:
+            if abs(owner.y1 - bar.bounds.y1) > TOLERANCE or abs(owner.x1 - centre) > TOLERANCE:
+                yield _violation("value_label_clearance",
+                                 f"{owner.id} does not start at the top of {bar.id}", owner.id, bar.id)
+            if owner.length < LEAD_LINE_LENGTH - TOLERANCE:
+                yield _violation("value_label_clearance", f"{owner.id} is {owner.length:.1f} mm "
+                                 f"long (min {LEAD_LINE_LENGTH:.1f} mm)", owner.id)
+            gap = label.bounds.gap(owner.bounds)
+        else:
+            if label.bounds.y2 > bar.bounds.y1:
+                yield _violation("value_label_clearance", f"{label.id} is not above {bar.id}",
+                                 label.id, bar.id)
+            gap = label.bounds.gap(bar.bounds)
+        if not LABEL_MIN_GAP - TOLERANCE <= gap <= LABEL_MAX_GAP + TOLERANCE:
+            yield _violation("value_label_clearance", f"{label.id} is {gap:.1f} mm from its "
+                             f"{'lead line' if raised else 'bar'} (allowed {LABEL_MIN_GAP:.1f}-"
+                             f"{LABEL_MAX_GAP:.1f} mm)", label.id)
 
 
 def _key_rules(layout):
