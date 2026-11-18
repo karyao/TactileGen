@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
-from src.contracts import BarSeries, VerticalBarChart
+from src.contracts import BarSeries, VerticalBarChart, effective_omit_legend
 from src.tactile.braille import BLANK, TN_CLOSE, TN_OPEN, Cell, to_braille
 from src.tactile.keys import abbreviation_keys, numeric_keys
 from src.tactile.value_labels import plan_value_labels
@@ -380,15 +380,15 @@ def _plot_height(layout: TactileLayout) -> float:
 def _no_bars_note(chart: VerticalBarChart) -> str | None:
     """Transcriber's note naming legend entries with no visible bars (not "zero")."""
     names = [series.name for series in chart.series if not series.has_bars]
-    if chart.omit_legend:
+    if effective_omit_legend(len(chart.series), chart.omit_legend):
         return None
     return f"No bars are visible for: {', '.join(names)}." if names else None
 
 
 def _has_series_key(chart: VerticalBarChart) -> bool:
-    """Show a series key unless omitted by the user; an unnamed single series
-    does not need a key."""
-    return not chart.omit_legend and (len(chart.series) > 1 or chart.series[0].name is not None)
+    """Multiple series always need a key; a named single series may omit it."""
+    return (not effective_omit_legend(len(chart.series), chart.omit_legend)
+            and (len(chart.series) > 1 or chart.series[0].name is not None))
 
 
 def _split(count: int, parts: int) -> list[range]:
@@ -414,7 +414,7 @@ def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
             tuple(names[i] for i in r),
             tuple(BarSeries(s.name, tuple(s.values[i] for i in r) if s.has_bars else (),
                             s.has_bars, tuple(s.rescued[i] for i in r) if s.rescued else ())
-                  for s in chart.series), omit_legend=chart.omit_legend)
+                  for s in chart.series), omit_legend=effective_omit_legend(len(chart.series), chart.omit_legend))
 
     division = (f"This graph is divided by category into {n} parts with the same "
                 "scale on each part.")
@@ -931,31 +931,5 @@ def _layout_pass(chart: VerticalBarChart, mode: str, *,
         key_samples=tuple(samples), category_count=n_cat,
         series_textures=textures, x_label_mode=mode, notes=tuple(notes),
         series_key_elsewhere=not show_series_key and has_key,
+        omit_legend=chart.omit_legend,
     )
-    return layout, omitted, drawn
-
-
-def _cut_grid(lines: list[Line], labels) -> list[Line]:
-    """Remove the stretch of each grid line that passes within the label clearance of a
-    value label (grid lines are least distinct, §6.6.6.5, and labels need 1/8 inch, §3.4.3.12)."""
-    out: list[Line] = []
-    for line in lines:
-        if line.kind != "grid":
-            out.append(line)
-            continue
-        reach = LABEL_MIN_GAP + line.width / 2 + 0.02
-        cuts = sorted((l.bounds.x1 - reach, l.bounds.x2 + reach) for l in labels
-                      if l.bounds.y1 - reach < line.y1 < l.bounds.y2 + reach)
-        start, pieces = line.x1, []
-        for x1, x2 in cuts:
-            if x1 > start:
-                pieces.append((start, x1))
-            start = max(start, x2)
-        if start < line.x2:
-            pieces.append((start, line.x2))
-        if not cuts:
-            pieces = [(line.x1, line.x2)]
-        for k, (x1, x2) in enumerate(pieces):
-            if x2 - x1 >= LABEL_MIN_GAP:
-                out.append(replace(line, id=line.id if k == 0 else f"{line.id}-{k}", x1=x1, x2=x2))
-    return out

@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
+from src.contracts import effective_omit_legend
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU
 from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.run_tracking import GuardedUpdates
@@ -130,7 +131,11 @@ def create_callbacks(
                 visible=completeness_text is not None,
             ),
             review_state=review_model,
-            include_legend=gr.update(value=not review_model.omit_legend if review_model else True),
+            include_legend=gr.update(
+                value=not effective_omit_legend(len(review_model.spec.series), review_model.omit_legend)
+                    if review_model else True,
+                interactive=len(review_model.spec.series) == 1 if review_model else True,
+            ),
             review_panel=gr.update(visible=review_model is not None),
             review_fields=gr.update(
                 value=review_text_rows(review_model) if review_model else [],

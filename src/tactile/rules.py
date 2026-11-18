@@ -371,7 +371,7 @@ def _value_labels(layout):
 def _key_rules(layout):
     samples = sorted(layout.key_samples, key=lambda s: s.y)
     if (len(layout.series_textures) > 1 and not samples
-            and not layout.series_key_elsewhere and not layout.omit_legend):
+            and not layout.series_key_elsewhere):
         yield _violation("key_before_graph", "several sets of bars but no key")
     key_items = [*samples, *(l for l in layout.labels if l.role == "key")]
     for item in key_items:

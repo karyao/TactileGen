@@ -373,7 +373,8 @@ def _build_results(gr) -> AnalysisComponents:
                     elem_classes="borealis-legend-checkbox",
                 )
                 gr.Markdown(
-                    "No legend in the original? Turn this off to leave series names blank. "
+                    "For a single series, you can turn this off to omit the tactile key. "
+                    "For multiple series, a tactile key is required; complete the series names below. "
                     "All bars and values stay in your chart.",
                     elem_classes=["borealis-helper", "borealis-legend-help"],
                 )

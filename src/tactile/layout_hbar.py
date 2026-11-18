@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from src.contracts import HorizontalBarChart
+from src.contracts import HorizontalBarChart, effective_omit_legend
 from src.tactile.braille import BLANK, GUIDE_DOT, to_braille
 from src.tactile.constants import (
     AXIS_STRENGTH,
@@ -69,6 +69,7 @@ from src.tactile.layout import (
     _header,
     _label,
     _nice_step,
+    _no_bars_note,
     _usable_area,
     bar_width_for,
     label_width,
@@ -151,11 +152,12 @@ def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
     values = [v for series in chart.series for v in series.values]
     if any(v < 0 for v in values):
         raise ValueError("negative bar values are not supported yet")
-    n_series, n_cat = len(chart.series), len(chart.categories)
-    if n_series > MAX_AREA_TEXTURES:
+    n_keyed, n_cat = len(chart.series), len(chart.categories)
+    n_series = sum(series.has_bars for series in chart.series)
+    if n_keyed > MAX_AREA_TEXTURES:
         raise ValueError(f"BANA §3.2.2 allows at most {MAX_AREA_TEXTURES} area textures; "
                          "this chart needs an alphabetic key or several graphics")
-    textures = TEXTURES[:n_series]
+    textures = TEXTURES[:n_keyed]
     has_key = _has_series_key(chart)
 
     usable = _usable_area()
@@ -163,8 +165,9 @@ def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
     lines: list[Line] = []
     notes: list[str] = []
     samples: list = []
+    no_bars = _no_bars_note(chart)
     y = _header(chart, usable, usable.y1, labels, samples, notes, show_title=True,
-                transcriber_notes=(), series_key=has_key)
+                transcriber_notes=(no_bars,) if no_bars else (), series_key=has_key)
     if keyed:
         y = _category_key(chart.categories, category_texts, usable, y, labels)
     if has_key or keyed:
@@ -237,9 +240,10 @@ def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
     bars: list[Bar] = []
     for j, rows in enumerate(wrapped):
         set_top = centres[j] - group / 2
-        for s, series in enumerate(chart.series):
+        for slot, (s, series) in enumerate(
+                (s, series) for s, series in enumerate(chart.series) if series.has_bars):
             value = float(series.values[j])
-            bar_y = set_top + BAR_OUTLINE_WIDTH / 2 + s * (thickness + BAR_OUTLINE_WIDTH + BAR_GAP)
+            bar_y = set_top + BAR_OUTLINE_WIDTH / 2 + slot * (thickness + BAR_OUTLINE_WIDTH + BAR_GAP)
             bars.append(Bar(f"bar-{s}-{j}", plot_left, bar_y, value_x(value) - plot_left,
                             thickness, textures[s], s, j, value))
         # Block centred on the set; guide dots on its last line lead to the axis.
@@ -268,4 +272,4 @@ def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
         lines=tuple(lines), bars=tuple(bars), labels=tuple(labels),
         key_samples=tuple(samples), category_count=n_cat, series_textures=textures,
         x_label_mode=mode, notes=tuple(notes), orientation="horizontal",
-        omit_legend=chart.omit_legend)
+        omit_legend=effective_omit_legend(len(chart.series), chart.omit_legend))

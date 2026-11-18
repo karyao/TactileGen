@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from src.contracts import VerticalBarSpec
+from src.contracts import VerticalBarSpec, effective_omit_legend
 from src.tactile.completeness import (
     READY,
     Completeness,
@@ -95,7 +95,7 @@ def build_review_model(spec: VerticalBarSpec, completeness: Completeness) -> Rev
     )
     frozen = tuple(bindings)
     return ReviewModel(spec, frozen, tuple(item.initial_text for item in frozen),
-                       omit_legend=spec.omit_legend)
+                       omit_legend=effective_omit_legend(len(spec.series), spec.omit_legend))
 
 
 def review_text_rows(model: ReviewModel) -> list[list[str]]:
@@ -137,7 +137,9 @@ def update_review_draft(model: ReviewModel, rows: Any, *,
     if omit_legend is not None and not isinstance(omit_legend, bool):
         raise ValueError("Omit legend must be a boolean")
     return replace(model, draft_values=tuple(values),
-                   omit_legend=model.omit_legend if omit_legend is None else omit_legend)
+                   omit_legend=effective_omit_legend(
+                       len(model.spec.series),
+                       model.omit_legend if omit_legend is None else omit_legend))
 
 
 def review_overrides(model: ReviewModel) -> Overrides:
@@ -146,7 +148,8 @@ def review_overrides(model: ReviewModel) -> Overrides:
     categories: dict[int, str] = {}
     series_names: dict[int, str] = {}
     for binding, draft in zip(model.bindings, model.draft_values, strict=True):
-        if model.omit_legend and binding.key.startswith("series_name["):
+        if (effective_omit_legend(len(model.spec.series), model.omit_legend)
+                and binding.key.startswith("series_name[")):
             continue
         value = draft.strip()
         if binding.required and not value:

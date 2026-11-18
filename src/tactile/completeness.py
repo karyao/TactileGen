@@ -29,6 +29,7 @@ from src.contracts import (
     HorizontalBarChart,
     VerticalBarChart,
     VerticalBarSpec,
+    effective_omit_legend,
 )
 
 READY, NEEDS_INPUT, CANNOT_BUILD = "ready", "needs_input", "cannot_build"
@@ -380,7 +381,7 @@ def check_completeness(spec: VerticalBarSpec, *, diagnostics=None) -> Completene
     for j, reason in _suspicious_categories(spec, diagnostics=diagnostics):
         if f"category[{j}]" not in listed_now:
             missing.append(MissingItem(f"category[{j}]", reason, f"--category {j}=TEXT"))
-    if len(spec.series) > 1 and not spec.omit_legend:
+    if len(spec.series) > 1:
         for i, series in enumerate(spec.series):
             if not series.name:
                 _finding(diagnostics, "missing_series_name", f"series_name[{i}]", triggered=True)
@@ -396,7 +397,7 @@ def check_completeness(spec: VerticalBarSpec, *, diagnostics=None) -> Completene
                ("y_axis_title", "The y-axis title", "--y-title", spec.y_axis_title)]
     strings += [(f"category[{j}]", f"Category {j}", f"--category {j}=TEXT", text)
                 for j, text in enumerate(spec.categories)]
-    if len(spec.series) > 1 and not spec.omit_legend:
+    if len(spec.series) > 1:
         strings += [(f"series_name[{i}]", f"Series {i} name", f"--series {i}=NAME", s.name)
                     for i, s in enumerate(spec.series)]
     for name, label, cli_flag, text in strings:
@@ -557,5 +558,6 @@ def spec_to_chart_with_notes(
     chart_type = HorizontalBarChart if spec.orientation == "horizontal" else VerticalBarChart
     chart = chart_type(
         spec.source_key, spec.title, spec.x_axis_title, spec.y_axis_title,
-        tuple(spec.categories), tuple(series_out), omit_legend=spec.omit_legend)
+        tuple(spec.categories), tuple(series_out),
+        omit_legend=effective_omit_legend(len(spec.series), spec.omit_legend))
     return chart, notes

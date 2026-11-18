@@ -48,6 +48,11 @@ LEGEND_MAPPING_STATUSES = frozenset({
 })
 
 
+def effective_omit_legend(series_count: int, requested: bool) -> bool:
+    """Only a single series may omit its tactile key."""
+    return series_count == 1 and requested
+
+
 def validate_source_key(value: str) -> None:
     """Validate a relative, namespaced image identifier."""
     parts = value.split("/") if isinstance(value, str) else []
