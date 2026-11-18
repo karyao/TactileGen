@@ -23,7 +23,11 @@ from functools import partial
 from pathlib import Path
 
 from src.bar_orientation import BarOrientationResult, resolve_bar_orientation
-from src.contracts import ChartInterpretationError, VerticalBarSpec
+from src.contracts import (
+    ChartInterpretationError,
+    NO_BARS_MATCHED_LEGEND,
+    VerticalBarSpec,
+)
 from src.tactile.completeness import (
     CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Completeness, Overrides,
     apply_overrides, check_completeness, completeness_from_error, cut_off_flags,
@@ -75,16 +79,17 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     """Run YOLO, resolve bar orientation, then OCR and reconstruction.
 
     Returns ``(spec, None, frame)`` or ``(None, error, frame)``. On success the
-    frame is the resolver's effective frame with opposite-orientation bars
-    removed; on uncertainty it is the raw detection frame.
+    frame is the resolver's effective frame with opposite-orientation bars and
+    bars that matched no legend swatch removed; on uncertainty it is the raw
+    detection frame.
     """
     import cv2
 
     from src.detection import load_model, run_detection
-    from src.reconstruction.legend_matcher import match_legend_to_bars
+    from src.reconstruction.legend_matcher import filter_bars_by_legend
     from src.ocr import run_ocr
     from src.reconstruction.vertical import reconstruct_vbar
-    from src.reconstruction.horizontal import reconstruct_hbar
+    from src.reconstruction.horizontal import filter_hbars_by_legend, reconstruct_hbar
 
     image = cv2.imread(str(image_path))
     if image is None:
@@ -98,12 +103,22 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     backend, language = _ocr_backend(ocr_engine)
     ocr = run_ocr(image, frame, backend, language)
     try:
+        filter_legend = (filter_hbars_by_legend if resolution.orientation == "horizontal"
+                         else filter_bars_by_legend)
+        colour_filter = filter_legend(image, frame, ocr)
+        if colour_filter.blocked:
+            return None, ChartInterpretationError(NO_BARS_MATCHED_LEGEND), colour_filter.frame
+        frame = colour_filter.frame
+        legend_mapping = colour_filter.mapping
+        rejected = tuple(item.detection for item in colour_filter.rejected)
+        rejected_options = {"rejected_bars": rejected} if rejected else {}
         if resolution.orientation == "horizontal":
-            spec = reconstruct_hbar(frame, ocr, image)
+            spec = reconstruct_hbar(frame, ocr, image, legend_mapping=legend_mapping,
+                                    **rejected_options)
         else:
-            legend_mapping = match_legend_to_bars(image, frame, ocr)
             spec = reread_categories(
-                reconstruct_vbar(frame, ocr, image, legend_mapping=legend_mapping),
+                reconstruct_vbar(frame, ocr, image, legend_mapping=legend_mapping,
+                                 **rejected_options),
                 frame, image)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:

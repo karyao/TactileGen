@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from src.diagnostics.tracking import AnalysisDiagnostics
 from src.text_provenance import consumer_text
@@ -17,6 +17,16 @@ from src.contracts import (
     OCRFrame,
     validate_unit_interval,
 )
+
+# A bar whose best swatch error is at or below this is inside the legend's
+# colour tolerance; the value equal to the threshold counts as a match.
+COLOUR_MAX_ERROR = 0.03
+# Boxes shorter than this on either side carry mostly outline and antialiasing
+# pixels (the cut-off ``reconstruction.vertical`` re-measures short bars at),
+# so their interior colour cannot condemn a detection.
+MIN_REJECT_EXTENT_PX = 6
+# The bar roles this module scores and filters.
+BAR_ROLES = ("vertical_bar", "horizontal_bar")
 
 
 @dataclass(frozen=True)
@@ -40,6 +50,57 @@ class _LegendScores:
     source_key: str
     bars: tuple[_BarScore, ...]
     entries: tuple[LegendEntry, ...] = ()
+    # Set when the detected legend is too incomplete to judge any bar colour.
+    guard: str | None = None
+
+
+@dataclass(frozen=True)
+class ColourDecision:
+    """Colour-only verdict for one detected bar, before any OCR name check.
+
+    ``outcome`` is ``"kept"`` (the colour is inside the legend tolerance or the
+    check could not run), ``"rejected"`` (no swatch is within ``max_error``), or
+    ``"skipped"`` with ``reason`` naming the guard that stopped the check.
+    """
+
+    bar_id: str
+    outcome: str
+    reason: str
+    best_error: float | None = None
+    swatch_id: str | None = None
+    label_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RejectedBar:
+    """A detected bar dropped by the colour check, with its evidence."""
+
+    detection: Detection
+    swatch_id: str
+    best_error: float
+    max_error: float
+
+
+@dataclass(frozen=True)
+class LegendFilterResult:
+    """Filtered detections plus the mapping and colour decisions behind them.
+
+    ``frame`` and ``mapping`` always agree: every bar still in ``frame`` has
+    exactly one assignment, in detection order, so they can be joined.
+    """
+
+    frame: DetectionFrame
+    mapping: LegendMappingFrame
+    decisions: tuple[ColourDecision, ...] = ()
+    rejected: tuple[RejectedBar, ...] = ()
+    guard: str | None = None
+
+    @property
+    def blocked(self) -> bool:
+        """True when every detected bar was rejected, so nothing can be built."""
+        return bool(self.decisions) and all(
+            item.outcome == "rejected" for item in self.decisions
+        )
 
 
 @dataclass
@@ -331,6 +392,15 @@ def _score_legend_to_bars(
     if unavailable_status is not None:
         return _unavailable_scores(detections.source_key, bars, unavailable_status)
 
+    # A legend where some swatch or label found no partner is visibly
+    # incomplete: the bars are still scored, but no bar may be condemned on
+    # partial evidence (see ``filter_bars_by_legend``).
+    swatch_count = sum(item.role == "legend_swatch" for item in detections.detections)
+    label_count = sum(item.role == "legend_label" for item in detections.detections)
+    guard = "incomplete_legend" if (
+        len(pairs) < swatch_count or len(pairs) < label_count
+    ) else None
+
     text_by_id = {}
     for region in ocr.regions:
         text_by_id[region.detection_id] = region.text.strip()
@@ -376,7 +446,7 @@ def _score_legend_to_bars(
             best_error=best_error,
             runner_up_error=ranked[1][0] if len(ranked) > 1 else None,
         ))
-    return _LegendScores(detections.source_key, tuple(scores), entries)
+    return _LegendScores(detections.source_key, tuple(scores), entries, guard)
 
 
 def _classify_legend_scores(
@@ -447,3 +517,127 @@ def match_legend_to_bars(
                 swatch_id=scored.candidate.swatch.id if scored.candidate else None,
                 label_id=scored.candidate.label.id if scored.candidate else None)
     return result
+
+
+def _colour_decisions(scores: _LegendScores, *, max_error: float) -> list[ColourDecision]:
+    """Colour verdicts per bar, before any OCR series-name check is applied."""
+    decisions = []
+    for scored in scores.bars:
+        candidate = scored.candidate
+        swatch_id = candidate.swatch.id if candidate else None
+        label_id = candidate.label.id if candidate else None
+        if scored.unavailable_status is not None:
+            decisions.append(ColourDecision(
+                scored.bar_id, "skipped", scored.unavailable_status,
+                scored.best_error, swatch_id, label_id))
+        elif scores.guard is not None:
+            decisions.append(ColourDecision(
+                scored.bar_id, "skipped", scores.guard,
+                scored.best_error, swatch_id, label_id))
+        elif candidate is None or scored.best_error is None:
+            decisions.append(ColourDecision(
+                scored.bar_id, "skipped", "unusable_crop",
+                scored.best_error, swatch_id, label_id))
+        else:
+            within = scored.best_error <= max_error
+            decisions.append(ColourDecision(
+                scored.bar_id, "kept" if within else "rejected",
+                "within_tolerance" if within else "colour_mismatch",
+                scored.best_error, swatch_id, label_id))
+    return decisions
+
+
+def _trace_colour_filter(
+    diagnostics: AnalysisDiagnostics,
+    bars_by_id: dict[str, Detection],
+    decisions: tuple[ColourDecision, ...],
+    rejected: tuple[RejectedBar, ...],
+    max_error: float,
+    guard: str | None,
+) -> None:
+    for decision in decisions:
+        diagnostics.event("legend_matching", "bar_colour_validation",
+            bar_id=decision.bar_id, confidence=bars_by_id[decision.bar_id].confidence,
+            outcome=decision.outcome, reason=decision.reason,
+            best_error=decision.best_error, cutoff=max_error,
+            swatch_id=decision.swatch_id, label_id=decision.label_id)
+    blocked = bool(decisions) and all(
+        item.outcome == "rejected" for item in decisions)
+    diagnostics.event("legend_matching",
+        "no_bars_matched_legend" if blocked else "legend_colour_filter",
+        rejected_bar_ids=[item.detection.id for item in rejected],
+        kept_bar_ids=[item.bar_id for item in decisions if item.outcome == "kept"],
+        skipped_bar_ids=[item.bar_id for item in decisions if item.outcome == "skipped"],
+        cutoff=max_error, guard=guard, blocked=blocked)
+
+
+def filter_bars_by_legend(
+    image,
+    detections: DetectionFrame,
+    ocr: OCRFrame | None,
+    *,
+    max_error: float = COLOUR_MAX_ERROR,
+    min_margin: float = 0.01,
+    score_detections: DetectionFrame | None = None,
+    diagnostics: AnalysisDiagnostics | None = None,
+) -> LegendFilterResult:
+    """Drop the bars whose colour matches no legend swatch, keeping the rest.
+
+    The legend is scored once and reused for both the colour decision and the
+    assignment mapping, so the returned ``frame`` and ``mapping`` always agree:
+    every surviving bar keeps exactly one assignment, in detection order.
+    Bars the colour check cannot judge (no legend, an incomplete legend, an
+    unusable crop, a box too small to read, or no OCR) keep their detection and
+    receive a decision recording why; nothing is dropped on partial evidence.
+
+    ``score_detections`` scores the same bars under another view of the same
+    image (horizontal charts score swapped roles). ``detections`` alone decides
+    which detections survive, in its own order and with its own roles.
+    """
+    max_error = validate_unit_interval(max_error, "max_error")
+    scoring = detections if score_detections is None else score_detections
+    if scoring.source_key != detections.source_key:
+        raise ValueError("scoring detections refer to a different source image")
+    if (scoring.width, scoring.height) != (detections.width, detections.height):
+        raise ValueError("scoring detections have different image dimensions")
+    scores = _score_legend_to_bars(image, scoring, ocr,
+        **({"diagnostics": diagnostics} if diagnostics is not None else {}))
+    bars_by_id = {
+        item.id: item for item in detections.detections if item.role in BAR_ROLES
+    }
+    if {scored.bar_id for scored in scores.bars} != set(bars_by_id):
+        raise ValueError("scoring detections do not cover the same bars")
+    mapping = _classify_legend_scores(scores, max_error=max_error, min_margin=min_margin)
+
+    decisions: list[ColourDecision] = []
+    rejected: list[RejectedBar] = []
+    for decision in _colour_decisions(scores, max_error=max_error):
+        bar = bars_by_id[decision.bar_id]
+        extent = min(bar.box.x2 - bar.box.x1, bar.box.y2 - bar.box.y1)
+        if decision.outcome == "rejected" and extent < MIN_REJECT_EXTENT_PX:
+            decision = replace(decision, outcome="skipped", reason="unreliable_colour")
+        decisions.append(decision)
+        if decision.outcome == "rejected":
+            rejected.append(RejectedBar(bar, decision.swatch_id, decision.best_error, max_error))
+
+    guard = None
+    if decisions and all(item.outcome == "skipped" for item in decisions):
+        reasons = {item.reason for item in decisions}
+        guard = reasons.pop() if len(reasons) == 1 else "unusable_legend"
+
+    rejected_ids = {item.detection.id for item in rejected}
+    if rejected_ids:
+        frame = replace(detections, detections=tuple(
+            item for item in detections.detections if item.id not in rejected_ids))
+        mapping = LegendMappingFrame(
+            mapping.source_key,
+            tuple(item for item in mapping.assignments
+                  if item.bar_id not in rejected_ids),
+            mapping.entries,
+        )
+    else:
+        frame = detections
+    if diagnostics is not None:
+        _trace_colour_filter(diagnostics, bars_by_id, tuple(decisions),
+                             tuple(rejected), max_error, guard)
+    return LegendFilterResult(frame, mapping, tuple(decisions), tuple(rejected), guard)

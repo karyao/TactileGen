@@ -28,9 +28,14 @@ from src.contracts import (
     DetectionFrame,
     LegendMappingFrame,
     OCRFrame,
+    NO_BARS_MATCHED_LEGEND,
     VerticalBarSpec,
 )
-from src.reconstruction.legend_matcher import match_legend_to_bars
+from src.reconstruction.legend_matcher import (
+    LegendFilterResult,
+    filter_bars_by_legend,
+    match_legend_to_bars,
+)
 from src.reconstruction.vertical import (
     MIN_CONFIDENCE,
     TITLE_EDGE_PX,
@@ -72,12 +77,18 @@ def bar_orientation(frame: DetectionFrame, min_confidence: float = MIN_CONFIDENC
     return "horizontal" if counts["horizontal_bar"] > counts["vertical_bar"] else "vertical"
 
 
+def _swapped(detection: Detection) -> Detection:
+    """One detection turned on its side: box coordinates and axis roles swap."""
+    return Detection(detection.id, ROLE_SWAP.get(detection.role, detection.role),
+                     Box(detection.box.y1, detection.box.x1,
+                         detection.box.y2, detection.box.x2),
+                     detection.confidence)
+
+
 def transpose_frame(frame: DetectionFrame) -> DetectionFrame:
     """Swap x and y of every box and the axis roles; bars become vertical."""
     return DetectionFrame(frame.source_key, frame.height, frame.width, tuple(
-        Detection(d.id, ROLE_SWAP.get(d.role, d.role),
-                  Box(d.box.y1, d.box.x1, d.box.y2, d.box.x2), d.confidence)
-        for d in frame.detections))
+        _swapped(d) for d in frame.detections))
 
 
 def transpose_image(image: np.ndarray) -> np.ndarray:
@@ -97,25 +108,48 @@ def match_legend_to_hbars(image: np.ndarray, frame: DetectionFrame,
     return match_legend_to_bars(image, bars_as_vertical(frame), ocr)
 
 
+def filter_hbars_by_legend(image: np.ndarray, frame: DetectionFrame,
+                           ocr: OCRFrame | None, **kwargs) -> LegendFilterResult:
+    """Colour-filter the horizontal bars, scoring the legend on the same boxes.
+
+    Same arguments and meaning as ``filter_bars_by_legend``; ``frame`` keeps the
+    horizontal roles and only horizontal bars are dropped.
+    """
+    kwargs.pop("score_detections", None)
+    return filter_bars_by_legend(image, frame, ocr,
+                                 score_detections=bars_as_vertical(frame), **kwargs)
+
+
 def reconstruct_hbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      min_confidence: float = MIN_CONFIDENCE,
                      rescue_bars: bool = True,
                      category_guard: bool = True, *,
-                     legend_mapping: LegendMappingFrame | None = None
+                     legend_mapping: LegendMappingFrame | None = None,
+                     rejected_bars: tuple[Detection, ...] = ()
                      ) -> VerticalBarSpec:
     """Turn detections plus OCR of a horizontal bar chart into a spec.
 
     Same arguments and errors as ``reconstruct_vbar``; the returned spec has
     ``orientation="horizontal"`` (see the module docstring for its axes).
+    ``rejected_bars`` are detections in this frame's own coordinates that a
+    legend colour check already dropped.
     """
+    rejected_bars = tuple(rejected_bars)
     if legend_mapping is None:
         legend_ocr = (ocr_texts if isinstance(ocr_texts, OCRFrame)
                       else _legend_ocr_frame(frame, _text_table(ocr_texts)))
-        legend_mapping = match_legend_to_hbars(image, frame, legend_ocr)
+        filtered = filter_hbars_by_legend(image, frame, legend_ocr)
+        if filtered.blocked:
+            raise ChartInterpretationError(NO_BARS_MATCHED_LEGEND)
+        frame = filtered.frame
+        legend_mapping = filtered.mapping
+        rejected_bars = (*rejected_bars,
+                         *(item.detection for item in filtered.rejected))
     try:
         spec = reconstruct_vbar(transpose_frame(frame), ocr_texts, transpose_image(image),
                                 min_confidence, rescue_bars, category_guard,
-                                legend_mapping=legend_mapping)
+                                legend_mapping=legend_mapping,
+                                rejected_bars=tuple(_swapped(d) for d in rejected_bars))
     except ChartInterpretationError as error:
         raise ChartInterpretationError(_ERRORS.get(str(error), str(error))) from error
 

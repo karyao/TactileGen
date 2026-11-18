@@ -90,6 +90,9 @@ NOTE_FLAGS = {
     "short_bars_remeasured": "{n} very short bar(s) were re-measured from pixels.",
     # a bar's top edge was re-measured from pixels because the detector box disagreed
     "bar_edge_corrected": "{n} bar(s) had their top edge corrected from the pixels.",
+    # a slot whose only detection failed the legend colour check: drawn as 0
+    "bar_colour_rejected": ("{n} value(s) are drawn as 0 because the detection at that slot "
+                            "matched no legend swatch colour."),
     # category labels the first OCR pass could not read were re-read with a rotated fallback
     "category_reread": ("{n} category label(s) were re-read with a rotated OCR fallback; "
                         "check them in the category list."),
@@ -431,6 +434,9 @@ def completeness_from_error(error: ChartInterpretationError,
         message = "No vertical bars were found in the plot area."
         if count("horizontal_bar"):
             message += " The chart may have horizontal bars."
+    elif "matched the legend" in text:
+        message = ("No detected bar matched the legend colours, so no value can be "
+                   "tied to a legend series.")
     else:
         message = f"The chart could not be interpreted ({text})."
     return Completeness(CANNOT_BUILD, [], [], [f"{message} {NEXT_STEPS}"], False)

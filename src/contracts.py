@@ -390,6 +390,11 @@ class ChartInterpretationError(ValueError):
     """A complete chart cannot be reconstructed from detections and OCR."""
 
 
+# Raised when every detected bar failed the legend colour check, so no bar can
+# be tied to a legend series (see src.reconstruction.legend_matcher).
+NO_BARS_MATCHED_LEGEND = "no detected bars matched the legend colours"
+
+
 _HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 
 

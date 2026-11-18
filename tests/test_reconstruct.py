@@ -330,7 +330,7 @@ def test_supplied_legend_mapping_names_series_without_rerunning_matcher():
     chart = _grouped(((30, 40, 200), (60, 180, 60)))
     frame, mapping = _matched_mapping(chart)
 
-    with patch("src.reconstruction.vertical.match_legend_to_bars") as matcher:
+    with patch("src.reconstruction.vertical.filter_bars_by_legend") as matcher:
         spec = reconstruct_vbar(
             frame, chart.texts, chart.image, legend_mapping=mapping
         )
@@ -867,10 +867,15 @@ def test_a_swatch_outside_the_legend_box_is_not_added():
 
 
 def test_no_series_are_added_while_bars_are_not_all_matched():
-    # The bars match no swatch (a colour not in the legend): the grouping is not settled, so
-    # an entry could still own bars that were merely hard to match. Report it, never guess.
+    # A supplied unresolved mapping bypasses filtering. Its entries must not
+    # create empty series while existing bars still have unsettled ownership.
     chart = _legend_chart([_row("Alpha", RED), _row("Beta", GREEN)])
-    spec = chart.run()          # bars are (200, 100, 30): weak match to both swatches
+    from src.reconstruction.legend_matcher import match_legend_to_bars
+    from src.reconstruction.vertical import _legend_ocr_frame, _text_table
+
+    frame = chart.frame()
+    mapping = match_legend_to_bars(chart.image, frame, _legend_ocr_frame(frame, _text_table(chart.texts)))
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
     assert not any(s.no_visible_bars for s in spec.series)
     assert sorted(_skipped(spec)) == ["legend_entry_skipped:bars_not_settled:Alpha",
                                       "legend_entry_skipped:bars_not_settled:Beta"]
@@ -1415,3 +1420,39 @@ def test_numeric_normalization_is_not_repeated_for_diagnostics():
     with patch('src.reconstruction.vertical._normalized_tick_text', wraps=_normalized_tick_text) as normalize:
         reconstruct_vbar(chart.frame(), chart.texts, chart.image, diagnostics=diagnostics)
         assert normalize.call_count == plain_calls
+
+
+def test_all_bars_rejected_by_legend_blocks_reconstruction():
+    from src.contracts import NO_BARS_MATCHED_LEGEND
+
+    chart = _legend_chart([_row("Alpha", RED), _row("Beta", GREEN)])
+    with pytest.raises(ChartInterpretationError, match=NO_BARS_MATCHED_LEGEND):
+        chart.run()
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+def test_colour_rejected_bar_is_not_restored_by_pixel_rescue(horizontal):
+    from src.reconstruction.horizontal import transpose_image
+
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    # The real colour filter rejects this bar, leaving its original pixels.
+    chart.paint(tuple(getattr(bars[1].box, k) for k in ("x1", "y1", "x2", "y2")), GREEN)
+    from src.reconstruction.legend_matcher import filter_bars_by_legend
+    from src.reconstruction.vertical import _legend_ocr_frame, _text_table
+
+    frame, image = chart.frame(), chart.image
+    filtered = filter_bars_by_legend(image, frame, _legend_ocr_frame(frame, _text_table(chart.texts)))
+    rejected = tuple(item.detection for item in filtered.rejected)
+    frame = filtered.frame
+    if horizontal:
+        frame, image = transpose_frame(frame), transpose_image(image)
+        rejected = transpose_frame(replace(filtered.frame, detections=rejected)).detections
+    # Simulate a pixel rescue finding the rejected bar's original height.
+    with patch("src.reconstruction.vertical._rescue_value", return_value=60):
+        spec = (reconstruct_hbar if horizontal else reconstruct_vbar)(
+            frame, chart.texts, image, legend_mapping=filtered.mapping, rejected_bars=rejected)
+    assert spec.series[0].values == pytest.approx([120, 0, 180])
+    assert "bar_colour_rejected:1" in spec.flags
+    assert "bars_rescued:1" not in spec.flags
+    assert any("matched no legend swatch" in note for note in check_completeness(spec).notes)

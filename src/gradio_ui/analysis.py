@@ -20,6 +20,7 @@ from src.contracts import (
     TEXT_ROLES,
     DetectionFrame,
     LegendMappingFrame,
+    NO_BARS_MATCHED_LEGEND,
     OCRFrame,
     VerticalBarSpec,
 )
@@ -35,12 +36,12 @@ from src.gradio_ui.settings import (
     RECONSTRUCTION_WARNING,
     LOGGER,
 )
-from src.reconstruction.legend_matcher import match_legend_to_bars
+from src.reconstruction.legend_matcher import filter_bars_by_legend
 from src.ocr import run_ocr
 from src.presentation import render_detection_overlay, summarize_detections
 from src.reconstruction.vertical import reconstruct_vbar
 from src.reconstruction.horizontal import (
-    match_legend_to_hbars,
+    filter_hbars_by_legend,
     reconstruct_hbar,
 )
 from src.tactile.completeness import (
@@ -273,19 +274,26 @@ def analyze_image(
             ocr_warning = OCR_WARNING
         _report_progress(progress, 0.80, "Matching legend series")
         horizontal = orientation_result.orientation == "horizontal"
-        # The horizontal matcher/reconstructor do not accept a diagnostics collector.
+        # The horizontal reconstructor does not accept a diagnostics collector.
         reconstruction_options = {} if horizontal else diagnostic_options
         legend_mapping = None
         legend_warning = None
+        colour_filter = None
         try:
             with stage("legend_matching"):
-                match_legend = match_legend_to_hbars if horizontal else match_legend_to_bars
-                legend_mapping = match_legend(
-                    image, frame, ocr_frame,
-                    **reconstruction_options,
-                )
+                filter_legend = filter_hbars_by_legend if horizontal else filter_bars_by_legend
+                colour_filter = filter_legend(image, frame, ocr_frame, **diagnostic_options)
+                # Every later stage sees the bars the colour check kept, so the
+                # overlay, the detection count and the reconstruction agree.
+                frame = colour_filter.frame
+                legend_mapping = colour_filter.mapping
                 if diagnostics is not None:
                     diagnostics.snapshot("legend", legend_mapping)
+                    diagnostics.snapshot("legend_filtered_detections", frame)
+                    diagnostics.record["counts"]["colour_rejected_bars"] = (
+                        len(colour_filter.rejected))
+                    diagnostics.record["counts"]["colour_kept_bars"] = sum(
+                        item.outcome == "kept" for item in colour_filter.decisions)
         except Exception:
             if diagnostics is not None:
                 diagnostics.warning("legend_matching_unavailable", "legend_matching")
@@ -296,7 +304,13 @@ def analyze_image(
         spec = None
         completeness = None
         reconstruction_warning = None
-        if ocr_frame is None or legend_mapping is None:
+        if colour_filter is not None and colour_filter.blocked:
+            completeness = completeness_from_error(
+                ChartInterpretationError(NO_BARS_MATCHED_LEGEND), frame)
+            if diagnostics is not None:
+                diagnostics.skip("reconstruction", NO_BARS_MATCHED_LEGEND)
+                diagnostics.warning("no_bars_matched_legend", "reconstruction")
+        elif ocr_frame is None or legend_mapping is None:
             reconstruction_warning = RECONSTRUCTION_WARNING
             if diagnostics is not None:
                 dependencies = (("ocr", ocr_frame), ("legend_matching", legend_mapping))
@@ -310,9 +324,13 @@ def analyze_image(
             try:
                 with stage("reconstruction", blocked_errors=(ChartInterpretationError,)):
                     reconstruct = reconstruct_hbar if horizontal else reconstruct_vbar
+                    rejected = {}
+                    if colour_filter is not None and colour_filter.rejected:
+                        rejected["rejected_bars"] = tuple(
+                            item.detection for item in colour_filter.rejected)
                     reconstructed = reconstruct(
                         frame, ocr_frame, image, legend_mapping=legend_mapping,
-                        **reconstruction_options,
+                        **rejected, **reconstruction_options,
                     )
                     edge_flags = cut_off_flags(frame, image, **diagnostic_options)
                     candidate = replace(
