@@ -23,7 +23,7 @@ from src.baseline.yolo_bars import check_model_classes, detection_frame, evaluat
 from src.contract_io import load_detection_frame
 from src.contracts import Box, CLASS_NAMES, Detection, DetectionFrame
 from src.detection import run_detection
-from src.diagnostics import AnalysisDiagnostics
+from src.diagnostics.tracking import AnalysisDiagnostics
 
 
 # Detection

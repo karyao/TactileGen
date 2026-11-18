@@ -76,7 +76,7 @@ belong to the model and end-to-end pipeline tasks.
 
 ## VerticalBarSpec (schema 0.2)
 
-`src/reconstruct.py` turns a `DetectionFrame`, OCR text and the image into a
+`src/reconstruction/vertical.py` turns a `DetectionFrame`, OCR text and the image into a
 `VerticalBarSpec`. Pass the in-memory legend result with
 `reconstruct_vbar(frame, ocr_texts, image, legend_mapping=mapping)`. When the
 mapping is omitted, reconstruction computes it from the same inputs. Unlike

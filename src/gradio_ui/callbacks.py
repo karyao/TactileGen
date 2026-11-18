@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU
-from src.diagnostics import AnalysisDiagnostics
+from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.run_tracking import GuardedUpdates
 from src.gradio_ui.analysis import UploadValidationError, analyze_image, orientation_summary
 from src.gradio_ui.artifacts import write_ocr_download, write_spec_download

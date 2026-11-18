@@ -24,7 +24,7 @@ from src.contracts import (
     VerticalBarSpec,
 )
 from src.detection import DEFAULT_IMGSZ, run_detection, validate_imgsz
-from src.diagnostics import AnalysisDiagnostics
+from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.settings import (
     MAX_UPLOAD_BYTES,
     MAX_IMAGE_PIXELS,
@@ -35,11 +35,11 @@ from src.gradio_ui.settings import (
     RECONSTRUCTION_WARNING,
     LOGGER,
 )
-from src.legend_matcher import match_legend_to_bars
+from src.reconstruction.legend_matcher import match_legend_to_bars
 from src.ocr import run_ocr
 from src.presentation import render_detection_overlay, summarize_detections
-from src.reconstruct import reconstruct_vbar
-from src.reconstruct_hbar import (
+from src.reconstruction.vertical import reconstruct_vbar
+from src.reconstruction.horizontal import (
     match_legend_to_hbars,
     reconstruct_hbar,
 )
@@ -49,7 +49,7 @@ from src.tactile.completeness import (
     completeness_from_error,
     cut_off_flags,
 )
-from src.tesseract_ocr import TesseractBackend
+from src.ocr.tesseract import TesseractBackend
 
 
 class UploadValidationError(ValueError):

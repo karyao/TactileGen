@@ -11,8 +11,8 @@ from pathlib import Path
 import cv2
 
 from src.contracts import Box, ChartInterpretationError, OCRFrame, RecognizedText, TEXT_ROLES
-from src.diagnostics import AnalysisDiagnostics
-from src.reconstruct import reconstruct_vbar
+from src.diagnostics.tracking import AnalysisDiagnostics
+from src.reconstruction.vertical import reconstruct_vbar
 from src.tactile.completeness import check_completeness, completeness_from_error, cut_off_flags
 from tests.test_reconstruct import base_chart, _legend_chart, _row, BAR_BGR, GREEN
 

@@ -30,8 +30,8 @@ from src.contracts import (
     OCRFrame,
     VerticalBarSpec,
 )
-from src.legend_matcher import match_legend_to_bars
-from src.reconstruct import (
+from src.reconstruction.legend_matcher import match_legend_to_bars
+from src.reconstruction.vertical import (
     MIN_CONFIDENCE,
     TITLE_EDGE_PX,
     _best,

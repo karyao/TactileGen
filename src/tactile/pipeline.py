@@ -46,9 +46,9 @@ OCR_ENGINES = ("tesseract", "rapidocr")
 def _ocr_backend(name: str):
     """The OCR backend and its language code."""
     if name == "rapidocr":
-        from src.rapidocr_ocr import RapidOCRBackend
+        from src.ocr.rapidocr import RapidOCRBackend
         return RapidOCRBackend(), "en"
-    from src.tesseract_ocr import TesseractBackend
+    from src.ocr.tesseract import TesseractBackend
     return TesseractBackend(), "eng"
 
 
@@ -80,10 +80,10 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     import cv2
 
     from src.detection import load_model, run_detection
-    from src.legend_matcher import match_legend_to_bars
+    from src.reconstruction.legend_matcher import match_legend_to_bars
     from src.ocr import run_ocr
-    from src.reconstruct import reconstruct_vbar
-    from src.reconstruct_hbar import reconstruct_hbar
+    from src.reconstruction.vertical import reconstruct_vbar
+    from src.reconstruction.horizontal import reconstruct_hbar
 
     image = cv2.imread(str(image_path))
     if image is None:

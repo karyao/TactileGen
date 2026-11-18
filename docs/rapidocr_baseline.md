@@ -84,7 +84,7 @@ annotation conventions.
 ## Chart-title correction
 
 The canonical results above use the shared, neighbor-aware full-width title
-strip in `src/ocr_crop.py`. PlotQA title boxes commonly end before the rendered
+strip in `src/ocr/crop.py`. PlotQA title boxes commonly end before the rendered
 text, so ordinary padded crops truncate titles.
 
 An earlier full run made before RapidOCR adopted the shared title crop is

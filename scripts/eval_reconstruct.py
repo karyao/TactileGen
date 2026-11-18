@@ -19,10 +19,10 @@ import cv2
 from src.contracts import ChartInterpretationError
 from src.detection import load_model, run_detection
 from src.ocr import run_ocr
-from src.reconstruct import (
+from src.reconstruction.vertical import (
     COLOR_DISTANCE, MIN_CONFIDENCE, _centre, _dedupe, _inside, reconstruct_vbar,
 )
-from src.tesseract_ocr import TesseractBackend
+from src.ocr.tesseract import TesseractBackend
 
 
 def _norm(text) -> str:

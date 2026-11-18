@@ -19,13 +19,13 @@ from zipfile import ZipFile
 import pytest
 
 from src.contracts import DetectionFrame, OCRFrame, RecognizedText
-from src.diagnostics import AnalysisDiagnostics, configure_analysis_logging
-from src.diagnostics_report import DiagnosticReport, literal
-from src.legend_matcher import match_legend_to_bars
-from src.rapidocr_ocr import RapidOCRBackend
-from src.reconstruct import reconstruct_vbar
+from src.diagnostics.tracking import AnalysisDiagnostics, configure_analysis_logging
+from src.diagnostics.report import DiagnosticReport, literal
+from src.reconstruction.legend_matcher import match_legend_to_bars
+from src.ocr.rapidocr import RapidOCRBackend
+from src.reconstruction.vertical import reconstruct_vbar
 from src.tactile.completeness import check_completeness
-from src.tesseract_ocr import TesseractBackend
+from src.ocr.tesseract import TesseractBackend
 
 from tests import test_ocr as trace_helpers
 from tests.test_reconstruct import (
@@ -133,7 +133,7 @@ class DiagnosticsTest(unittest.TestCase):
             names={0: "chart_title"}, ckpt_path=Path("weights.pt"), task="detect",
             overrides={"imgsz": 640, "unrelated": object()},
         )
-        with patch("src.diagnostics.metadata.version", side_effect=RuntimeError("missing metadata")):
+        with patch("src.diagnostics.tracking.metadata.version", side_effect=RuntimeError("missing metadata")):
             collector.capture_metadata(model, TesseractBackend(2), "eng+fra")
         self.assertEqual(collector.record["metadata"]["model"]["checkpoint"], "weights.pt")
         self.assertEqual(collector.record["metadata"]["model"]["configured_prediction_options"],
@@ -185,7 +185,7 @@ class DiagnosticsTest(unittest.TestCase):
         collector = AnalysisDiagnostics(settings={})
         collector.finish()
         with tempfile.TemporaryDirectory() as temporary,\
-             patch("src.diagnostics.os.replace", side_effect=OSError("disk full")),\
+             patch("src.diagnostics.tracking.os.replace", side_effect=OSError("disk full")),\
              self.assertLogs("src.gradio_app", level="INFO") as logs:
             self.assertIsNone(collector.persist(Path(temporary)))
             collector.log_summary(record_path=None, archive_path=None)
@@ -376,9 +376,9 @@ def test_exact_strings_cannot_inject_markdown_or_html(text):
 
 
 @pytest.mark.parametrize('operation, target, error', [
-    ('report generation', 'src.diagnostics_report.DiagnosticReport.render', RuntimeError('bad report')),
-    ('archive writing', 'src.diagnostics.ZipFile.writestr', OSError('disk full')),
-    ('archive finalization', 'src.diagnostics.os.replace', OSError('rename failed')),
+    ('report generation', 'src.diagnostics.report.DiagnosticReport.render', RuntimeError('bad report')),
+    ('archive writing', 'src.diagnostics.tracking.ZipFile.writestr', OSError('disk full')),
+    ('archive finalization', 'src.diagnostics.tracking.os.replace', OSError('rename failed')),
 ])
 def test_export_failure_retains_analysis_and_leaves_no_partial_archive(tmp_path, operation, target, error):
     diagnostics = recognized_run()
@@ -415,10 +415,10 @@ def test_final_summary_reports_context_and_actual_artifacts(tmp_path, caplog, ca
     with patch.object(logger, 'handlers', [caplog.handler]),\
          patch.object(logger, 'propagate', False),\
          caplog.at_level(logging.INFO, logger='src.gradio_app'):
-        with (patch('src.diagnostics.os.replace', side_effect=OSError('disk full'))
+        with (patch('src.diagnostics.tracking.os.replace', side_effect=OSError('disk full'))
               if case == 'storage_failure' else nullcontext()):
             record_path = diagnostics.persist(tmp_path)
-        with (patch('src.diagnostics.os.replace', side_effect=OSError('rename failed'))
+        with (patch('src.diagnostics.tracking.os.replace', side_effect=OSError('rename failed'))
               if case == 'export_failure' else nullcontext()):
             archive_path = diagnostics.export_zip(tmp_path)
         diagnostics.log_summary(record_path=record_path, archive_path=archive_path)
@@ -583,8 +583,8 @@ def test_category_collision_and_rescue_details():
 def test_legend_diagnostics_reuse_scores():
     chart = base_chart()
     diagnostic = AnalysisDiagnostics(settings={})
-    from src.legend_matcher import _score_legend_to_bars
-    with patch('src.legend_matcher._score_legend_to_bars', wraps=_score_legend_to_bars) as scoring:
+    from src.reconstruction.legend_matcher import _score_legend_to_bars
+    with patch('src.reconstruction.legend_matcher._score_legend_to_bars', wraps=_score_legend_to_bars) as scoring:
         actual = match_legend_to_bars(chart.image, chart.frame(), OCRFrame(chart.frame().source_key, ()),
                                       diagnostics=diagnostic)
         assert scoring.call_count == 1
@@ -657,7 +657,7 @@ def test_series_events_survive_legend_failure(tmp_path, helper):
     _, mapping = _custom_entries(chart, (2, 0, 1))
     diagnostic = AnalysisDiagnostics(settings={})
     failure = RuntimeError('injected legend failure')
-    with patch('src.reconstruct.' + helper, side_effect=failure), pytest.raises(RuntimeError) as caught:
+    with patch('src.reconstruction.vertical.' + helper, side_effect=failure), pytest.raises(RuntimeError) as caught:
         with diagnostic.stage('reconstruction'):
             reconstruct_vbar(chart.frame(), chart.texts, chart.image,
                              legend_mapping=mapping, diagnostics=diagnostic)
@@ -698,7 +698,7 @@ def test_series_events_survive_failure_while_building_later_series():
         assignment for assignment in mapping.assignments if assignment.bar_id != bars[1].id))
     diagnostic = AnalysisDiagnostics(settings={})
     failure = RuntimeError('injected rescue failure')
-    with patch('src.reconstruct._rescue_value', side_effect=failure), pytest.raises(RuntimeError) as caught:
+    with patch('src.reconstruction.vertical._rescue_value', side_effect=failure), pytest.raises(RuntimeError) as caught:
         reconstruct_vbar(chart.frame(), chart.texts, chart.image,
                          legend_mapping=mapping, diagnostics=diagnostic)
     assert caught.value is failure
@@ -712,7 +712,7 @@ def test_series_events_survive_failure_while_building_later_series():
 def test_export_failure_does_not_leave_partial_files(tmp_path):
     diagnostic = AnalysisDiagnostics(settings={})
     diagnostic.finish()
-    with patch('src.diagnostics.os.replace', side_effect=OSError('disk full')):
+    with patch('src.diagnostics.tracking.os.replace', side_effect=OSError('disk full')):
         assert diagnostic.export_zip(tmp_path) is None
     assert not list(tmp_path.rglob('*.tmp'))
     assert not list(tmp_path.rglob('*.zip'))

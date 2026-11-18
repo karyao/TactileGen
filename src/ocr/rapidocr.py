@@ -11,8 +11,8 @@ import numpy as np
 
 from src.contracts import Detection
 from src.ocr import OCRBackendResult
-from src.ocr_crop import crop_text_region
-from src.ocr_trace import BatchTrace, field, text_state
+from src.ocr.crop import crop_text_region
+from src.ocr.trace import BatchTrace, field, text_state
 
 
 _TALL_ASPECT_RATIO = 1.5
@@ -173,7 +173,7 @@ class RapidOCRBackend:
             trace.submit("cls_and_rotate")
         oriented, orientation = self._engine.cls_and_rotate(candidates)
         if trace is not None:
-            from src.ocr_trace import snapshot
+            from src.ocr.trace import snapshot
             labels = getattr(orientation, "cls_res", None)
             trace.batch["classifier_output"] = {
                 "cls_res": snapshot(labels),

@@ -10,7 +10,7 @@ import pytest
 
 from src.contract_io import load_detection_frame
 from src.contracts import Box, Detection, DetectionFrame, LegendBarAssignment, LegendMappingFrame, OCRFrame
-from src.diagnostics import AnalysisDiagnostics
+from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.analysis import analyze_image
 from src.presentation import render_detection_overlay, summarize_detections
 from src.tactile.completeness import Completeness, READY

@@ -29,7 +29,7 @@ from src.contracts import (
     OCRFrame,
     RecognizedText,
 )
-from src.legend_matcher import (
+from src.reconstruction.legend_matcher import (
     _classify_legend_scores,
     _crop,
     _pair_legend_items,
@@ -244,19 +244,19 @@ class LegendMatcherTest(unittest.TestCase):
         ocr = OCRFrame("input/chart.png", (
             RecognizedText("l1", "A", 1), RecognizedText("l2", "B", 1),
         ))
-        with patch("src.legend_matcher._candidate_error", side_effect=[0.05, 0.07]):
+        with patch("src.reconstruction.legend_matcher._candidate_error", side_effect=[0.05, 0.07]):
             matched = match_legend_to_bars(
                 image, detections, ocr, max_error=0.05, min_margin=0.02
             ).assignments[0]
         self.assertEqual(matched.status, "matched")
-        with patch("src.legend_matcher._candidate_error", side_effect=[0.05, 0.069]):
+        with patch("src.reconstruction.legend_matcher._candidate_error", side_effect=[0.05, 0.069]):
             ambiguous = match_legend_to_bars(
                 image, detections, ocr, max_error=0.05, min_margin=0.02
             ).assignments[0]
         self.assertEqual(ambiguous.status, "ambiguous")
         self.assertIsNone(ambiguous.series_name)
         self.assertEqual(ambiguous.swatch_id, "s1")
-        with patch("src.legend_matcher._candidate_error", side_effect=[0.051, 0.20]):
+        with patch("src.reconstruction.legend_matcher._candidate_error", side_effect=[0.051, 0.20]):
             weak = match_legend_to_bars(
                 image, detections, ocr, max_error=0.05, min_margin=0.02
             ).assignments[0]

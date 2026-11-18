@@ -13,8 +13,8 @@ import numpy as np
 
 from src.contracts import Detection
 from src.ocr import OCRBackendResult
-from src.ocr_crop import crop_text_region
-from src.ocr_trace import BatchTrace
+from src.ocr.crop import crop_text_region
+from src.ocr.trace import BatchTrace
 
 
 _LANGUAGE_EXPRESSION = re.compile(r"[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*")
