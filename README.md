@@ -96,6 +96,7 @@ Experiments use [PlotQA](https://github.com/NiteshMethani/PlotQA/blob/master/Plo
 which must be downloaded separately. Detection and OCR scores measure individual
 stages, not the accuracy or tactile readability of the final graphic.
 
+- [Dataset setup](docs/dataset_setup.md) — repeatable PlotQA and ChartQA downloads.
 - [Experiments and reproduction](docs/experiments.md) — datasets, detection results,
   training, and evaluation commands.
 - [YOLO ablation benchmark](docs/ablation_benchmark.md) — model comparisons.
