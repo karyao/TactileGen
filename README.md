@@ -93,5 +93,7 @@ stages, not the accuracy or tactile readability of the final graphic.
 - [Analysis diagnostics](docs/analysis_diagnostics.md) — reports and troubleshooting.
 - [Stage contracts](docs/contracts.md) and [Gradio structure](docs/gradio_structure.md)
   — developer documentation.
+- [Orientation baseline](docs/bar_orientation_baseline.md) — regression images,
+  raw predictions, reproduction, and orientation integration points.
 - [Real-chart dataset](docs/real_chart_data.md) — ChartDete-PMC downloads, class
   differences, and licensing.

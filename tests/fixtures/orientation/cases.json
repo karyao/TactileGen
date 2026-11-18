@@ -1,0 +1,46 @@
+[
+  {
+    "id": "clean_vertical",
+    "image": "tests/fixtures/orientation/clean_vertical.png",
+    "source": "Self-authored by scripts.capture_orientation_baseline prepare",
+    "expected_orientation": "vertical",
+    "assessment": "unstacked reconstruction baseline",
+    "expected_categories": ["Alpha", "Beta", "Gamma"],
+    "expected_values": [40, 70, 100]
+  },
+  {
+    "id": "clean_horizontal",
+    "image": "tests/fixtures/orientation/clean_horizontal.png",
+    "source": "Self-authored by scripts.capture_orientation_baseline prepare",
+    "expected_orientation": "horizontal",
+    "assessment": "unstacked reconstruction baseline",
+    "expected_categories": ["Alpha", "Beta", "Gamma"],
+    "expected_values": [40, 70, 100]
+  },
+  {
+    "id": "mixed_predictions",
+    "image": "tests/fixtures/orientation/mixed_predictions.png",
+    "source": "Self-authored initial horizontal baseline with Class A/B/C labels and top/right border; preserved after genuine mixed YOLO capture",
+    "expected_orientation": "horizontal",
+    "assessment": "genuine mixed predictions on an unstacked chart; border is misdetected as a vertical bar",
+    "expected_categories": ["Class A", "Class B", "Class C"],
+    "expected_values": [40, 70, 100]
+  },
+  {
+    "id": "bundled_vertical",
+    "image": "tests/fixtures/contracts/val/example.png",
+    "source": "Existing repository contract fixture; synthetic glyphs are not an OCR accuracy claim",
+    "expected_orientation": "vertical",
+    "assessment": "additional detector baseline",
+    "expected_categories": ["A", "B"],
+    "expected_series_values": [[4, 6], [3, 5]]
+  },
+  {
+    "id": "stacked_horizontal",
+    "image": "tests/fixtures/orientation/stacked_horizontal.png",
+    "source": "Byte-for-byte snapshot of user-provided root images.png; external provenance unknown",
+    "expected_orientation": "horizontal",
+    "assessment": "orientation-only stress case; stacked reconstruction is outside this change",
+    "expected_categories": ["Non-smoker", "Heavy (16-25)", "Light (1-5)", "Moderate (6-15)", "Very Heavy (>25)"]
+  }
+]
