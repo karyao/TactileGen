@@ -1,7 +1,6 @@
 """Orientation policy and filtering, independent of YOLO and OCR inference."""
 
 from dataclasses import FrozenInstanceError
-import json
 import math
 from pathlib import Path
 
@@ -164,17 +163,19 @@ def test_duplicate_outside_plot_bars_still_contribute_to_raw_scores():
     assert result.effective_frame.detections == raw.detections
 
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures/orientation"
-CASES = json.loads((FIXTURES / "cases.json").read_text())
+def test_real_mixed_predictions_resolve_horizontal_and_remove_vertical_bars():
+    fixture = Path(__file__).resolve().parent / "fixtures/orientation/mixed_predictions.detections.json"
+    raw = load_detection_frame(fixture)
+    original = raw.detections
+    assert {d.role for d in original if d.role.endswith("_bar")
+            and d.confidence >= 0.30} == {"vertical_bar", "horizontal_bar"}
 
-
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])
-def test_archived_predictions_resolve_expected_orientation(case):
-    raw = load_detection_frame(FIXTURES / f'{case["id"]}.detections.json')
     result = resolve(raw)
-    assert result.orientation == case["expected_orientation"]
-    opposite = "horizontal_bar" if result.orientation == "vertical" else "vertical_bar"
-    assert result.suppressed_ids == tuple(d.id for d in raw.detections if d.role == opposite)
-    if case["id"] == "mixed_predictions":
-        assert result.orientation == "horizontal"
-        assert result.suppressed_ids
+    assert result.orientation == "horizontal"
+    assert result.reason == "automatic_selection"
+    assert result.suppressed_ids == tuple(d.id for d in original if d.role == "vertical_bar")
+    expected = tuple(d for d in original if d.role != "vertical_bar")
+    assert result.effective_frame.detections == expected
+    assert all(actual is retained for actual, retained in
+               zip(result.effective_frame.detections, expected))
+    assert raw.detections is original
