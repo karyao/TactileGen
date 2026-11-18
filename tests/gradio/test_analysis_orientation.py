@@ -8,8 +8,9 @@ from zipfile import ZipFile
 from PIL import Image
 import pytest
 
+from tests.legend_filter_helpers import passthrough_filter
 from src.contract_io import load_detection_frame
-from src.contracts import Box, Detection, DetectionFrame, LegendBarAssignment, LegendMappingFrame, OCRFrame
+from src.contracts import Box, Detection, DetectionFrame, OCRFrame
 from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.analysis import analyze_image
 from src.presentation import render_detection_overlay, summarize_detections
@@ -43,7 +44,7 @@ def test_uncertainty_skips_every_downstream_call(image_path, diagnostic, prefere
     raw = DetectionFrame("input/chart.png", 100, 80, (TITLE, *bars))
     diagnostics = AnalysisDiagnostics(settings={}) if diagnostic else None
     factory = Mock()
-    names = ("TesseractBackend", "run_ocr", "match_legend_to_bars", "match_legend_to_hbars",
+    names = ("TesseractBackend", "run_ocr", "filter_bars_by_legend",
              "reconstruct_vbar", "reconstruct_hbar", "cut_off_flags", "check_completeness")
     with ExitStack() as stack:
         stack.enter_context(patch("src.gradio_ui.analysis.run_detection", return_value=raw))
@@ -115,13 +116,14 @@ def test_effective_frame_reaches_all_consumers(image_path, diagnostic, preferenc
         stack.enter_context(patch("src.gradio_ui.analysis.run_detection", return_value=raw))
         ocr = stack.enter_context(patch("src.gradio_ui.analysis.run_ocr", return_value=OCRFrame("input/chart.png", ())))
         calls = {}
-        for orientation, match_name, reconstruct_name in (
-            ("vertical", "match_legend_to_bars", "reconstruct_vbar"),
-            ("horizontal", "match_legend_to_hbars", "reconstruct_hbar"),
+        matcher = stack.enter_context(patch("src.gradio_ui.analysis.filter_bars_by_legend",
+                                            side_effect=passthrough_filter))
+        for orientation, reconstruct_name in (
+            ("vertical", "reconstruct_vbar"),
+            ("horizontal", "reconstruct_hbar"),
         ):
             calls[orientation] = (
-                stack.enter_context(patch("src.gradio_ui.analysis." + match_name,
-                                          return_value=LegendMappingFrame("input/chart.png", (LegendBarAssignment("v" if orientation == "vertical" else "h"),)))),
+                matcher,
                 stack.enter_context(patch("src.gradio_ui.analysis." + reconstruct_name,
                                           return_value=make_spec(orientation=orientation))),
             )
@@ -138,13 +140,15 @@ def test_effective_frame_reaches_all_consumers(image_path, diagnostic, preferenc
     matcher, reconstruct = calls[selected]
     for call, index in ((ocr, 1), (matcher, 1), (reconstruct, 0), (cutoff, 0), (overlay, 1), (summary, 0)):
         assert call.call_args.args[index] is effective
-    for call in calls["horizontal" if selected == "vertical" else "vertical"]:
-        call.assert_not_called()
+    calls["horizontal" if selected == "vertical" else "vertical"][1].assert_not_called()
+    assert matcher.call_args.kwargs["bar_role"] == selected + "_bar"
+    assert reconstruct.call_args.kwargs["mismatched_bar_ids"] == ()
     assert complete.call_args.args[0] is result.spec
     assert result.spec.orientation == selected
     assert "Bar orientation: " + selected in result.summary
     if selected == "horizontal":
-        assert "diagnostics" not in matcher.call_args.kwargs
+        assert matcher.call_args.kwargs == {"bar_role": "horizontal_bar",
+                                             **({"diagnostics": diagnostics} if diagnostic else {})}
         assert "diagnostics" not in reconstruct.call_args.kwargs
     assert asdict(raw) == before
     if diagnostics:
@@ -187,9 +191,8 @@ def _run_with_diagnostics(image_path, raw, diagnostics, *, preference="auto", re
         stack.enter_context(patch("src.gradio_ui.analysis.run_ocr",
                                   return_value=OCRFrame("input/chart.png", ())))
         if resolved:
-            stack.enter_context(patch("src.gradio_ui.analysis.match_legend_to_bars",
-                                      return_value=LegendMappingFrame(
-                                          "input/chart.png", (LegendBarAssignment("v"),))))
+            stack.enter_context(patch("src.gradio_ui.analysis.filter_bars_by_legend",
+                                      side_effect=passthrough_filter))
             stack.enter_context(patch("src.gradio_ui.analysis.reconstruct_vbar",
                                       return_value=make_spec(orientation="vertical")))
             stack.enter_context(patch("src.gradio_ui.analysis.cut_off_flags", return_value=[]))

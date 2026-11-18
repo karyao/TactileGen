@@ -2,6 +2,8 @@
 import asyncio
 import inspect
 import gradio as gr
+from dataclasses import fields
+from src.gradio_ui.components import AnalysisComponents
 
 
 def invoke(fn, *args, **kwargs):
@@ -23,9 +25,9 @@ def invoke(fn, *args, **kwargs):
             final = None
             async for value in result:
                 final = value
-            return final[:27]
+            return final[:len(fields(AnalysisComponents))]
         if inspect.isawaitable(result):
             value = await result
-            return value[:27] if fn.__name__ in ("ready_results", "orientation_changed") else value
+            return value[:len(fields(AnalysisComponents))] if fn.__name__ in ("ready_results", "orientation_changed") else value
         return result
     return asyncio.run(call())

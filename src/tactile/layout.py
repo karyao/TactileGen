@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
-from src.contracts import BarSeries, VerticalBarChart
+from src.contracts import BarSeries, VerticalBarChart, effective_omit_legend
 from src.tactile.braille import BLANK, TN_CLOSE, TN_OPEN, Cell, to_braille
 from src.tactile.keys import abbreviation_keys, numeric_keys
 from src.tactile.value_labels import plan_value_labels
@@ -192,6 +192,7 @@ class TactileLayout:
     series_key_elsewhere: bool = False
     # "vertical" bars on a horizontal axis, or "horizontal" bars (layout_hbar.py).
     orientation: str = "vertical"
+    omit_legend: bool = False
 
     @property
     def categories_keyed(self) -> bool:
@@ -379,13 +380,15 @@ def _plot_height(layout: TactileLayout) -> float:
 def _no_bars_note(chart: VerticalBarChart) -> str | None:
     """Transcriber's note naming legend entries with no visible bars (not "zero")."""
     names = [series.name for series in chart.series if not series.has_bars]
+    if effective_omit_legend(len(chart.series), chart.omit_legend):
+        return None
     return f"No bars are visible for: {', '.join(names)}." if names else None
 
 
 def _has_series_key(chart: VerticalBarChart) -> bool:
-    """Several series always need a key; a single series only when the source
-    chart had a legend naming it."""
-    return len(chart.series) > 1 or chart.series[0].name is not None
+    """Multiple series always need a key; a named single series may omit it."""
+    return (not effective_omit_legend(len(chart.series), chart.omit_legend)
+            and (len(chart.series) > 1 or chart.series[0].name is not None))
 
 
 def _split(count: int, parts: int) -> list[range]:
@@ -411,7 +414,7 @@ def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
             tuple(names[i] for i in r),
             tuple(BarSeries(s.name, tuple(s.values[i] for i in r) if s.has_bars else (),
                             s.has_bars, tuple(s.rescued[i] for i in r) if s.rescued else ())
-                  for s in chart.series))
+                  for s in chart.series), omit_legend=effective_omit_legend(len(chart.series), chart.omit_legend))
 
     division = (f"This graph is divided by category into {n} parts with the same "
                 "scale on each part.")
@@ -928,6 +931,7 @@ def _layout_pass(chart: VerticalBarChart, mode: str, *,
         key_samples=tuple(samples), category_count=n_cat,
         series_textures=textures, x_label_mode=mode, notes=tuple(notes),
         series_key_elsewhere=not show_series_key and has_key,
+        omit_legend=chart.omit_legend,
     )
     return layout, omitted, drawn
 

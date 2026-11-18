@@ -48,6 +48,11 @@ LEGEND_MAPPING_STATUSES = frozenset({
 })
 
 
+def effective_omit_legend(series_count: int, requested: bool) -> bool:
+    """Only a single series may omit its tactile key."""
+    return series_count == 1 and requested
+
+
 def validate_source_key(value: str) -> None:
     """Validate a relative, namespaced image identifier."""
     parts = value.split("/") if isinstance(value, str) else []
@@ -276,8 +281,8 @@ def join_legend_assignments(
 ) -> tuple[tuple[Detection, LegendBarAssignment], ...]:
     """Validate and join one legend assignment to every bar.
 
-    The assignments cover every vertical bar, or, for a horizontal bar chart
-    (``src.reconstruction.horizontal.match_legend_to_hbars``), every horizontal bar.
+    The assignments cover every bar of the role selected by the legend matcher,
+    in detection order.
     """
     if detections.source_key != mapping.source_key:
         raise ValueError("Legend mapping and detections refer to different source images")
@@ -347,9 +352,12 @@ class VerticalBarChart:
     y_axis_title: str
     categories: tuple[str, ...]
     series: tuple[BarSeries, ...]
+    omit_legend: bool = False
 
     def __post_init__(self) -> None:
         validate_source_key(self.source_key)
+        if not isinstance(self.omit_legend, bool):
+            raise ValueError("omit_legend must be a boolean")
         for label in (self.title, self.x_axis_title, self.y_axis_title):
             if not isinstance(label, str) or not label:
                 raise ValueError("chart and axis titles must be nonempty")
@@ -381,6 +389,7 @@ class HorizontalBarChart:
     y_axis_title: str
     categories: tuple[str, ...]
     series: tuple[BarSeries, ...]
+    omit_legend: bool = False
 
     def __post_init__(self) -> None:
         VerticalBarChart.__post_init__(self)
@@ -388,6 +397,10 @@ class HorizontalBarChart:
 
 class ChartInterpretationError(ValueError):
     """A complete chart cannot be reconstructed from detections and OCR."""
+
+
+# Raised when every detected bar failed the legend colour check, so no bar can
+# be tied to a legend series (see src.reconstruction.legend_matcher).
 
 
 _HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
@@ -453,9 +466,12 @@ class VerticalBarSpec:
     chart_type: str = "bar"
     orientation: str = "vertical"
     schema_version: str = "0.2"
+    omit_legend: bool = False
 
     def __post_init__(self) -> None:
         validate_source_key(self.source_key)
+        if not isinstance(self.omit_legend, bool):
+            raise ValueError("omit_legend must be a boolean")
         if self.schema_version != "0.2":
             raise ValueError("VerticalBarSpec schema_version must be 0.2")
         if self.chart_type != "bar" or self.orientation not in ("vertical", "horizontal"):

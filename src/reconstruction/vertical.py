@@ -28,7 +28,7 @@ from src.contracts import (
     YAxisSpec,
     join_legend_assignments,
 )
-from src.reconstruction.legend_matcher import match_legend_to_bars
+from src.reconstruction.legend_matcher import filter_bars_by_legend
 from src.text_provenance import consumer_text, text_evidence
 
 MIN_CONFIDENCE = 0.3
@@ -505,20 +505,18 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      rescue_bars: bool = True,
                      category_guard: bool = True, *,
                      legend_mapping: LegendMappingFrame | None = None,
-                     diagnostics: AnalysisDiagnostics | None = None
+                     diagnostics: AnalysisDiagnostics | None = None,
+                     mismatched_bar_ids: Iterable[str] = ()
                      ) -> VerticalBarSpec:
     """Turn detections plus OCR into a ``VerticalBarSpec``.
 
-    ``legend_mapping`` supplies validated series names from the shared matcher.
-    When omitted, the mapping is computed from ``frame``, ``ocr_texts``, and
-    ``image`` so legacy callers use the same matching implementation.
-
-    Raises ``ChartInterpretationError`` when there are no bars, no x tick
-    labels, or fewer than two consistent y ticks. Everything else unresolved is
-    reported through ``flags``.
+    When a caller supplies legend assignments, it can also supply the IDs of
+    bars whose colours did not match. Otherwise both come from the matcher.
+    Unmatched bars remain available for colour grouping and value reconstruction.
     """
     if diagnostics is not None:
         diagnostics.record["spec_sources"] = {}
+    mismatched = set(mismatched_bar_ids)
     texts = _text_table(ocr_texts, diagnostics=diagnostics)
 
     def trace(code, **evidence):
@@ -531,8 +529,10 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             if isinstance(ocr_texts, OCRFrame)
             else _legend_ocr_frame(frame, texts)
         )
-        legend_mapping = match_legend_to_bars(image, frame, legend_ocr,
+        filtered = filter_bars_by_legend(image, frame, legend_ocr, bar_role="vertical_bar",
             **({"diagnostics": diagnostics} if diagnostics is not None else {}))
+        legend_mapping = filtered.mapping
+        mismatched.update(filtered.mismatched_bar_ids)
     assignment_by_bar = {
         bar.id: assignment
         for bar, assignment in join_legend_assignments(frame, legend_mapping)
@@ -557,6 +557,9 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     trace("plot_selection", plot_id=plot.id if plot else None,
           retained_bar_ids=[d.id for d in bars],
           excluded_bar_ids=[d.id for d in roles.get("vertical_bar", []) if d not in bars])
+    # Only bars accepted for reconstruction can represent unaccounted chart
+    # data. Keep the original mismatch evidence for excluded candidates.
+    eligible_mismatched = mismatched & {bar.id for bar in bars}
     if not bars:
         trace("reconstruction_blocked", reason="no_bars_inside_plot",
               flag="chart_interpretation_blocked")
@@ -835,8 +838,20 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     has_detected_swatches = any(
         detection.role == "legend_swatch" for detection in frame.detections
     )
+    # Let the user review fallback series when the legend is absent or all
+    # unresolved bars are colour mismatches, and the detected grid is complete
+    # and consistently ordered. Review can supply names or omit the legend.
+    # Pixel rescue still requires settled legend identities in mixed groups.
+    expected_slots = tuple(range(len(categories)))
+    reviewable_groups = (
+        bool(unresolved)
+        and (all(bars[k].id in mismatched for k in unresolved)
+             or (not has_detected_swatches and not matched_groups))
+        and all(tuple(bar_label[k] for k in members) == expected_slots for members in clusters)
+        and all(column == tuple(sorted(column)) for column in zip(*clusters, strict=True))
+    )
     ambiguous_series = bool(conflicting_swatches)
-    if unresolved and (has_detected_swatches or len(clusters) > 1):
+    if unresolved and (has_detected_swatches or len(clusters) > 1) and not reviewable_groups:
         ambiguous_series = True
     if any(bar_colors[members[0]] is None for members in clusters):
         ambiguous_series = True
@@ -885,6 +900,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
 
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
+    unaccounted = eligible_mismatched.copy()
+    rescue_measurements = []
     for c, members in enumerate(clusters):
         row: list[float | None] = [None] * len(categories)
         kept: dict[int, int] = {}
@@ -907,6 +924,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             kept[slot] = k
             row[slot] = values[k]
         detected_slots += len(kept)
+        unaccounted.difference_update(bars[k].id for k in kept.values())
         rescued = [False] * len(categories)
         value_conf: list[float | None] = [
             bars[kept[j]].confidence if j in kept else None for j in range(len(categories))]
@@ -919,18 +937,20 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             for j in range(len(categories)):
                 if row[j] is not None:
                     continue
-                row[j] = _rescue_value(rgb, label_x[j] + offset, bar_width, baseline, a, centre)
+                centre_x = label_x[j] + offset
+                measured = _rescue_value(rgb, centre_x, bar_width, baseline, a, centre)
+                rescue_measurements.append((c, j, centre_x, measured))
+                rescued_zero += measured == 0.0
+                row[j] = measured
                 rescued[j] = True
                 value_conf[j] = RESCUE_CONFIDENCE
-                trace_series("pixel_rescue", series_index=c, category_index=j,
-                      center_x=label_x[j] + offset, width=bar_width, baseline=baseline,
-                      value=row[j], inferred_zero=row[j] == 0.0)
                 n_rescued += 1
-                rescued_zero += row[j] == 0.0
         rescued_total += n_rescued
-        trace_series("category_count_mismatch" if len(members) + n_rescued != len(categories)
+        trace_series("category_count_mismatch"
+              if len(members) + n_rescued != len(categories)
               else "category_counts", series_index=c, detected_bars=len(members),
-              rescued_bars=n_rescued, category_count=len(categories),
+              rescued_bars=n_rescued,
+              category_count=len(categories),
               missing_slots=[j for j, v in enumerate(row) if v is None])
         if len(members) + n_rescued != len(categories):
             count_mismatch = True
@@ -949,6 +969,34 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             source = diagnostics.field_source(f"series_name[{c}]",
                 [identity[1]] if identity and name else [], [event_id])
             series_sources[id(series[-1])] = source
+    # Resolve provenance across every rescued slot before clearing any blocker.
+    # A slot value alone does not identify the short detection it replaced.
+    candidates_by_slot = {}
+    slots_by_bar = {}
+    for c, j, centre_x, measured in rescue_measurements:
+        candidates = []
+        if measured != 0.0:
+            for k in sorted(short):
+                bar = bars[k]
+                if bar_label[k] != j or not bar.box.x1 <= centre_x <= bar.box.x2:
+                    continue
+                assignment = assignment_by_bar.get(bar.id)
+                if assignment is not None and assignment.status == "matched":
+                    identity = (assignment.swatch_id, assignment.label_id, assignment.series_name)
+                    if identity != cluster_identities[c]:
+                        continue
+                candidates.append(k)
+                slots_by_bar.setdefault(k, []).append((c, j))
+        candidates_by_slot[c, j] = candidates
+    for c, j, centre_x, measured in rescue_measurements:
+        candidates = candidates_by_slot[c, j]
+        bar_id = None
+        if len(candidates) == 1 and len(slots_by_bar[candidates[0]]) == 1:
+            bar_id = bars[candidates[0]].id
+            unaccounted.discard(bar_id)
+        trace_series("pixel_rescue", series_index=c, category_index=j,
+              center_x=centre_x, width=bar_width, baseline=baseline,
+              value=measured, inferred_zero=measured == 0.0, bar_id=bar_id)
     # Share of category x series slots (for series with at least one detected
     # bar) that had a detected bar; very short bars were detected, just re-measured.
     slots = len(categories) * len(clusters)
@@ -960,6 +1008,12 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         flags.append(f"short_bars_remeasured:{short_bars}")
     if rescued_total:
         flags.append(f"bars_rescued:{rescued_total}")
+    if eligible_mismatched:
+        flags.append(f"bar_colour_mismatch:{len(eligible_mismatched)}")
+    if unaccounted:
+        flag = f"bar_colour_unaccounted:{len(unaccounted)}"
+        flags.append(flag)
+        trace("bar_colour_unaccounted", bar_ids=sorted(unaccounted), flag=flag)
     if rescued_zero:
         flags.append("value_inferred_zero")
     if count_mismatch:

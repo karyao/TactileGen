@@ -29,13 +29,18 @@ from src.contracts import (
     HorizontalBarChart,
     VerticalBarChart,
     VerticalBarSpec,
+    effective_omit_legend,
 )
 
 READY, NEEDS_INPUT, CANNOT_BUILD = "ready", "needs_input", "cannot_build"
 
-# Flags that mean the numbers or structure cannot be trusted. Any one of them
-# makes the spec ``cannot_build``.
+LEGEND_COLOUR_WARNING = ("{n} detected bar(s) could not be matched to the legend. "
+                         "Review the series assignments.")
+
+# Flags that make the spec ``cannot_build``.
 BLOCKING_FLAGS = {
+    "bar_colour_unaccounted": ("Reconstruction could not account for {n} bar(s) whose colours "
+                               "did not match the legend. Check the source chart and legend."),
     # bars and category labels do not pair one to one
     "category_count_mismatch": "The number of bars does not match the number of category labels.",
     # two bars claimed the same category slot
@@ -70,11 +75,12 @@ FORCEABLE_FLAGS = frozenset({
 })
 
 # Blocker messages that already say what to do, so no generic next steps are added.
-SELF_EXPLAINING_FLAGS = frozenset({"bars_mostly_missed"})
+SELF_EXPLAINING_FLAGS = frozenset({"bars_mostly_missed", "bar_colour_unaccounted"})
 
 # Flags worth telling the user about that do not stop a build. Each is matched
 # by name, or by the prefix before the colon.
 NOTE_FLAGS = {
+    "legend_bars_removed": "{n} detected bar(s) without a verified legend colour match were removed by user choice.",
     # values measured from pixels because no bar was detected
     "bars_rescued": "{n} bar value(s) were measured from pixels because YOLO did not detect the bar.",
     # a rescue found no bar pixels; {n} counts those values, drawn as zero
@@ -90,6 +96,7 @@ NOTE_FLAGS = {
     "short_bars_remeasured": "{n} very short bar(s) were re-measured from pixels.",
     # a bar's top edge was re-measured from pixels because the detector box disagreed
     "bar_edge_corrected": "{n} bar(s) had their top edge corrected from the pixels.",
+    "bar_colour_mismatch": LEGEND_COLOUR_WARNING,
     # category labels the first OCR pass could not read were re-read with a rotated fallback
     "category_reread": ("{n} category label(s) were re-read with a rotated OCR fallback; "
                         "check them in the category list."),
@@ -431,6 +438,9 @@ def completeness_from_error(error: ChartInterpretationError,
         message = "No vertical bars were found in the plot area."
         if count("horizontal_bar"):
             message += " The chart may have horizontal bars."
+    elif "matched the legend" in text:
+        message = ("No detected bar matched the legend colours, so no value can be "
+                   "tied to a legend series.")
     else:
         message = f"The chart could not be interpreted ({text})."
     return Completeness(CANNOT_BUILD, [], [], [f"{message} {NEXT_STEPS}"], False)
@@ -548,5 +558,6 @@ def spec_to_chart_with_notes(
     chart_type = HorizontalBarChart if spec.orientation == "horizontal" else VerticalBarChart
     chart = chart_type(
         spec.source_key, spec.title, spec.x_axis_title, spec.y_axis_title,
-        tuple(spec.categories), tuple(series_out))
+        tuple(spec.categories), tuple(series_out),
+        omit_legend=effective_omit_legend(len(spec.series), spec.omit_legend))
     return chart, notes

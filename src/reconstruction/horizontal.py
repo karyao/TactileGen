@@ -30,7 +30,7 @@ from src.contracts import (
     OCRFrame,
     VerticalBarSpec,
 )
-from src.reconstruction.legend_matcher import match_legend_to_bars
+from src.reconstruction.legend_matcher import filter_bars_by_legend
 from src.reconstruction.vertical import (
     MIN_CONFIDENCE,
     TITLE_EDGE_PX,
@@ -72,36 +72,30 @@ def bar_orientation(frame: DetectionFrame, min_confidence: float = MIN_CONFIDENC
     return "horizontal" if counts["horizontal_bar"] > counts["vertical_bar"] else "vertical"
 
 
+def _swapped(detection: Detection) -> Detection:
+    """One detection turned on its side: box coordinates and axis roles swap."""
+    return Detection(detection.id, ROLE_SWAP.get(detection.role, detection.role),
+                     Box(detection.box.y1, detection.box.x1,
+                         detection.box.y2, detection.box.x2),
+                     detection.confidence)
+
+
 def transpose_frame(frame: DetectionFrame) -> DetectionFrame:
     """Swap x and y of every box and the axis roles; bars become vertical."""
     return DetectionFrame(frame.source_key, frame.height, frame.width, tuple(
-        Detection(d.id, ROLE_SWAP.get(d.role, d.role),
-                  Box(d.box.y1, d.box.x1, d.box.y2, d.box.x2), d.confidence)
-        for d in frame.detections))
+        _swapped(d) for d in frame.detections))
 
 
 def transpose_image(image: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(np.swapaxes(image, 0, 1))
 
 
-def bars_as_vertical(frame: DetectionFrame) -> DetectionFrame:
-    """Same boxes, with horizontal bars labelled as the bars the legend matcher reads."""
-    swap = {"horizontal_bar": "vertical_bar", "vertical_bar": "horizontal_bar"}
-    return replace(frame, detections=tuple(
-        replace(d, role=swap.get(d.role, d.role)) for d in frame.detections))
-
-
-def match_legend_to_hbars(image: np.ndarray, frame: DetectionFrame,
-                          ocr: OCRFrame | None) -> LegendMappingFrame:
-    """Legend assignments for the horizontal bars, one per bar in detection order."""
-    return match_legend_to_bars(image, bars_as_vertical(frame), ocr)
-
-
 def reconstruct_hbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      min_confidence: float = MIN_CONFIDENCE,
                      rescue_bars: bool = True,
                      category_guard: bool = True, *,
-                     legend_mapping: LegendMappingFrame | None = None
+                     legend_mapping: LegendMappingFrame | None = None,
+                     mismatched_bar_ids: tuple[str, ...] = ()
                      ) -> VerticalBarSpec:
     """Turn detections plus OCR of a horizontal bar chart into a spec.
 
@@ -111,11 +105,15 @@ def reconstruct_hbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     if legend_mapping is None:
         legend_ocr = (ocr_texts if isinstance(ocr_texts, OCRFrame)
                       else _legend_ocr_frame(frame, _text_table(ocr_texts)))
-        legend_mapping = match_legend_to_hbars(image, frame, legend_ocr)
+        filtered = filter_bars_by_legend(image, frame, legend_ocr,
+                                         bar_role="horizontal_bar")
+        legend_mapping = filtered.mapping
+        mismatched_bar_ids = (*mismatched_bar_ids, *filtered.mismatched_bar_ids)
     try:
         spec = reconstruct_vbar(transpose_frame(frame), ocr_texts, transpose_image(image),
                                 min_confidence, rescue_bars, category_guard,
-                                legend_mapping=legend_mapping)
+                                legend_mapping=legend_mapping,
+                                mismatched_bar_ids=mismatched_bar_ids)
     except ChartInterpretationError as error:
         raise ChartInterpretationError(_ERRORS.get(str(error), str(error))) from error
 

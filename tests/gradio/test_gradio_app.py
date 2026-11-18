@@ -19,6 +19,8 @@ import cv2
 import numpy as np
 import pytest
 
+from tests.legend_filter_helpers import passthrough_filter
+from src.reconstruction.legend_matcher import LegendFilterResult
 from src.borealis import BOREALIS_CSS, borealis_theme
 from src.contract_io import load_ocr_frame
 from src.contracts import (
@@ -216,7 +218,7 @@ class GradioAnalysisTest(GradioTestCase):
             reconstructed = make_spec()
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame),\
                  patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),\
-                 patch("src.gradio_ui.analysis.match_legend_to_bars", return_value=mapping),\
+                 patch("src.gradio_ui.analysis.filter_bars_by_legend", return_value=LegendFilterResult(frame, mapping)),\
                  patch("src.gradio_ui.analysis.reconstruct_vbar",
                        return_value=reconstructed) as reconstruct,\
                  patch("src.gradio_ui.analysis.cut_off_flags",
@@ -227,7 +229,7 @@ class GradioAnalysisTest(GradioTestCase):
 
             args = reconstruct.call_args.args
             self.assertEqual(args[:2], (frame, ocr))
-            self.assertEqual(reconstruct.call_args.kwargs, {"legend_mapping": mapping})
+            self.assertEqual(reconstruct.call_args.kwargs, {"legend_mapping": mapping, "mismatched_bar_ids": ()})
             edge_flags.assert_called_once_with(frame, args[2])
             self.assertEqual(result.spec.flags, ["title_cut_off"])
             self.assertEqual(result.completeness.status, NEEDS_INPUT)
@@ -248,10 +250,9 @@ class GradioAnalysisTest(GradioTestCase):
                 with (
                     patch("src.gradio_ui.analysis.run_detection", return_value=frame),
                     patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),
-                    patch("src.gradio_ui.analysis.match_legend_to_bars") as vertical_match,
                     patch("src.gradio_ui.analysis.reconstruct_vbar") as vertical,
-                    patch("src.gradio_ui.analysis.match_legend_to_hbars", autospec=True,
-                          return_value=mapping) as horizontal_match,
+                    patch("src.gradio_ui.analysis.filter_bars_by_legend", autospec=True,
+                          return_value=LegendFilterResult(frame, mapping)) as horizontal_match,
                     patch("src.gradio_ui.analysis.reconstruct_hbar", autospec=True,
                           return_value=spec) as horizontal,
                     patch("src.gradio_ui.analysis.cut_off_flags", return_value=[]),
@@ -261,10 +262,10 @@ class GradioAnalysisTest(GradioTestCase):
                         diagnostics=diagnostics,
                     )
 
-                vertical_match.assert_not_called()
+                self.assertEqual(horizontal_match.call_args.kwargs["bar_role"], "horizontal_bar")
                 vertical.assert_not_called()
                 self.assertEqual(horizontal_match.call_args.args[1:], (frame, ocr))
-                self.assertEqual(horizontal.call_args.kwargs, {"legend_mapping": mapping})
+                self.assertEqual(horizontal.call_args.kwargs, {"legend_mapping": mapping, "mismatched_bar_ids": ()})
                 self.assertEqual(result.spec.orientation, "horizontal")
                 self.assertIsNone(result.legend_warning)
                 self.assertIsNone(result.reconstruction_warning)
@@ -282,7 +283,7 @@ class GradioAnalysisTest(GradioTestCase):
             mapping = LegendMappingFrame("input/chart.png", (LegendBarAssignment("bar"),))
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame),\
                  patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),\
-                 patch("src.gradio_ui.analysis.match_legend_to_bars", return_value=mapping),\
+                 patch("src.gradio_ui.analysis.filter_bars_by_legend", return_value=LegendFilterResult(frame, mapping)),\
                  patch("src.gradio_ui.analysis.reconstruct_vbar", side_effect=
                        ChartInterpretationError("no x tick labels detected")):
                 result = analyze_image(
@@ -305,7 +306,7 @@ class GradioAnalysisTest(GradioTestCase):
             mapping = LegendMappingFrame("input/chart.png", (LegendBarAssignment("bar"),))
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame),\
                  patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),\
-                 patch("src.gradio_ui.analysis.match_legend_to_bars", return_value=mapping),\
+                 patch("src.gradio_ui.analysis.filter_bars_by_legend", return_value=LegendFilterResult(frame, mapping)),\
                  patch("src.gradio_ui.analysis.reconstruct_vbar", return_value=make_spec()),\
                  patch("src.gradio_ui.analysis.check_completeness",
                        side_effect=RuntimeError("classification failed")),\
@@ -348,7 +349,7 @@ class GradioAnalysisTest(GradioTestCase):
             ))
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame),\
                  patch("src.gradio_ui.analysis.run_ocr", side_effect=RuntimeError("ocr")),\
-                 patch("src.gradio_ui.analysis.match_legend_to_bars",
+                 patch("src.gradio_ui.analysis.filter_bars_by_legend",
                        side_effect=RuntimeError("matcher")),\
                  self.assertLogs("src.gradio_app", level="ERROR"):
                 result = analyze_image(
@@ -742,7 +743,7 @@ class GradioUiTest(GradioTestCase):
         analyze = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
         ready_updates = invoke(ready)
-        self.assertEqual(len(ready_updates), 27)
+        self.assertEqual(len(ready_updates), len(fields(AnalysisComponents)))
         self.assertIn("Your chart workspace", ready_updates[1]["value"])
         frame = DetectionFrame("input/chart.png", 20, 20, ())
         result = AnalysisResult(
@@ -775,7 +776,7 @@ class GradioUiTest(GradioTestCase):
             error_updates = invoke(analyze.fn, None, 0.25, 0.70, "eng")
         self.assertTrue(error_updates[23]["visible"])
         self.assertIn('role="alert"', error_updates[23]["value"])
-        self.assertEqual(len(invoke(ready)), 27)
+        self.assertEqual(len(invoke(ready)), len(fields(AnalysisComponents)))
 
     def test_image_change_clears_diagnostics_with_all_analysis_results(self):
         demo = build_app(object(), device="cpu")
@@ -793,7 +794,7 @@ class GradioUiTest(GradioTestCase):
         self.assertFalse(event["queue"])
         self.assertEqual(event["api_visibility"], "private")
         updates = invoke(reset.fn)
-        self.assertEqual(len(updates), len(reset.outputs[:27]))
+        self.assertEqual(len(updates), len(reset.outputs[:len(fields(AnalysisComponents))]))
         for name in ("diagnostics_download", "diagnostics_info", "orientation_output"):
             index = [field.name for field in fields(AnalysisComponents)].index(name)
             self.assertFalse(updates[index]["visible"])
@@ -818,8 +819,9 @@ class GradioUiTest(GradioTestCase):
         self.assertIn("Recognized text", labels)
         self.assertIn("Legend mappings", labels)
         self.assertIn("Reconstruction completeness", labels)
-        self.assertIn("Reconstructed text", labels)
-        self.assertIn("Reconstructed values (read-only)", labels)
+        self.assertIn("Chart text · editable", labels)
+        self.assertIn("Bar values · read-only", labels)
+        self.assertIn("Include legend", labels)
         self.assertIn("Reconstructed VerticalBarSpec", labels)
         self.assertIn("Tactile review pages", labels)
         self.assertIn("Tactile generation report", labels)
@@ -855,7 +857,7 @@ class GradioUiTest(GradioTestCase):
 
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
         ready_updates = invoke(ready)
-        self.assertEqual(len(ready_updates), 27)
+        self.assertEqual(len(ready_updates), len(fields(AnalysisComponents)))
         self.assertTrue(ready_updates[1]["visible"])
         self.assertIsNone(ready_updates[8])
         self.assertTrue(all(not update["visible"] for update in ready_updates[2:8]))
@@ -1185,7 +1187,7 @@ class GradioDiagnosticsTest(unittest.TestCase):
                 with patch.object(AnalysisDiagnostics, "persist", save),\
                      patch("src.gradio_ui.analysis.run_detection", return_value=frame) as detect,\
                      patch("src.gradio_ui.analysis.run_ocr", return_value=ocr) as recognize,\
-                     patch("src.gradio_ui.analysis.match_legend_to_bars", return_value=object()),\
+                     patch("src.gradio_ui.analysis.filter_bars_by_legend", side_effect=passthrough_filter),\
                      patch("src.gradio_ui.analysis.render_detection_overlay", side_effect=lambda image, *a, **k: image),\
                      patch("src.gradio_ui.analysis.summarize_detections", return_value="summary"),\
                      patch("src.gradio_ui.callbacks.legend_rows", return_value=[]),\
@@ -1220,6 +1222,7 @@ class GradioDiagnosticsTest(unittest.TestCase):
                 self.assertEqual(records[0]["counts"], {
                     "detections": 3, "text_regions": 2, "effective_detections": 3,
                     "ocr_returned_regions": 2, "ocr_readable": 1, "ocr_empty": 1,
+                    "colour_mismatched_bars": 0, "colour_kept_bars": 0,
                 })
                 for record, stage in ((records[1], "validation"), (records[2], "detection"),
                                       (records[5], "result_preparation")):
@@ -1284,7 +1287,7 @@ def test_zip_preserves_partial_stage_outputs(tmp_path, failure):
                      for k, (text, conf) in chart.texts.items()))
     diagnostic = AnalysisDiagnostics(settings={'confidence': .25})
     functions = {'detection': 'run_detection', 'ocr': 'run_ocr',
-                 'legend_matching': 'match_legend_to_bars', 'reconstruction': 'reconstruct_vbar',
+                 'legend_matching': 'filter_bars_by_legend', 'reconstruction': 'reconstruct_vbar',
                  'presentation': 'render_detection_overlay'}
     from contextlib import ExitStack
     with ExitStack() as stack:
@@ -1352,7 +1355,7 @@ def test_gradio_download_reset_and_export_failure(tmp_path):
         for name in ('ready_results', 'clear_all'):
             callback = next(fn for fn in demo.fns.values() if fn.api_name == name)
             updates = invoke(callback.fn)
-            offset = 12 if name == "clear_all" else 0
+            offset = len(demo.analysis_controls) if name == "clear_all" else 0
             assert not updates[index+offset]['visible']
             assert updates[index+offset]['value'] is None
     finally:

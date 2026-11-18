@@ -8,7 +8,8 @@ from zipfile import ZipFile
 from PIL import Image
 import pytest
 
-from src.contracts import Box, Detection, DetectionFrame, LegendBarAssignment, LegendMappingFrame, OCRFrame
+from tests.legend_filter_helpers import passthrough_filter
+from src.contracts import Box, Detection, DetectionFrame, OCRFrame
 from src.gradio_app import build_app
 from src.gradio_ui.components import AnalysisComponents, GenerationComponents
 from src.gradio_ui.review import review_text_rows
@@ -78,9 +79,6 @@ def test_preference_reruns_uncertainty_and_generation_reset(app, tmp_path):
             if score
         ))
 
-    def mapping(image, effective, ocr, **kwargs):
-        return LegendMappingFrame(effective.source_key, tuple(LegendBarAssignment(d.id) for d in effective.detections))
-
     def run(preference):
         return named(invoke(analysis.fn, str(path), .25, .7, "eng", 640, "rapidocr", preference))
 
@@ -90,8 +88,7 @@ def test_preference_reruns_uncertainty_and_generation_reset(app, tmp_path):
 
     with patch("src.gradio_ui.analysis.run_detection", return_value=frame(.9, .2)) as detect, \
          patch("src.gradio_ui.analysis.run_ocr", return_value=OCRFrame("input/chart.png", ())) as ocr, \
-         patch("src.gradio_ui.analysis.match_legend_to_bars", side_effect=mapping), \
-         patch("src.gradio_ui.analysis.match_legend_to_hbars", side_effect=mapping), \
+         patch("src.gradio_ui.analysis.filter_bars_by_legend", side_effect=passthrough_filter), \
          patch("src.gradio_ui.analysis.reconstruct_vbar", return_value=make_spec()), \
          patch("src.gradio_ui.analysis.reconstruct_hbar", return_value=make_spec(orientation="horizontal")), \
          patch("src.gradio_ui.analysis.cut_off_flags", return_value=[]):

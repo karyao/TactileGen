@@ -35,12 +35,11 @@ from src.gradio_ui.settings import (
     RECONSTRUCTION_WARNING,
     LOGGER,
 )
-from src.reconstruction.legend_matcher import match_legend_to_bars
+from src.reconstruction.legend_matcher import filter_bars_by_legend
 from src.ocr import run_ocr
 from src.presentation import render_detection_overlay, summarize_detections
 from src.reconstruction.vertical import reconstruct_vbar
 from src.reconstruction.horizontal import (
-    match_legend_to_hbars,
     reconstruct_hbar,
 )
 from src.tactile.completeness import (
@@ -151,6 +150,7 @@ def analyze_image(
     nms_iou: float,
     *,
     bar_orientation: str = "auto",
+    keep_legend_matches: bool = False,
     imgsz: int = DEFAULT_IMGSZ,
     language: str = DEFAULT_OCR_LANGUAGE,
     ocr_backend=None,
@@ -273,19 +273,57 @@ def analyze_image(
             ocr_warning = OCR_WARNING
         _report_progress(progress, 0.80, "Matching legend series")
         horizontal = orientation_result.orientation == "horizontal"
-        # The horizontal matcher/reconstructor do not accept a diagnostics collector.
+        # The horizontal reconstructor does not accept a diagnostics collector.
         reconstruction_options = {} if horizontal else diagnostic_options
         legend_mapping = None
         legend_warning = None
+        mismatched_bar_ids = ()
+        removed_bar_ids = []
+        selection_error = None
         try:
             with stage("legend_matching"):
-                match_legend = match_legend_to_hbars if horizontal else match_legend_to_bars
-                legend_mapping = match_legend(
+                colour_filter = filter_bars_by_legend(
                     image, frame, ocr_frame,
-                    **reconstruction_options,
-                )
+                    bar_role="horizontal_bar" if horizontal else "vertical_bar",
+                    **diagnostic_options)
+                legend_mapping = colour_filter.mapping
+                mismatched_bar_ids = colour_filter.mismatched_bar_ids
+                if mismatched_bar_ids:
+                    legend_warning = (
+                        f"{len(mismatched_bar_ids)} candidate bar detection(s) could not be "
+                        "matched to the legend. Reconstruction may exclude some candidates; "
+                        "review the series assignments."
+                    )
                 if diagnostics is not None:
                     diagnostics.snapshot("legend", legend_mapping)
+                    diagnostics.record["counts"]["colour_mismatched_bars"] = len(mismatched_bar_ids)
+                    diagnostics.record["counts"]["colour_kept_bars"] = sum(
+                        item.outcome == "kept" for item in colour_filter.decisions)
+                if keep_legend_matches:
+                    # A colour verdict is independent of whether OCR could name
+                    # the legend. Unknown/skipped colours are not verified matches.
+                    kept_ids = {item.bar_id for item in colour_filter.decisions
+                                if item.outcome == "kept"}
+                    role = "horizontal_bar" if horizontal else "vertical_bar"
+                    removed_bar_ids = [d.id for d in frame.detections
+                                       if d.role == role and d.id not in kept_ids]
+                    frame = replace(frame, detections=tuple(
+                        d for d in frame.detections if d.role != role or d.id in kept_ids))
+                    legend_mapping = replace(legend_mapping, assignments=tuple(
+                        a for a in legend_mapping.assignments if a.bar_id in kept_ids))
+                    mismatched_bar_ids = ()
+                    legend_warning = None
+                    if not kept_ids:
+                        selection_error = (
+                            "No bars could be verified against a detected legend colour. "
+                            "Turn off Keep only legend-matched bars to review all detected bars, "
+                            "or use an image with a clearer legend."
+                        )
+                    if diagnostics is not None:
+                        diagnostics.event("legend_matching", "legend_bar_selection",
+                            kept_bar_ids=sorted(kept_ids), removed_bar_ids=removed_bar_ids)
+                        diagnostics.snapshot("selected_detections", frame)
+                        diagnostics.record["counts"]["legend_removed_bars"] = len(removed_bar_ids)
         except Exception:
             if diagnostics is not None:
                 diagnostics.warning("legend_matching_unavailable", "legend_matching")
@@ -296,7 +334,11 @@ def analyze_image(
         spec = None
         completeness = None
         reconstruction_warning = None
-        if ocr_frame is None or legend_mapping is None:
+        if selection_error:
+            completeness = Completeness("cannot_build", blockers=[selection_error])
+            if diagnostics is not None:
+                diagnostics.skip("reconstruction", "no verified legend matches")
+        elif ocr_frame is None or legend_mapping is None:
             reconstruction_warning = RECONSTRUCTION_WARNING
             if diagnostics is not None:
                 dependencies = (("ocr", ocr_frame), ("legend_matching", legend_mapping))
@@ -312,12 +354,15 @@ def analyze_image(
                     reconstruct = reconstruct_hbar if horizontal else reconstruct_vbar
                     reconstructed = reconstruct(
                         frame, ocr_frame, image, legend_mapping=legend_mapping,
-                        **reconstruction_options,
+                        mismatched_bar_ids=mismatched_bar_ids, **reconstruction_options,
+                        **({"rescue_bars": False} if keep_legend_matches else {}),
                     )
                     edge_flags = cut_off_flags(frame, image, **diagnostic_options)
                     candidate = replace(
                         reconstructed,
-                        flags=[*reconstructed.flags, *edge_flags],
+                        flags=[*reconstructed.flags, *edge_flags,
+                               *([f"legend_bars_removed:{len(removed_bar_ids)}"]
+                                 if removed_bar_ids else [])],
                     )
                     if diagnostics is not None:
                         diagnostics.snapshot("spec", candidate)
@@ -368,6 +413,9 @@ def analyze_image(
             legend_mapping=legend_mapping,
         )
         summary = orientation_summary(orientation_result) + "\n\n" + summary
+        if keep_legend_matches and orientation_result.status == "resolved":
+            summary += (f"\n\n**Legend bar selection:** removed {len(removed_bar_ids)} "
+                        "bar detection(s) without a verified legend colour match.")
         _report_progress(progress, 1.0, "Analysis result ready")
     return AnalysisResult(
         summary=summary,

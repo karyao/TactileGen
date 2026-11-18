@@ -330,7 +330,7 @@ def test_supplied_legend_mapping_names_series_without_rerunning_matcher():
     chart = _grouped(((30, 40, 200), (60, 180, 60)))
     frame, mapping = _matched_mapping(chart)
 
-    with patch("src.reconstruction.vertical.match_legend_to_bars") as matcher:
+    with patch("src.reconstruction.vertical.filter_bars_by_legend") as matcher:
         spec = reconstruct_vbar(
             frame, chart.texts, chart.image, legend_mapping=mapping
         )
@@ -867,10 +867,15 @@ def test_a_swatch_outside_the_legend_box_is_not_added():
 
 
 def test_no_series_are_added_while_bars_are_not_all_matched():
-    # The bars match no swatch (a colour not in the legend): the grouping is not settled, so
-    # an entry could still own bars that were merely hard to match. Report it, never guess.
+    # A supplied unresolved mapping bypasses filtering. Its entries must not
+    # create empty series while existing bars still have unsettled ownership.
     chart = _legend_chart([_row("Alpha", RED), _row("Beta", GREEN)])
-    spec = chart.run()          # bars are (200, 100, 30): weak match to both swatches
+    from src.reconstruction.legend_matcher import match_legend_to_bars
+    from src.reconstruction.vertical import _legend_ocr_frame, _text_table
+
+    frame = chart.frame()
+    mapping = match_legend_to_bars(chart.image, frame, _legend_ocr_frame(frame, _text_table(chart.texts)))
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
     assert not any(s.no_visible_bars for s in spec.series)
     assert sorted(_skipped(spec)) == ["legend_entry_skipped:bars_not_settled:Alpha",
                                       "legend_entry_skipped:bars_not_settled:Beta"]
@@ -1415,3 +1420,370 @@ def test_numeric_normalization_is_not_repeated_for_diagnostics():
     with patch('src.reconstruction.vertical._normalized_tick_text', wraps=_normalized_tick_text) as normalize:
         reconstruct_vbar(chart.frame(), chart.texts, chart.image, diagnostics=diagnostics)
         assert normalize.call_count == plain_calls
+
+
+def test_all_bars_with_unmatched_colours_reach_reconstruction():
+    chart = _legend_chart([_row("Alpha", RED), _row("Beta", GREEN)])
+    spec = chart.run()
+    assert "bar_colour_mismatch:3" in spec.flags
+    assert any(series.values == pytest.approx([120, 60, 180]) for series in spec.series)
+    assert any("Review the series assignments" in note for note in check_completeness(spec).notes)
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("loose_swatch", [False, True])
+def test_legend_mismatches_preserve_values_or_block_output(horizontal, loose_swatch):
+    from src.reconstruction.horizontal import transpose_image
+    from src.reconstruction.legend_matcher import filter_bars_by_legend
+    from src.reconstruction.vertical import _legend_ocr_frame, _text_table
+
+    legend_rows = [_row("Kenya", BAR_BGR)]
+    if loose_swatch:
+        legend_rows.append(_row("Other", GREEN))
+    chart = _legend_chart(legend_rows)
+    bar = [d for d in chart.detections if d.role == "vertical_bar"][1]
+    chart.paint((bar.box.x1, bar.box.y1, bar.box.x2, bar.box.y2), GREEN)
+    frame, image = chart.frame(), chart.image
+    if loose_swatch:
+        swatches = [d for d in frame.detections if d.role == "legend_swatch"]
+        swatch = swatches[-1]
+        # Retain the swatch detection and label while diluting the crop with white.
+        chart.paint((swatch.box.x1, swatch.box.y1,
+                     swatch.box.x2, swatch.box.y2), (255, 255, 255))
+        x = int((swatch.box.x1 + swatch.box.x2) / 2)
+        y = int((swatch.box.y1 + swatch.box.y2) / 2)
+        chart.paint((x - 1, y - 1, x + 1, y + 1), GREEN)
+    filtered = filter_bars_by_legend(image, frame, _legend_ocr_frame(frame, _text_table(chart.texts)))
+    assert filtered.frame is frame
+    assert filtered.mismatched_bar_ids == (bar.id,)
+    if horizontal:
+        frame, image = transpose_frame(frame), transpose_image(image)
+    reconstruct = reconstruct_hbar if horizontal else reconstruct_vbar
+    spec = reconstruct(frame, chart.texts, image, legend_mapping=filtered.mapping,
+                       mismatched_bar_ids=filtered.mismatched_bar_ids)
+    assert "bar_colour_mismatch:1" in spec.flags
+    assert any(value == pytest.approx(60) for series in spec.series for value in series.values)
+    assert any("Review the series assignments" in note for note in check_completeness(spec).notes)
+
+
+def _reconstruct_with_mismatch_evidence(chart, mismatch_ids, horizontal):
+    """Exercise supplied mismatch evidence independently of colour sampling."""
+    from functools import partial
+    from src.reconstruction.horizontal import transpose_image
+    from src.reconstruction.legend_matcher import filter_bars_by_legend
+    from src.reconstruction.vertical import _legend_ocr_frame
+
+    frame = chart.frame()
+    mapping = filter_bars_by_legend(
+        chart.image, frame, _legend_ocr_frame(frame, _text_table(chart.texts))).mapping
+    # All bars in these fixtures belong to the same series. Supply its semantic
+    # identity explicitly so collision tests exercise slots rather than grouping.
+    identity = next(a for a in mapping.assignments if a.status == "matched")
+    mapping = replace(mapping, assignments=tuple(
+        replace(identity, bar_id=d.id) for d in frame.detections if d.role == "vertical_bar"))
+    diagnostics = AnalysisDiagnostics(settings={})
+    options = dict(legend_mapping=mapping, mismatched_bar_ids=mismatch_ids, rescue_bars=False)
+    if horizontal:
+        # The horizontal wrapper has no diagnostics argument; capture the same
+        # vertical reconstruction events without changing that public interface.
+        with patch("src.reconstruction.horizontal.reconstruct_vbar",
+                   side_effect=partial(reconstruct_vbar, diagnostics=diagnostics)):
+            spec = reconstruct_hbar(transpose_frame(frame), chart.texts,
+                                    transpose_image(chart.image), **options)
+    else:
+        spec = reconstruct_vbar(frame, chart.texts, chart.image,
+                                diagnostics=diagnostics, **options)
+    return spec, diagnostics
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("exclusion", ["below_confidence", "duplicate", "outside_plot"])
+@pytest.mark.parametrize("eligible_mismatch", [False, True])
+def test_excluded_colour_mismatches_do_not_block(horizontal, exclusion, eligible_mismatch):
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    original = bars[0]
+    box = original.box
+    if exclusion == "outside_plot":
+        box = Box(570, 100, 590, 180)
+    candidate_id = chart.add("vertical_bar", (box.x1, box.y1, box.x2, box.y2),
+                             conf=0.1 if exclusion == "below_confidence" else 0.8)
+    mismatch_ids = (candidate_id, bars[1].id) if eligible_mismatch else (candidate_id,)
+    spec, diagnostics = _reconstruct_with_mismatch_evidence(chart, mismatch_ids, horizontal)
+
+    assert spec.series[0].values == pytest.approx([120, 60, 180])
+    assert not any(f.startswith("bar_colour_unaccounted:") for f in spec.flags)
+    assert [f for f in spec.flags if f.startswith("bar_colour_mismatch:")] == (
+        ["bar_colour_mismatch:1"] if eligible_mismatch else [])
+    assessment = check_completeness(spec)
+    assert not assessment.blockers
+    notes = [note for note in assessment.notes if "Review the series assignments" in note]
+    assert notes == (["1 detected bar(s) could not be matched to the legend. "
+                      "Review the series assignments."] if eligible_mismatch else [])
+    assert not events(diagnostics, "bar_colour_unaccounted")
+    if exclusion == "below_confidence":
+        decision = next(e for e in events(diagnostics, "detection_confidence")
+                        if e["detection_id"] == candidate_id)
+        assert decision["outcome"] == "below_confidence"
+    elif exclusion == "duplicate":
+        decision = next(e for e in events(diagnostics, "detection_deduplication")
+                        if e["detection_id"] == candidate_id)
+        assert decision["outcome"] == "duplicate"
+        assert decision["retained_detection_id"] == original.id
+        assert decision["measured_iou"] > decision["duplicate_iou"]
+    else:
+        selection, = events(diagnostics, "plot_selection")
+        assert candidate_id in selection["excluded_bar_ids"]
+
+
+def test_excluded_mismatch_retains_original_legend_evidence():
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    box = (570, 100, 590, 180)
+    candidate_id = chart.add("vertical_bar", box)
+    chart.paint(box, GREEN)
+    spec, diagnostics = recorded(chart)
+
+    decision = next(e for e in events(diagnostics, "bar_colour_validation")
+                    if e["bar_id"] == candidate_id)
+    assert decision["outcome"] == "mismatch"
+    assert decision["reason"] == "colour_mismatch"
+    matching, = events(diagnostics, "legend_colour_filter")
+    assert matching["mismatched_bar_ids"] == [candidate_id]
+    selection, = events(diagnostics, "plot_selection")
+    assert candidate_id in selection["excluded_bar_ids"]
+    assert not any(f.startswith("bar_colour_") for f in spec.flags)
+    assert not check_completeness(spec).blockers
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("loser_first", [False, True])
+def test_eligible_colour_mismatch_losing_slot_is_a_non_forceable_blocker(horizontal, loser_first):
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    winner = next(d for d in chart.detections if d.role == "vertical_bar")
+    centre = (winner.box.x1 + winner.box.x2) / 2
+    # Non-overlapping boxes survive deduplication but claim the same category.
+    loser_x = centre + (-40 if loser_first else 40)
+    loser_id = chart.add("vertical_bar", (loser_x - 10, y_of(90), loser_x + 10, ZERO_Y))
+    spec, diagnostics = _reconstruct_with_mismatch_evidence(chart, (loser_id,), horizontal)
+    assert spec.series[0].values == pytest.approx([120, 60, 180])
+    assert "bar_colour_mismatch:1" in spec.flags
+    assert "bar_colour_unaccounted:1" in spec.flags
+    collision, = events(diagnostics, "category_ambiguous")
+    assert collision["selected_bar_id"] == winner.id
+    assert set(collision["competing_bar_ids"]) == {winner.id, loser_id}
+    unaccounted, = events(diagnostics, "bar_colour_unaccounted")
+    assert unaccounted["bar_ids"] == [loser_id]
+    assessment = check_completeness(spec)
+    assert assessment.status == "cannot_build"
+    assert not assessment.forceable
+
+
+def _record_short_rescue(chart, mismatch_ids, horizontal, **options):
+    from functools import partial
+    from src.reconstruction.horizontal import transpose_image
+    from src.reconstruction.legend_matcher import filter_bars_by_legend
+    from src.reconstruction.vertical import _legend_ocr_frame
+
+    frame, image = chart.frame(), chart.image
+    if "legend_mapping" not in options:
+        options["legend_mapping"] = filter_bars_by_legend(image, frame,
+            _legend_ocr_frame(frame, _text_table(chart.texts))).mapping
+    reconstruct = reconstruct_vbar
+    if horizontal:
+        frame, image = transpose_frame(frame), transpose_image(image)
+        reconstruct = reconstruct_hbar
+    options = dict(options, mismatched_bar_ids=mismatch_ids)
+    plain = reconstruct(frame, chart.texts, image, **options)
+    diagnostics = AnalysisDiagnostics(settings={})
+    if horizontal:
+        with patch("src.reconstruction.horizontal.reconstruct_vbar",
+                   side_effect=partial(reconstruct_vbar, diagnostics=diagnostics)):
+            traced = reconstruct(frame, chart.texts, image, **options)
+    else:
+        traced = reconstruct(frame, chart.texts, image, diagnostics=diagnostics, **options)
+    assert asdict(plain) == asdict(traced)
+    return traced, diagnostics
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("matched_identity", [False, True])
+def test_short_mismatch_links_original_id_to_final_reordered_slot(horizontal, matched_identity):
+    from src.reconstruction.legend_matcher import filter_bars_by_legend
+    from src.reconstruction.vertical import _legend_ocr_frame
+
+    chart = _legend_chart([_row("Low", RED), _row("Kenya", BAR_BGR),
+                           _row("Other", GREEN)], values=(120, 60, 4))
+    short = [d for d in chart.detections if d.role == "vertical_bar"][-1]
+    mapping = filter_bars_by_legend(chart.image, chart.frame(),
+        _legend_ocr_frame(chart.frame(), _text_table(chart.texts))).mapping
+    if not matched_identity:
+        mapping = replace(mapping, assignments=tuple(
+            LegendBarAssignment(a.bar_id) if a.bar_id == short.id else a
+            for a in mapping.assignments))
+    spec, diagnostics = _record_short_rescue(chart, (short.id,), horizontal, legend_mapping=mapping)
+    assert spec.series[1].values == pytest.approx([120, 60, 4])
+    assert spec.series[1].value_rescued == [False, False, True]
+    assert "bar_colour_mismatch:1" in spec.flags
+    assert not any(f.startswith("bar_colour_unaccounted:") for f in spec.flags)
+    rescue, = events(diagnostics, "pixel_rescue")
+    assert (rescue["bar_id"], rescue["series_index"], rescue["category_index"]) == (short.id, 1, 2)
+    assert not check_completeness(spec).blockers
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("failure", ["zero", "unrelated", "occupied", "competitor", "identity"])
+def test_unverified_short_mismatch_keeps_blocker(horizontal, failure):
+    entries = [_row("Kenya", BAR_BGR)]
+    if failure == "identity":
+        entries.append(_row("Other", GREEN))
+    chart = _legend_chart(entries, values=(120, 60, 4))
+    short = [d for d in chart.detections if d.role == "vertical_bar"][-1]
+    options = {}
+    if failure == "zero":
+        chart.paint((short.box.x1, 320, short.box.x2, ZERO_Y), (255, 255, 255))
+    elif failure == "unrelated":
+        # Rescue still measures C2, but the detection does not cover its probe.
+        chart.detections[chart.detections.index(short)] = replace(
+            short, box=Box(short.box.x1 + 40, short.box.y1, short.box.x2 + 40, short.box.y2))
+    elif failure == "occupied":
+        chart.add("vertical_bar", (short.box.x1, y_of(30), short.box.x2, ZERO_Y))
+        chart.paint((short.box.x1, y_of(30), short.box.x2, ZERO_Y), BAR_BGR)
+    elif failure == "competitor":
+        # A non-mismatched short detection also claims the rescue; boxes do not overlap.
+        chart.add("vertical_bar", (short.box.x1, 326, short.box.x2, 330))
+    else:
+        from src.reconstruction.legend_matcher import filter_bars_by_legend
+        from src.reconstruction.vertical import _legend_ocr_frame
+        mapping = filter_bars_by_legend(chart.image, chart.frame(),
+            _legend_ocr_frame(chart.frame(), _text_table(chart.texts))).mapping
+        identity = next(a for a in mapping.assignments if a.status == "matched")
+        other = mapping.entries[1]
+        options["legend_mapping"] = replace(mapping, assignments=tuple(
+            a for a in mapping.assignments if a.bar_id != short.id
+        ) + (replace(identity, bar_id=short.id, swatch_id=other.swatch_id,
+                     label_id=other.label_id, series_name=other.name),))
+    spec, diagnostics = _record_short_rescue(chart, (short.id,), horizontal, **options)
+    assert "bar_colour_unaccounted:1" in spec.flags
+    unaccounted, = events(diagnostics, "bar_colour_unaccounted")
+    assert unaccounted["bar_ids"] == [short.id]
+    assert all(e["bar_id"] is None for e in events(diagnostics, "pixel_rescue"))
+    assessment = check_completeness(spec)
+    assert assessment.status == "cannot_build" and not assessment.forceable
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+def test_short_rescue_clears_only_verified_mismatch(horizontal):
+    chart = _legend_chart([_row("Kenya", BAR_BGR)], values=(120, 4, 4))
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    chart.paint((bars[2].box.x1, 320, bars[2].box.x2, ZERO_Y), (255, 255, 255))
+    spec, diagnostics = _record_short_rescue(chart, (bars[1].id, bars[2].id), horizontal)
+    assert "bar_colour_mismatch:2" in spec.flags
+    assert "bar_colour_unaccounted:1" in spec.flags
+    unaccounted, = events(diagnostics, "bar_colour_unaccounted")
+    assert unaccounted["bar_ids"] == [bars[2].id]
+    assert [e["bar_id"] for e in events(diagnostics, "pixel_rescue")] == [bars[1].id, None]
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+def test_short_detection_claiming_two_rescued_series_stays_unaccounted(horizontal):
+    from src.reconstruction.legend_matcher import filter_bars_by_legend
+    from src.reconstruction.vertical import _legend_ocr_frame
+
+    chart = grouped_chart((RED, GREEN), [(4, 4), (150, 60), (40, 120)])
+    first, second = [d for d in chart.detections if d.role == "vertical_bar"][:2]
+    chart.detections[chart.detections.index(first)] = replace(first,
+        box=Box(first.box.x1, first.box.y1, second.box.x2, first.box.y2))
+    chart.detections.remove(second)
+    mapping = filter_bars_by_legend(chart.image, chart.frame(),
+        _legend_ocr_frame(chart.frame(), _text_table(chart.texts))).mapping
+    mapping = replace(mapping, assignments=tuple(
+        LegendBarAssignment(a.bar_id) if a.bar_id == first.id else a
+        for a in mapping.assignments))
+    spec, diagnostics = _record_short_rescue(chart, (first.id,), horizontal, legend_mapping=mapping)
+    rescues = events(diagnostics, "pixel_rescue")
+    assert len(rescues) == 2 and all(e["value"] != 0 for e in rescues)
+    assert all(e["bar_id"] is None for e in rescues)
+    assert "bar_colour_unaccounted:1" in spec.flags
+    assert not check_completeness(spec).forceable
+
+
+@pytest.mark.parametrize("missed_entry", [True, False])
+def test_complete_mismatched_series_can_be_named_in_review(missed_entry):
+    chart = _grouped((RED, GREEN))
+    swatch = chart.detections[-2]
+    if missed_entry:
+        del chart.detections[-2:]
+    else:
+        box = swatch.box
+        chart.paint((box.x1, box.y1, box.x2, box.y2), (255, 255, 255))
+        chart.paint((box.x1 + 6, box.y1 + 6, box.x1 + 8, box.y1 + 8), GREEN)
+    spec = chart.run()
+    assert "bar_colour_mismatch:3" in spec.flags
+    assert [series.name for series in spec.series] == ["Alpha", None]
+    assert spec.series[0].values == pytest.approx([100, 150, 40])
+    assert spec.series[1].values == pytest.approx([50, 80, 120])
+    assessment = check_completeness(spec)
+    assert assessment.status == "needs_input"
+    assert any(item.field == "series_name[1]" for item in assessment.missing)
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+def test_complete_fallback_grid_can_be_named_in_review(horizontal):
+    from src.tactile.completeness import Overrides, apply_overrides
+
+    chart = _grouped((RED, GREEN))
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    # No semantic identities are available; every bar has mismatch evidence.
+    mapping = LegendMappingFrame(chart.frame().source_key, tuple(
+        LegendBarAssignment(bar.id) for bar in bars))
+    spec, _ = _record_short_rescue(chart, [bar.id for bar in bars], horizontal,
+                                 legend_mapping=mapping)
+
+    assert [series.name for series in spec.series] == [None, None]
+    assert_values(spec, [100, 150, 40], series=0)
+    assert_values(spec, [50, 80, 120], series=1)
+    assert "bar_colour_mismatch:6" in spec.flags
+    assessment = check_completeness(spec)
+    assert assessment.status == "needs_input"
+    assert not assessment.blockers
+    assert {item.field for item in assessment.missing} >= {
+        "series_name[0]", "series_name[1]"}
+
+    corrected, _ = apply_overrides(spec, Overrides(
+        title="Sales", x_axis_title="Group", y_axis_title="Revenue",
+        series_names={0: "Alpha", 1: "Beta"}))
+    assert check_completeness(corrected).status == "ready"
+    assert [series.values for series in corrected.series] == [
+        series.values for series in spec.series]
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("failure", ["incomplete", "collision", "order", "missing_evidence"])
+def test_unsafe_fallback_grid_keeps_review_blocked(horizontal, failure):
+    chart = _grouped((RED, GREEN))
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    if failure == "incomplete":
+        # Leave pixels in place: pixel rescue must not establish review eligibility.
+        chart.detections.remove(bars[2])
+    elif failure == "collision":
+        box = bars[0].box
+        moved = Box(box.x1 - 50, bars[2].box.y1, box.x2 - 50, ZERO_Y)
+        chart.detections[chart.detections.index(bars[2])] = replace(bars[2], box=moved)
+        chart.paint((moved.x1, moved.y1, moved.x2, moved.y2), RED)
+    elif failure == "order":
+        for bar, colour in zip(bars[2:4], (GREEN, RED)):
+            box = bar.box
+            chart.paint((box.x1, box.y1, box.x2, box.y2), colour)
+    remaining = [d for d in chart.detections if d.role == "vertical_bar"]
+    mapping = LegendMappingFrame(chart.frame().source_key, tuple(
+        LegendBarAssignment(bar.id) for bar in remaining))
+    mismatch_ids = [bar.id for bar in remaining]
+    if failure == "missing_evidence":
+        mismatch_ids.pop()
+    spec, _ = _record_short_rescue(chart, mismatch_ids, horizontal,
+                                 legend_mapping=mapping)
+
+    assert "series_ambiguous" in spec.flags
+    assert check_completeness(spec).status == "cannot_build"
+    if failure == "collision":
+        assert "category_ambiguous" in spec.flags
