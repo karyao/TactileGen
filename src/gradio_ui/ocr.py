@@ -22,11 +22,11 @@ class OCRBackendResolver:
         self.validate(engine)
         if engine not in self._backends:
             if engine == "rapidocr":
-                from src.rapidocr_ocr import RapidOCRBackend
+                from src.ocr.rapidocr import RapidOCRBackend
 
                 backend = RapidOCRBackend()
             else:
-                from src.tesseract_ocr import TesseractBackend
+                from src.ocr.tesseract import TesseractBackend
 
                 backend = TesseractBackend()
             self._backends[engine] = backend

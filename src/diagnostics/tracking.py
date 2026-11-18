@@ -308,7 +308,7 @@ class AnalysisDiagnostics:
     def source_images(self, image, frame) -> None:
         from dataclasses import asdict
         from src.contracts import TEXT_ROLES
-        from src.ocr_crop import crop_text_bounds, crop_text_region, crop_policy
+        from src.ocr.crop import crop_text_bounds, crop_text_region, crop_policy
         if any(source() is image and saved == frame for source, saved in self._source_frames):
             return
         self._source_frames.append((weakref.ref(image), frame))
@@ -344,7 +344,7 @@ class AnalysisDiagnostics:
         operation = "snapshot serialization"
         self.export_error = None
         try:
-            from src.diagnostics_report import build_bundle
+            from src.diagnostics.report import build_bundle
 
             # Freeze before report rendering so all members describe the same run.
             record = json.loads(json.dumps(self.record, ensure_ascii=False, allow_nan=False))

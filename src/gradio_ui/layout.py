@@ -13,7 +13,7 @@ from src.detection import (
     MAX_IMGSZ,
     validate_imgsz,
 )
-from src.diagnostics import configure_analysis_logging
+from src.diagnostics.tracking import configure_analysis_logging
 from src.gradio_ui.run_tracking import RunTracker, guarded_blocks
 from src.gradio_ui.callbacks import create_callbacks
 from src.gradio_ui.components import Controls, AnalysisComponents, GenerationComponents

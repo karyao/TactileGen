@@ -20,9 +20,9 @@ from src.contracts import (
     OCRFrame,
     RecognizedText,
 )
-from src.diagnostics import AnalysisDiagnostics
-from src.reconstruct import _calibrate, _text_table, parse_tick_value, reconstruct_vbar
-from src.reconstruct_hbar import bar_orientation, reconstruct_hbar, transpose_frame
+from src.diagnostics.tracking import AnalysisDiagnostics
+from src.reconstruction.vertical import _calibrate, _text_table, parse_tick_value, reconstruct_vbar
+from src.reconstruction.horizontal.horizontal import bar_orientation, reconstruct_hbar, transpose_frame
 from src.tactile.completeness import READY, check_completeness, cut_off_flags, spec_to_chart
 
 from tests.test_completeness import make_spec
@@ -309,7 +309,7 @@ def test_supplied_legend_mapping_names_series_without_rerunning_matcher():
     chart = _grouped(((30, 40, 200), (60, 180, 60)))
     frame, mapping = _matched_mapping(chart)
 
-    with patch("src.reconstruct.match_legend_to_bars") as matcher:
+    with patch("src.reconstruction.vertical.match_legend_to_bars") as matcher:
         spec = reconstruct_vbar(
             frame, chart.texts, chart.image, legend_mapping=mapping
         )
@@ -1105,7 +1105,7 @@ def test_competing_calibration_sets_and_failure_before_refit_are_retained():
         assert candidate['residuals_pixels'] == expected
     failed = AnalysisDiagnostics(settings={})
     failure = RuntimeError('refit failed')
-    with patch('src.reconstruct.np.polyfit', side_effect=failure), pytest.raises(RuntimeError) as caught:
+    with patch('src.reconstruction.vertical.np.polyfit', side_effect=failure), pytest.raises(RuntimeError) as caught:
         _calibrate(ticks, diagnostics=failed)
     assert caught.value is failure
     assert events(failed, 'calibration_selection')
@@ -1206,7 +1206,7 @@ def test_series_field_relationships_survive_later_reconstruction_failure():
     _, mapping = _custom_entries(chart, (2, 0, 1))
     diagnostics = AnalysisDiagnostics(settings={})
     failure = RuntimeError('legend ordering failed')
-    with patch('src.reconstruct._in_legend_order', side_effect=failure), pytest.raises(RuntimeError) as caught:
+    with patch('src.reconstruction.vertical._in_legend_order', side_effect=failure), pytest.raises(RuntimeError) as caught:
         reconstruct_vbar(chart.frame(), chart.texts, chart.image,
                          legend_mapping=mapping, diagnostics=diagnostics)
     assert caught.value is failure
@@ -1242,12 +1242,12 @@ def test_multiple_legend_skips_keep_distinct_evidence_under_one_warning_code():
 
 
 def test_numeric_normalization_is_not_repeated_for_diagnostics():
-    from src.reconstruct import _normalized_tick_text
+    from src.reconstruction.vertical import _normalized_tick_text
     chart = base_chart()
-    with patch('src.reconstruct._normalized_tick_text', wraps=_normalized_tick_text) as normalize:
+    with patch('src.reconstruction.vertical._normalized_tick_text', wraps=_normalized_tick_text) as normalize:
         chart.run()
         plain_calls = normalize.call_count
     diagnostics = AnalysisDiagnostics(settings={})
-    with patch('src.reconstruct._normalized_tick_text', wraps=_normalized_tick_text) as normalize:
+    with patch('src.reconstruction.vertical._normalized_tick_text', wraps=_normalized_tick_text) as normalize:
         reconstruct_vbar(chart.frame(), chart.texts, chart.image, diagnostics=diagnostics)
         assert normalize.call_count == plain_calls

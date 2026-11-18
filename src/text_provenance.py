@@ -1,6 +1,6 @@
 """Small diagnostic helpers; consumers remain authoritative for all decisions."""
 
-from src.ocr_trace import text_state
+from src.ocr.trace import text_state
 
 
 def consumer_text(diagnostics, stage, detection_id, original, trimmed, confidence):

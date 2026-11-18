@@ -16,8 +16,8 @@ from src.gradio_ui.ocr import OCRBackendResolver
 def test_resolver_is_lazy_reuses_success_and_retries_failure():
     rapid = object()
     tesseract = object()
-    with patch("src.rapidocr_ocr.RapidOCRBackend", side_effect=[RuntimeError("offline"), rapid]) as load_rapid, \
-         patch("src.tesseract_ocr.TesseractBackend", return_value=tesseract) as load_tesseract:
+    with patch("src.ocr.rapidocr.RapidOCRBackend", side_effect=[RuntimeError("offline"), rapid]) as load_rapid, \
+         patch("src.ocr.tesseract.TesseractBackend", return_value=tesseract) as load_tesseract:
         resolver = OCRBackendResolver()
         load_rapid.assert_not_called()
         load_tesseract.assert_not_called()
@@ -37,8 +37,8 @@ def test_resolver_is_lazy_reuses_success_and_retries_failure():
 def test_ui_initial_selection_clear_and_controls_are_lazy(engine):
     assert parse_args([]).ocr == "rapidocr"
     assert parse_args(["--ocr", engine]).ocr == engine
-    with patch("src.rapidocr_ocr.RapidOCRBackend") as rapid, \
-         patch("src.tesseract_ocr.TesseractBackend") as tesseract:
+    with patch("src.ocr.rapidocr.RapidOCRBackend") as rapid, \
+         patch("src.ocr.tesseract.TesseractBackend") as tesseract:
         demo = build_app(object(), ocr_engine=engine)
         try:
             rapid.assert_not_called()
@@ -56,7 +56,7 @@ def test_ui_initial_selection_clear_and_controls_are_lazy(engine):
 def test_injected_backend_serves_initial_choice_only():
     custom = object()
     resolver = OCRBackendResolver("tesseract", custom)
-    with patch("src.rapidocr_ocr.RapidOCRBackend", return_value=object()) as rapid:
+    with patch("src.ocr.rapidocr.RapidOCRBackend", return_value=object()) as rapid:
         assert resolver.resolve("tesseract") is custom
         assert resolver.resolve("rapidocr") is rapid.return_value
 
@@ -77,8 +77,8 @@ def test_engine_failure_switch_and_retry_preserve_results_and_diagnostics(tmp_pa
     ocr = OCRFrame(frame.source_key, ())
     # Real adapter instances provide diagnostic metadata; their constructors and
     # recognition are mocked so this test requires neither models nor binaries.
-    from src.rapidocr_ocr import RapidOCRBackend
-    from src.tesseract_ocr import TesseractBackend
+    from src.ocr.rapidocr import RapidOCRBackend
+    from src.ocr.tesseract import TesseractBackend
 
     rapid_backend = object.__new__(RapidOCRBackend)
     tesseract_backend = TesseractBackend()
@@ -91,8 +91,8 @@ def test_engine_failure_switch_and_retry_preserve_results_and_diagnostics(tmp_pa
     try:
         with patch("src.gradio_ui.analysis.run_detection", return_value=frame), \
              patch("src.gradio_ui.analysis.run_ocr", return_value=ocr) as recognize, \
-             patch("src.rapidocr_ocr.RapidOCRBackend", side_effect=[RuntimeError("model unavailable"), rapid_backend]) as rapid, \
-             patch("src.tesseract_ocr.TesseractBackend", return_value=tesseract_backend) as tesseract:
+             patch("src.ocr.rapidocr.RapidOCRBackend", side_effect=[RuntimeError("model unavailable"), rapid_backend]) as rapid, \
+             patch("src.ocr.tesseract.TesseractBackend", return_value=tesseract_backend) as tesseract:
             for engine, expected in (("rapidocr", None), ("tesseract", tesseract_backend),
                                      ("rapidocr", rapid_backend), ("tesseract", tesseract_backend)):
                 updates = invoke(event.fn, str(image_path), .25, .7, "eng+fra", 640, engine)

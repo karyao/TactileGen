@@ -32,7 +32,7 @@ from src.contracts import (
     RecognizedText,
     SeriesSpec,
 )
-from src.diagnostics import AnalysisDiagnostics
+from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_app import (
     AnalysisResult,
     DEFAULT_HOST,
@@ -64,7 +64,7 @@ from src.gradio_app import (
     update_review_draft,
 )
 from src.gradio_ui.components import AnalysisComponents, Controls, GenerationComponents
-from src.rapidocr_ocr import RapidOCRBackend
+from src.ocr.rapidocr import RapidOCRBackend
 from src.tactile.completeness import CANNOT_BUILD, Completeness, MissingItem, NEEDS_INPUT, READY
 
 from tests.test_ocr import IMAGE, SHORT, collector, fake_rapidocr, output
@@ -1205,7 +1205,7 @@ class GradioDiagnosticsTest(unittest.TestCase):
                     reconstruct.side_effect = None
                     with patch("src.gradio_ui.callbacks.write_ocr_download", side_effect=OSError("export unavailable")):
                         invoke(event, str(image), .25, .7, "eng")
-                    with patch("src.diagnostics.os.replace", side_effect=OSError("disk full")),\
+                    with patch("src.diagnostics.tracking.os.replace", side_effect=OSError("disk full")),\
                          patch.object(AnalysisDiagnostics, "persist", persist):
                         storage_failure = invoke(event, str(image), .25, .7, "eng")
                     reconstruct.return_value = make_spec(flags=["y_ticks_dropped:1"])
@@ -1258,7 +1258,7 @@ class GradioDiagnosticsTest(unittest.TestCase):
 
     def test_app_passes_collector_to_real_ocr_orchestration(self):
         module, _, _ = fake_rapidocr([output(" label ", .8)])
-        with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
+        with patch("src.ocr.rapidocr._load_rapidocr", return_value=module):
             backend = RapidOCRBackend()
         frame = DetectionFrame("input/chart.png", 60, 40, (
             SHORT, Detection("bar", "vertical_bar", Box(40, 20, 50, 35), .9),
@@ -1344,7 +1344,7 @@ def test_gradio_download_reset_and_export_failure(tmp_path):
                 record = json.loads(archive.read('diagnostics.json'))
                 assert record['outcome'] == 'failed'
                 assert 'input.png' not in archive.namelist()
-            with patch('src.diagnostics.os.replace', side_effect=OSError('disk full')):
+            with patch('src.diagnostics.tracking.os.replace', side_effect=OSError('disk full')):
                 failed_export = invoke(event.fn, str(image_path), .25, .7, 'eng')
             assert not failed_export[index]['visible']
             assert 'Diagnostic export failed' in failed_export[index+1]['value']
@@ -1373,7 +1373,7 @@ def test_report_failure_keeps_app_analysis_and_shows_specific_error(tmp_path):
     try:
         with patch('src.gradio_ui.analysis.run_detection', return_value=frame),\
              patch('src.gradio_ui.analysis.run_ocr', return_value=ocr),\
-             patch('src.diagnostics_report.DiagnosticReport.render', side_effect=RuntimeError('formatting failed')):
+             patch('src.diagnostics.report.DiagnosticReport.render', side_effect=RuntimeError('formatting failed')):
             updates = invoke(binding.fn, str(image), .25, .7, 'eng')
         assert updates[8] is not None  # Analysis review state survived packaging failure.
         assert not updates[index]['visible'] and updates[index]['value'] is None

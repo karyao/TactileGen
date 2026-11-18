@@ -1184,12 +1184,12 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr) as ocr_call,
-            mock.patch("src.tesseract_ocr.TesseractBackend", return_value=backend),
+            mock.patch("src.ocr.tesseract.TesseractBackend", return_value=backend),
             mock.patch(
-                "src.legend_matcher.match_legend_to_bars", return_value=mapping
+                "src.reconstruction.legend_matcher.match_legend_to_bars", return_value=mapping
             ) as matcher,
             mock.patch(
-                "src.reconstruct.reconstruct_vbar", return_value=reconstructed
+                "src.reconstruction.vertical.reconstruct_vbar", return_value=reconstructed
             ) as reconstruct,
             mock.patch.object(pipeline, "cut_off_flags", return_value=[]) as cut_off,
         ):
@@ -1370,9 +1370,9 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr) as ocr_call,
-            mock.patch("src.tesseract_ocr.TesseractBackend", return_value=mock.sentinel.backend),
-            mock.patch("src.legend_matcher.match_legend_to_bars") as vertical_matcher,
-            mock.patch("src.reconstruct_hbar.reconstruct_hbar",
+            mock.patch("src.ocr.tesseract.TesseractBackend", return_value=mock.sentinel.backend),
+            mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars") as vertical_matcher,
+            mock.patch("src.reconstruction.horizontal.horizontal.reconstruct_hbar",
                        return_value=reconstructed) as reconstruct,
             mock.patch.object(pipeline, "cut_off_flags", return_value=[]) as cut_off,
         ):
@@ -1468,13 +1468,13 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr),
-            mock.patch("src.tesseract_ocr.TesseractBackend",
+            mock.patch("src.ocr.tesseract.TesseractBackend",
                        return_value=mock.sentinel.backend),
-            mock.patch("src.legend_matcher.match_legend_to_bars",
+            mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars",
                        return_value=mapping) as matcher,
-            mock.patch("src.reconstruct.reconstruct_vbar",
+            mock.patch("src.reconstruction.vertical.reconstruct_vbar",
                        return_value=reconstructed) as reconstruct,
-            mock.patch("src.reconstruct_hbar.reconstruct_hbar") as h_reconstruct,
+            mock.patch("src.reconstruction.horizontal.horizontal.reconstruct_hbar") as h_reconstruct,
             mock.patch.object(pipeline, "cut_off_flags", return_value=[]),
         ):
             result = pipeline.analyse(Path("chart.png"), Path("weights.pt"),
@@ -1505,11 +1505,11 @@ class Pipeline(unittest.TestCase):
                     mock.patch("src.detection.load_model",
                                return_value=mock.sentinel.model),
                     mock.patch("src.detection.run_detection", return_value=raw),
-                    mock.patch("src.tesseract_ocr.TesseractBackend") as backend,
+                    mock.patch("src.ocr.tesseract.TesseractBackend") as backend,
                     mock.patch("src.ocr.run_ocr") as ocr,
-                    mock.patch("src.legend_matcher.match_legend_to_bars") as matcher,
-                    mock.patch("src.reconstruct.reconstruct_vbar") as v_reconstruct,
-                    mock.patch("src.reconstruct_hbar.reconstruct_hbar") as h_reconstruct,
+                    mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars") as matcher,
+                    mock.patch("src.reconstruction.vertical.reconstruct_vbar") as v_reconstruct,
+                    mock.patch("src.reconstruction.horizontal.horizontal.reconstruct_hbar") as h_reconstruct,
                     mock.patch.object(pipeline, "cut_off_flags") as cut_off,
                 ):
                     spec, error, frame = pipeline.analyse(

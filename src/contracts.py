@@ -277,7 +277,7 @@ def join_legend_assignments(
     """Validate and join one legend assignment to every bar.
 
     The assignments cover every vertical bar, or, for a horizontal bar chart
-    (``src.reconstruct_hbar.match_legend_to_hbars``), every horizontal bar.
+    (``src.reconstruction.horizontal.horizontal.match_legend_to_hbars``), every horizontal bar.
     """
     if detections.source_key != mapping.source_key:
         raise ValueError("Legend mapping and detections refer to different source images")

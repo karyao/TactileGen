@@ -25,7 +25,7 @@ from src.contracts import (
 )
 from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
 from src.dataset.prepare_plotqa import png_size
-from src.legend_matcher import (
+from src.reconstruction.legend_matcher import (
     _classify_legend_scores,
     _score_legend_to_bars,
     match_legend_to_bars,
@@ -371,10 +371,10 @@ def _write_evaluation(
 
 def _backend(engine: str) -> OCRBackend:
     if engine == "tesseract":
-        from src.tesseract_ocr import TesseractBackend
+        from src.ocr.tesseract import TesseractBackend
         return TesseractBackend()
     if engine == "rapidocr":
-        from src.rapidocr_ocr import RapidOCRBackend
+        from src.ocr.rapidocr import RapidOCRBackend
         return RapidOCRBackend()
     raise ValueError(f"Unsupported OCR engine: {engine}")
 
