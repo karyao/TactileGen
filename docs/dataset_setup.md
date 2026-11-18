@@ -139,3 +139,57 @@ because the shared class list has no pie-slice class. Output images and labels
 use the same split layout and class IDs as PlotQA, so both image roots can be
 listed in an Ultralytics dataset YAML for joint training. Keep each dataset's
 official splits and check for duplicate images across sources before training.
+
+## Train on PlotQA and ChartQA together
+
+After preparing both datasets, combine their YOLO roots, then check for exact
+image leakage across the combined splits. The example assumes the preparation
+outputs are `data/plotqa_yolo_bars` and `data/chartqa_yolo_bars`; replace those
+paths with the output directories you used. All three splits must exist in each
+input. Combined and cleaned output directories must be new, on the same
+filesystem as the prepared data.
+
+```bash
+python -m src.dataset.combine \
+  --plotqa data/plotqa_yolo_bars \
+  --chartqa data/chartqa_yolo_bars \
+  --output data/bars_combined
+python -m src.dataset.remove_split_leakage \
+  --source data/bars_combined \
+  --output data/bars_combined_clean
+python -m json.tool data/bars_combined_clean/leakage_report.json
+```
+
+Combination keeps bar charts, preserves the official splits, normalizes ChartQA
+chart-type names, and assigns unique numeric image IDs. Original dataset names,
+IDs, and paths are recorded in `data/bars_combined/source_index.json`; retain
+that file to trace cleaned images and removed IDs back to their sources.
+Cleanup hashes PNG bytes across both datasets, retaining test before val before
+train. Identical images within a split remain; visually similar images with
+different bytes are not detected. Labels are not merged or compared.
+
+Install the training dependencies and fine-tune the tracked checkpoint for both
+bar orientations on an NVIDIA GPU:
+
+```bash
+python -m pip install -r requirements-model.txt
+python -m src.baseline.train_yolo \
+  --data-root data/bars_combined_clean \
+  --weights models/yolo_bars_hv/best.pt \
+  --chart-types vbar_categorical hbar_categorical \
+  --epochs 15 --imgsz 640 --batch 16 --seed 0 \
+  --device 0 --output output/training/bars_joint
+```
+
+This fine-tunes existing weights; it does not initialize a fresh model. All
+remaining bar images are used because `--per-type` and `--val-per-type` are
+omitted. Use `--device cpu` for CPU training; reduce `--batch` if GPU memory is
+insufficient. Add `--prepare-only` to verify image lists and run configuration
+without starting training. Test images are excluded from training and validation
+lists. Use a new run output directory for another experiment.
+
+The best checkpoint is saved to
+`output/training/bars_joint/train/weights/best.pt`. Subset lists and
+`run_config.json` are saved in the run directory. A new split-cleanup pass
+prevents leakage in these inputs but cannot establish the held-out provenance
+of the existing checkpoint used to initialize fine-tuning.
