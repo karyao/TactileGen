@@ -234,6 +234,65 @@ class RuleTest(unittest.TestCase):
 
 
 class DividedGraphTest(unittest.TestCase):
+    def test_split_pages_share_tick_values_and_physical_scale(self):
+        # Uneven label headroom used to give these pages identical 0–100
+        # ticks but plot heights of 107.8651 mm and 127.1651 mm.
+        series_a = (18., 73., 98., 9., 33., 16., 64., 98., 58., 61., 84., 49.)
+        series_b = (27., 13., 63., 4., 50., 56., 78., 98., 99., 1., 90., 58.)
+        for count in (12, 24):
+            for enabled in (True, False):
+                with self.subTest(categories=count, value_labels=enabled):
+                    data = (series_a * (count // 12), series_b * (count // 12))
+                    source = chart([BarSeries("A", data[0]), BarSeries("B", data[1])],
+                                   tuple(f"C{i}" for i in range(count)))
+                    pages = [p for p in layout_vertical_bar_chart_pages(
+                        source, value_labels=enabled) if p.page_kind == "graph"]
+                    self.assertGreaterEqual(len(pages), 2)
+                    self.assertEqual(sum(p.category_count for p in pages), count)
+                    self.assertEqual(sum(len(p.bars) for p in pages), 2 * count)
+                    for index, expected in enumerate(data):
+                        self.assertEqual(tuple(b.value for p in pages for b in p.bars
+                                               if b.series_index == index), expected)
+                    if enabled:
+                        self.assertTrue(any(values(p) for p in pages))
+                    else:
+                        self.assertFalse(any(values(p) for p in pages))
+
+                    reference = None
+                    for number, page in enumerate(pages, 1):
+                        # Labels can cut one grid line into several segments.
+                        # Deduplicate coordinates and include the zero baseline.
+                        ticks = [float(l.text) for l in sorted(
+                            (l for l in page.labels if l.role == "y_value"),
+                            key=lambda l: -l.y)]
+                        coordinates = sorted({page.plot.y2, *(line.y1 for line in page.lines
+                                                              if line.kind == "grid")},
+                                             reverse=True)
+                        self.assertGreaterEqual(len(ticks), 2)
+                        self.assertEqual(ticks[0], 0)
+                        self.assertEqual(len(coordinates), len(ticks))
+                        spacing = [a - b for a, b in zip(coordinates, coordinates[1:])]
+                        increments = [b - a for a, b in zip(ticks, ticks[1:])]
+                        self.assertTrue(all(step > 0 for step in increments))
+                        scale = [gap / step for gap, step in zip(spacing, increments)]
+                        geometry = (page.plot.y1, page.plot.y2,
+                                    page.plot.y2 - page.plot.y1)
+                        if reference is None:
+                            reference = ticks, spacing, scale, geometry
+                        with self.subTest(page=number, check="ticks"):
+                            self.assertEqual(ticks, reference[0])
+                        for name, actual, expected in (
+                            ("grid spacing mm", spacing, reference[1]),
+                            ("mm per unit", scale, reference[2]),
+                            ("plot geometry mm", geometry, reference[3]),
+                        ):
+                            with self.subTest(page=number, check=name):
+                                self.assertEqual(len(actual), len(expected))
+                                for measured, target in zip(actual, expected):
+                                    self.assertAlmostEqual(measured, target, delta=1e-6)
+                        with self.subTest(page=number, check="layout rules"):
+                            self.assertEqual(rules(page), [])
+
     def test_every_graph_page_of_a_divided_chart_passes_every_rule(self):
         cats = tuple(f"Month {i}" for i in range(1, 25))
         pages = layout_vertical_bar_chart_pages(chart(

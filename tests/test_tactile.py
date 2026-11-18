@@ -792,6 +792,27 @@ def by_role(layout, role):
 
 
 class HorizontalLayoutTest(unittest.TestCase):
+    def test_grid_spacing_matches_tick_increments(self):
+        for chart in (RAIN, BOOKS, LONG):
+            with self.subTest(chart=chart.title):
+                pages = layout_horizontal_bar_chart_pages(chart)
+                # Horizontal pagination is not supported yet.
+                self.assertEqual(len(pages), 1)
+                page = pages[0]
+                ticks = [float(label.text) for label in sorted(
+                    by_role(page, "x_value"), key=lambda label: label.x)]
+                coordinates = sorted({page.plot.x1, *(line.x1 for line in page.lines
+                                                     if line.kind == "grid")})
+                self.assertGreaterEqual(len(ticks), 2)
+                self.assertEqual(ticks[0], 0)
+                self.assertEqual(len(coordinates), len(ticks))
+                mm_per_unit = (page.plot.x2 - page.plot.x1) / (ticks[-1] - ticks[0])
+                for index in range(1, len(ticks)):
+                    increment = ticks[index] - ticks[index - 1]
+                    self.assertGreater(increment, 0)
+                    spacing = coordinates[index] - coordinates[index - 1]
+                    self.assertAlmostEqual(spacing / increment, mm_per_unit, delta=1e-6)
+
     def test_sample_charts_pass_every_rule(self):
         for chart in (RAIN, BOOKS, LONG):
             with self.subTest(chart.title):
