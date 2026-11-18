@@ -411,20 +411,17 @@ def _rescue_value(rgb: np.ndarray, centre_x: float, width: float, baseline: floa
 
 
 def _rejected_probe(rejected: tuple[Detection, ...], centre_x: float, width: float,
-                    baseline: float, slope: float, value: float) -> Detection | None:
-    """The rejected detection whose pixels a rescue run at this slot would read.
+                    baseline: float) -> Detection | None:
+    """The rejected detection occupying this rescue slot near the zero line.
 
-    The probe measures the same central strip, from the zero line out to the
-    value the rescue found. When a rejected box lies inside that strip it is
-    what the rescue would be reading, so its height must not come back as a
-    value; a rescue that already found nothing needs no suppression.
+    Match the central rescue strip and the baseline region, allowing for the
+    scanner's starting rows and axis gap. Attribution depends on box geometry,
+    since pixels of a rejected colour can yield a zero rescue measurement.
     """
-    if not rejected or not value or not slope:
-        return None
     half = RESCUE_STRIP_FRACTION * width / 2
     left, right = centre_x - half, centre_x + half
-    run = abs(value / slope)
-    top, bottom = baseline - run, baseline + run
+    tolerance = RESCUE_AXIS_ROWS + 1
+    top, bottom = baseline - tolerance, baseline + tolerance
     for detection in rejected:
         box = detection.box
         if box.x1 < right and box.x2 > left and box.y1 < bottom and box.y2 > top:
@@ -960,12 +957,10 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                 if row[j] is not None:
                     continue
                 centre_x = label_x[j] + offset
-                measured = _rescue_value(rgb, centre_x, bar_width, baseline, a, centre)
-                rejected = _rejected_probe(rejected_bars, centre_x, bar_width,
-                                           baseline, a, measured)
+                rejected = _rejected_probe(rejected_bars, centre_x, bar_width, baseline)
                 if rejected is not None:
-                    # The probe would read the rejected detection, so its height
-                    # must not come back as a value. The slot is filled with 0
+                    # Keep attribution even if these pixels would measure zero.
+                    # The slot is filled with 0
                     # but is neither a detection nor a pixel measurement.
                     measured = 0.0
                     n_colour_rejected += 1
@@ -973,6 +968,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                           bar_id=rejected.id, center_x=centre_x, width=bar_width,
                           baseline=baseline, value=0.0, reason="legend_colour_mismatch")
                 else:
+                    measured = _rescue_value(rgb, centre_x, bar_width, baseline, a, centre)
                     trace_series("pixel_rescue", series_index=c, category_index=j,
                           center_x=centre_x, width=bar_width, baseline=baseline,
                           value=measured, inferred_zero=measured == 0.0)

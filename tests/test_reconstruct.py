@@ -1456,3 +1456,62 @@ def test_colour_rejected_bar_is_not_restored_by_pixel_rescue(horizontal):
     assert "bar_colour_rejected:1" in spec.flags
     assert "bars_rescued:1" not in spec.flags
     assert any("matched no legend swatch" in note for note in check_completeness(spec).notes)
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+def test_colour_rejected_bar_keeps_explanation_with_real_pixel_rescue(horizontal):
+    from src.reconstruction.horizontal import transpose_image
+
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    bar = [d for d in chart.detections if d.role == "vertical_bar"][1]
+    chart.paint((bar.box.x1, bar.box.y1, bar.box.x2, bar.box.y2), GREEN)
+    frame, image = chart.frame(), chart.image
+    if horizontal:
+        from src.reconstruction.legend_matcher import filter_bars_by_legend
+        from src.reconstruction.vertical import _legend_ocr_frame, _text_table
+
+        # Filter before transposing: swapping axes also moves legend labels
+        # below their swatches, outside the matcher's horizontal label layout.
+        filtered = filter_bars_by_legend(
+            image, frame, _legend_ocr_frame(frame, _text_table(chart.texts)))
+        rejected = tuple(item.detection for item in filtered.rejected)
+        rejected = transpose_frame(replace(filtered.frame, detections=rejected)).detections
+        frame = filtered.frame
+        frame, image = transpose_frame(frame), transpose_image(image)
+        spec = reconstruct_hbar(frame, chart.texts, image,
+                                legend_mapping=filtered.mapping, rejected_bars=rejected)
+    else:
+        spec, diagnostics = recorded(chart)
+        rejection, = events(diagnostics, "bar_colour_rejected")
+        assert rejection["bar_id"] == bar.id
+        assert rejection["category_index"] == 1
+        assert rejection["reason"] == "legend_colour_mismatch"
+        assert not [e for e in events(diagnostics, "pixel_rescue")
+                    if e["category_index"] == 1]
+
+    assert spec.series[0].values == pytest.approx([120, 0, 180])
+    assert spec.series[0].value_rescued == [False, False, False]
+    assert "bar_colour_rejected:1" in spec.flags
+    assert not any(flag.startswith("bars_rescued:") for flag in spec.flags)
+    assert "value_inferred_zero" not in spec.flags
+    assert "category_count_mismatch" not in spec.flags
+    assert any("matched no legend swatch" in note for note in check_completeness(spec).notes)
+
+
+@pytest.mark.parametrize("box, matches", [
+    ((90, 50, 110, 100), True),   # positive bar ending at the baseline
+    ((90, 100, 110, 150), True),  # negative bar starting at the baseline
+    ((90, 50, 110, 98), True),   # small gap allowed for the axis stroke
+    ((90, 102, 110, 150), True),
+    ((120, 50, 140, 100), False),  # another category or series slot
+    ((90, 50, 110, 90), False),    # same column, far above the baseline
+    ((90, 110, 110, 150), False),  # same column, far below the baseline
+    ((90, 50, 110, 97), False),    # touches but does not overlap baseline region
+    ((90, 103, 110, 150), False),
+])
+def test_rejected_probe_matches_slot_near_baseline(box, matches):
+    from src.reconstruction.vertical import _rejected_probe
+
+    rejected = Detection("rejected", "vertical_bar", Box(*box), .9)
+    result = _rejected_probe((rejected,), centre_x=100, width=20, baseline=100)
+    assert result is (rejected if matches else None)
