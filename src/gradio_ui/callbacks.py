@@ -50,6 +50,7 @@ class AppCallbacks:
     admit_analysis: Callable[..., Any]
     admit_generation: Callable[..., Any]
     update_review_event: Callable[..., Any]
+    update_legend_event: Callable[..., Any]
     generate_event: Callable[..., Any]
     clear_all: Callable[..., Any]
     unload: Callable[..., Any]
@@ -129,6 +130,7 @@ def create_callbacks(
                 visible=completeness_text is not None,
             ),
             review_state=review_model,
+            include_legend=gr.update(value=not review_model.omit_legend if review_model else True),
             review_panel=gr.update(visible=review_model is not None),
             review_fields=gr.update(
                 value=review_text_rows(review_model) if review_model else [],
@@ -192,11 +194,12 @@ def create_callbacks(
     def orientation_changed():
         return results.updates(**result_updates(
             ready_status(),
-            empty_message="Bar orientation changed. Select Analyze chart to update the results.",
+            empty_message="Chart settings changed. Select Analyze chart to update the results.",
         ))
 
     def analyze_work(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
                       ocr_engine=initial_ocr_engine, bar_orientation="auto",
+                      keep_legend_matches=False,
                       progress=None, diagnostics=None, owned_files=None):
         failed = False
         updates = None
@@ -210,6 +213,7 @@ def create_callbacks(
                 nms_iou,
                 imgsz=imgsz,
                 bar_orientation=bar_orientation,
+                keep_legend_matches=keep_legend_matches,
                 language=language,
                 ocr_backend_factory=lambda: backends.resolve(ocr_engine),
                 device=device,
@@ -311,11 +315,11 @@ def create_callbacks(
         updates["diagnostics_info"] = gr.update(value=diagnostic_text, visible=True)
         return results.updates(**updates)
 
-    def update_review_event(model, rows):
+    def update_review_event(model, rows, omit_legend=None):
         if model is None:
             return None, gr.update(value=[]), gr.update(value="", visible=False)
         try:
-            updated = update_review_draft(model, rows)
+            updated = update_review_draft(model, rows, omit_legend=omit_legend)
         except ValueError as exc:
             return (
                 model,
@@ -474,6 +478,7 @@ def create_callbacks(
             inference_size=gr.update(value=initial_imgsz, interactive=True),
             ocr_engine=gr.update(value=initial_ocr_engine, interactive=True),
             bar_orientation=gr.update(value="auto", interactive=True),
+            keep_legend_matches=gr.update(value=False, interactive=True),
             analyze_button=gr.update(interactive=True),
             clear_button=gr.update(interactive=True),
             size_presets=tuple(
@@ -532,17 +537,20 @@ def create_callbacks(
 
     async def admit_analysis(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
                              ocr_engine=initial_ocr_engine, bar_orientation="auto",
+                             keep_legend_matches=False,
                              request: gr.Request = None):
         key = session(request)
         diagnostics = AnalysisDiagnostics(settings={
             "confidence": confidence, "nms_iou": nms_iou, "device": device,
             "language": language, "imgsz": imgsz, "ocr_engine": ocr_engine,
             "bar_orientation": bar_orientation,
+            "keep_legend_matches": keep_legend_matches,
         })
         async with tracker.publication(key):
             retire(key)
             ticket = tracker.start(key, diagnostics.run_id)
-            args = (image_path, confidence, nms_iou, language, imgsz, ocr_engine, bar_orientation)
+            args = (image_path, confidence, nms_iou, language, imgsz, ocr_engine,
+                    bar_orientation, keep_legend_matches)
             admissions[diagnostics.run_id] = (key, ticket, args, diagnostics, tracker.retain(key))
             return GuardedUpdates((*results.updates(**result_updates(analyzing_status())),
                 *(gr.update(interactive=control is controls.clear_button) for control in controls.components()),
@@ -588,6 +596,7 @@ def create_callbacks(
 
     async def analyze_event(image_path, confidence, nms_iou, language, imgsz=initial_imgsz,
                             ocr_engine=initial_ocr_engine, bar_orientation="auto", admission=None,
+                            keep_legend_matches=False,
                             request: gr.Request = None, progress=gr.Progress()):
         key = session(request)
         entry = consume(key, admission)
@@ -622,12 +631,13 @@ def create_callbacks(
 
     raw_review = update_review_event
 
-    def review_update(model, rows, request):
+    def review_update(model, rows, request, omit_legend=None):
         key = session(request)
         if model is None:
             return tuple(gr.skip() for _ in range(3))
-        updated = raw_review(model, rows)
-        if updated[0].draft_values != model.draft_values:
+        updated = raw_review(model, rows, omit_legend)
+        if (updated[0].draft_values != model.draft_values
+                or updated[0].omit_legend != model.omit_legend):
             ticket = tracker.advance(key, model.run_id, model.review_revision, edit=True)
             if ticket is None:
                 return tuple(gr.skip() for _ in range(3))
@@ -638,15 +648,19 @@ def create_callbacks(
                 return tuple(gr.skip() for _ in range(3))
         return updated
 
-    async def update_review_event(model, rows, stamp=None, request: gr.Request = None):
+    async def update_review_event(model, rows, stamp=None, request: gr.Request = None,
+                                  omit_legend=None):
         key = session(request)
         async with tracker.publication(key):
             if model is None or stamp != [model.run_id, model.review_revision]:
                 return tuple(gr.skip() for _ in range(3))
-            updates = review_update(model, rows, request)
+            updates = review_update(model, rows, request, omit_legend)
             return GuardedUpdates(updates, key, tracker.latest(key))
 
-    async def admit_generation(model, rows, stamp, request: gr.Request):
+    async def update_legend_event(model, rows, stamp, include_legend, request: gr.Request):
+        return await update_review_event(model, rows, stamp, request, not include_legend)
+
+    async def admit_generation(model, rows, stamp, include_legend=None, request: gr.Request = None):
         key = session(request)
         async with tracker.publication(key):
             if (model is None or stamp != [model.run_id, model.review_revision]
@@ -654,12 +668,14 @@ def create_callbacks(
                 return GuardedUpdates((gr.skip(), gr.skip(), gr.skip(), gr.update(value=None)),
                                       key, tracker.latest(key))
             try:
-                draft = update_review_draft(model, rows)
+                draft = update_review_draft(model, rows,
+                    omit_legend=None if include_legend is None else not include_legend)
             except ValueError as exc:
                 return GuardedUpdates((gr.skip(), gr.skip(),
                     gr.update(value=alert_message(str(exc)), visible=True), gr.update(value=None)),
                     key, tracker.latest(key))
-            changed = draft.draft_values != model.draft_values
+            changed = (draft.draft_values != model.draft_values
+                       or draft.omit_legend != model.omit_legend)
             ticket = tracker.advance(key, model.run_id, model.review_revision, edit=changed)
             draft = replace(draft, review_revision=ticket.review_revision)
             token = f"{ticket.run_id}:{ticket.review_revision}:{ticket.generation_token}"
@@ -692,7 +708,7 @@ def create_callbacks(
 
     for callback in (ready_results, orientation_changed, clear_all, unload,
                      analyze_event, update_review_event, generate_event,
-                     admit_analysis, admit_generation):
+                     admit_analysis, admit_generation, update_legend_event):
         callback.__annotations__["request"] = gr.Request
 
     analyze_event.admit = admit_analysis
@@ -705,6 +721,7 @@ def create_callbacks(
         admit_analysis=admit_analysis,
         admit_generation=admit_generation,
         update_review_event=update_review_event,
+        update_legend_event=update_legend_event,
         generate_event=generate_event,
         clear_all=clear_all,
         unload=unload,

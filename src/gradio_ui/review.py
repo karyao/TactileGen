@@ -38,6 +38,7 @@ class ReviewModel:
     draft_values: tuple[str, ...]
     run_id: str | None = None
     review_revision: int = 0
+    omit_legend: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,8 @@ def build_review_model(spec: VerticalBarSpec, completeness: Completeness) -> Rev
         for index, series in enumerate(spec.series)
     )
     frozen = tuple(bindings)
-    return ReviewModel(spec, frozen, tuple(item.initial_text for item in frozen))
+    return ReviewModel(spec, frozen, tuple(item.initial_text for item in frozen),
+                       omit_legend=spec.omit_legend)
 
 
 def review_text_rows(model: ReviewModel) -> list[list[str]]:
@@ -119,7 +121,8 @@ def review_value_rows(spec: VerticalBarSpec) -> list[list[Any]]:
     return rows
 
 
-def update_review_draft(model: ReviewModel, rows: Any) -> ReviewModel:
+def update_review_draft(model: ReviewModel, rows: Any, *,
+                        omit_legend: bool | None = None) -> ReviewModel:
     """Accept only text cells and map them by immutable server-side row order."""
     if not isinstance(rows, (list, tuple)) or len(rows) != len(model.bindings):
         raise ValueError(f"review must contain exactly {len(model.bindings)} rows")
@@ -131,7 +134,10 @@ def update_review_draft(model: ReviewModel, rows: Any) -> ReviewModel:
             raise ValueError(f"review text in row {index} must be a string")
         # row[0] is deliberately ignored: it is display text, never a field key.
         values.append(row[1])
-    return replace(model, draft_values=tuple(values))
+    if omit_legend is not None and not isinstance(omit_legend, bool):
+        raise ValueError("Omit legend must be a boolean")
+    return replace(model, draft_values=tuple(values),
+                   omit_legend=model.omit_legend if omit_legend is None else omit_legend)
 
 
 def review_overrides(model: ReviewModel) -> Overrides:
@@ -140,6 +146,8 @@ def review_overrides(model: ReviewModel) -> Overrides:
     categories: dict[int, str] = {}
     series_names: dict[int, str] = {}
     for binding, draft in zip(model.bindings, model.draft_values, strict=True):
+        if model.omit_legend and binding.key.startswith("series_name["):
+            continue
         value = draft.strip()
         if binding.required and not value:
             raise ValueError(f"{binding.label} cannot be blank")
@@ -177,6 +185,7 @@ def generate_review_submission(
     """Validate the latest review table, apply text, and generate ready artifacts."""
     draft = update_review_draft(model, rows)
     corrected, notes = apply_overrides(model.spec, review_overrides(draft))
+    corrected = replace(corrected, omit_legend=draft.omit_legend)
     completeness = check_completeness(corrected)
     if completeness.status != READY:
         raise ManualGenerationBlocked(draft, completeness)

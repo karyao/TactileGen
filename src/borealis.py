@@ -257,6 +257,47 @@ body,
   gap: var(--borealis-space-2) !important;
 }
 
+.borealis-review-heading h2 {
+  margin: 0 0 8px !important;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.borealis-review-heading p {
+  color: var(--borealis-muted);
+  line-height: 1.5;
+}
+
+.borealis-legend-option {
+  padding: 16px 20px !important;
+  gap: 6px !important;
+  background: var(--borealis-elevated);
+  border: 1px solid var(--borealis-deep-sky);
+  border-radius: var(--borealis-radius-md);
+}
+
+.borealis-legend-checkbox label {
+  font-weight: 600;
+  color: var(--borealis-text);
+  cursor: pointer;
+}
+
+.borealis-legend-checkbox input {
+  accent-color: var(--borealis-sun);
+  width: 20px;
+  height: 20px;
+}
+
+.borealis-legend-checkbox input:focus-visible {
+  outline: 2px solid var(--borealis-sun);
+  outline-offset: 3px;
+}
+
+.borealis-legend-help {
+  max-width: 60ch;
+  line-height: 1.5;
+}
+
 .borealis-control-rail {
   min-width: 0;
   padding-block: 2px;

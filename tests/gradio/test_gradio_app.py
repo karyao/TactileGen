@@ -743,7 +743,7 @@ class GradioUiTest(GradioTestCase):
         analyze = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
         ready_updates = invoke(ready)
-        self.assertEqual(len(ready_updates), 27)
+        self.assertEqual(len(ready_updates), len(fields(AnalysisComponents)))
         self.assertIn("Your chart workspace", ready_updates[1]["value"])
         frame = DetectionFrame("input/chart.png", 20, 20, ())
         result = AnalysisResult(
@@ -776,7 +776,7 @@ class GradioUiTest(GradioTestCase):
             error_updates = invoke(analyze.fn, None, 0.25, 0.70, "eng")
         self.assertTrue(error_updates[23]["visible"])
         self.assertIn('role="alert"', error_updates[23]["value"])
-        self.assertEqual(len(invoke(ready)), 27)
+        self.assertEqual(len(invoke(ready)), len(fields(AnalysisComponents)))
 
     def test_image_change_clears_diagnostics_with_all_analysis_results(self):
         demo = build_app(object(), device="cpu")
@@ -794,7 +794,7 @@ class GradioUiTest(GradioTestCase):
         self.assertFalse(event["queue"])
         self.assertEqual(event["api_visibility"], "private")
         updates = invoke(reset.fn)
-        self.assertEqual(len(updates), len(reset.outputs[:27]))
+        self.assertEqual(len(updates), len(reset.outputs[:len(fields(AnalysisComponents))]))
         for name in ("diagnostics_download", "diagnostics_info", "orientation_output"):
             index = [field.name for field in fields(AnalysisComponents)].index(name)
             self.assertFalse(updates[index]["visible"])
@@ -819,8 +819,9 @@ class GradioUiTest(GradioTestCase):
         self.assertIn("Recognized text", labels)
         self.assertIn("Legend mappings", labels)
         self.assertIn("Reconstruction completeness", labels)
-        self.assertIn("Reconstructed text", labels)
-        self.assertIn("Reconstructed values (read-only)", labels)
+        self.assertIn("Chart text · editable", labels)
+        self.assertIn("Bar values · read-only", labels)
+        self.assertIn("Include legend", labels)
         self.assertIn("Reconstructed VerticalBarSpec", labels)
         self.assertIn("Tactile review pages", labels)
         self.assertIn("Tactile generation report", labels)
@@ -856,7 +857,7 @@ class GradioUiTest(GradioTestCase):
 
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
         ready_updates = invoke(ready)
-        self.assertEqual(len(ready_updates), 27)
+        self.assertEqual(len(ready_updates), len(fields(AnalysisComponents)))
         self.assertTrue(ready_updates[1]["visible"])
         self.assertIsNone(ready_updates[8])
         self.assertTrue(all(not update["visible"] for update in ready_updates[2:8]))
@@ -1354,7 +1355,7 @@ def test_gradio_download_reset_and_export_failure(tmp_path):
         for name in ('ready_results', 'clear_all'):
             callback = next(fn for fn in demo.fns.values() if fn.api_name == name)
             updates = invoke(callback.fn)
-            offset = 12 if name == "clear_all" else 0
+            offset = len(demo.analysis_controls) if name == "clear_all" else 0
             assert not updates[index+offset]['visible']
             assert updates[index+offset]['value'] is None
     finally:

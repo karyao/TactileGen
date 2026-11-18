@@ -838,13 +838,15 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     has_detected_swatches = any(
         detection.role == "legend_swatch" for detection in frame.detections
     )
-    # Let the user name a fallback series when all unresolved bars are colour
-    # mismatches and the detected groups form a complete, consistent grid.
+    # Let the user review fallback series when the legend is absent or all
+    # unresolved bars are colour mismatches, and the detected grid is complete
+    # and consistently ordered. Review can supply names or omit the legend.
     # Pixel rescue still requires settled legend identities in mixed groups.
     expected_slots = tuple(range(len(categories)))
     reviewable_groups = (
-        bool(matched_groups and unresolved)
-        and all(bars[k].id in mismatched for k in unresolved)
+        bool(unresolved)
+        and (all(bars[k].id in mismatched for k in unresolved)
+             or (not has_detected_swatches and not matched_groups))
         and all(tuple(bar_label[k] for k in members) == expected_slots for members in clusters)
         and all(column == tuple(sorted(column)) for column in zip(*clusters, strict=True))
     )

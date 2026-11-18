@@ -79,6 +79,7 @@ SELF_EXPLAINING_FLAGS = frozenset({"bars_mostly_missed", "bar_colour_unaccounted
 # Flags worth telling the user about that do not stop a build. Each is matched
 # by name, or by the prefix before the colon.
 NOTE_FLAGS = {
+    "legend_bars_removed": "{n} detected bar(s) without a verified legend colour match were removed by user choice.",
     # values measured from pixels because no bar was detected
     "bars_rescued": "{n} bar value(s) were measured from pixels because YOLO did not detect the bar.",
     # a rescue found no bar pixels; {n} counts those values, drawn as zero
@@ -379,7 +380,7 @@ def check_completeness(spec: VerticalBarSpec, *, diagnostics=None) -> Completene
     for j, reason in _suspicious_categories(spec, diagnostics=diagnostics):
         if f"category[{j}]" not in listed_now:
             missing.append(MissingItem(f"category[{j}]", reason, f"--category {j}=TEXT"))
-    if len(spec.series) > 1:
+    if len(spec.series) > 1 and not spec.omit_legend:
         for i, series in enumerate(spec.series):
             if not series.name:
                 _finding(diagnostics, "missing_series_name", f"series_name[{i}]", triggered=True)
@@ -395,7 +396,7 @@ def check_completeness(spec: VerticalBarSpec, *, diagnostics=None) -> Completene
                ("y_axis_title", "The y-axis title", "--y-title", spec.y_axis_title)]
     strings += [(f"category[{j}]", f"Category {j}", f"--category {j}=TEXT", text)
                 for j, text in enumerate(spec.categories)]
-    if len(spec.series) > 1:
+    if len(spec.series) > 1 and not spec.omit_legend:
         strings += [(f"series_name[{i}]", f"Series {i} name", f"--series {i}=NAME", s.name)
                     for i, s in enumerate(spec.series)]
     for name, label, cli_flag, text in strings:
@@ -556,5 +557,5 @@ def spec_to_chart_with_notes(
     chart_type = HorizontalBarChart if spec.orientation == "horizontal" else VerticalBarChart
     chart = chart_type(
         spec.source_key, spec.title, spec.x_axis_title, spec.y_axis_title,
-        tuple(spec.categories), tuple(series_out))
+        tuple(spec.categories), tuple(series_out), omit_legend=spec.omit_legend)
     return chart, notes

@@ -101,6 +101,7 @@ def load_bar_chart(path: Path) -> VerticalBarChart | HorizontalBarChart:
         return chart_type(
             data["source_key"], data["title"], data["x_axis_title"],
             data["y_axis_title"], tuple(_array(data["categories"], "categories")), series,
+            omit_legend=data.get("omit_legend", False),
         )
     except (KeyError, TypeError) as exc:
         raise ValueError(f"Invalid bar chart: {path}") from exc
@@ -113,6 +114,8 @@ def write_vertical_bar_chart(path: Path, chart: VerticalBarChart) -> None:
 def write_bar_chart(path: Path, chart: VerticalBarChart | HorizontalBarChart) -> None:
     chart_type = next(name for name, kind in _CHART_TYPES.items() if type(chart) is kind)
     data = asdict(chart)
+    if not chart.omit_legend:
+        del data["omit_legend"]
     for series in data["series"]:  # written only for a series with no visible bars
         if series["has_bars"]:
             del series["has_bars"]

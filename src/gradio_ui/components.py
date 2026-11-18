@@ -56,6 +56,7 @@ class AnalysisComponents(ComponentGroup):
     diagnostics_download: Any
     diagnostics_info: Any
     orientation_output: Any
+    include_legend: Any
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class Controls:
     analyze_button: Any
     clear_button: Any
     size_presets: tuple[Any, ...]
+    keep_legend_matches: Any
 
     def components(self) -> list[Any]:
         return [
@@ -102,6 +104,7 @@ class Controls:
             self.analyze_button,
             self.clear_button,
             *self.size_presets,
+            self.keep_legend_matches,
         ]
 
     def updates(self, **values: Any) -> tuple[Any, ...]:

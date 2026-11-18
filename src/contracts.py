@@ -347,9 +347,12 @@ class VerticalBarChart:
     y_axis_title: str
     categories: tuple[str, ...]
     series: tuple[BarSeries, ...]
+    omit_legend: bool = False
 
     def __post_init__(self) -> None:
         validate_source_key(self.source_key)
+        if not isinstance(self.omit_legend, bool):
+            raise ValueError("omit_legend must be a boolean")
         for label in (self.title, self.x_axis_title, self.y_axis_title):
             if not isinstance(label, str) or not label:
                 raise ValueError("chart and axis titles must be nonempty")
@@ -381,6 +384,7 @@ class HorizontalBarChart:
     y_axis_title: str
     categories: tuple[str, ...]
     series: tuple[BarSeries, ...]
+    omit_legend: bool = False
 
     def __post_init__(self) -> None:
         VerticalBarChart.__post_init__(self)
@@ -457,9 +461,12 @@ class VerticalBarSpec:
     chart_type: str = "bar"
     orientation: str = "vertical"
     schema_version: str = "0.2"
+    omit_legend: bool = False
 
     def __post_init__(self) -> None:
         validate_source_key(self.source_key)
+        if not isinstance(self.omit_legend, bool):
+            raise ValueError("omit_legend must be a boolean")
         if self.schema_version != "0.2":
             raise ValueError("VerticalBarSpec schema_version must be 0.2")
         if self.chart_type != "bar" or self.orientation not in ("vertical", "horizontal"):

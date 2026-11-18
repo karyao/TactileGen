@@ -50,6 +50,10 @@ class AppSession:
 
     async def call(self, name, inputs=(), iterator=None):
         inputs = list(inputs)
+        if name == "admit_analysis" and len(inputs) == 7:
+            inputs.append(False)
+        if name == "analyze" and len(inputs) == 8:
+            inputs.append(False)
         if name == "update_review" and len(inputs) == 2:
             model = self.model
             inputs.append([model.run_id, model.review_revision] if model else None)
@@ -58,7 +62,9 @@ class AppSession:
             admitted = await self.call("admit_generation", [*inputs, [model.run_id, model.review_revision] if model else None])
             token = admitted["data"][3].get("value")
             inputs.append(token)
-        if name in ("generate_tactile", "update_review", "admit_generation") and isinstance(inputs[1], list):
+        if name == "admit_generation" and len(inputs) == 3:
+            inputs.append(not self.model.omit_legend if self.model else True)
+        if name in ("generate_tactile", "update_review", "update_legend", "admit_generation") and isinstance(inputs[1], list):
             inputs[1] = {"data": inputs[1], "headers": ["Field", "Text"]}
         return await self.app.process_api(self.find_callback(name), inputs, state=self.state,
                                          request=self.request, session_hash=self.key, iterator=iterator)

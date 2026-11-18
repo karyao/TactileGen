@@ -98,6 +98,11 @@ def build_app(
             queue=False,
             api_visibility="private",
         )
+        controls.keep_legend_matches.input(
+            callbacks.orientation_changed,
+            outputs=[*results.components(), *controls.components(), review_stamp],
+            queue=False, api_visibility="private",
+        )
         demo.unload(callbacks.unload)
         analysis_start = controls.analyze_button.click(
             callbacks.admit_analysis,
@@ -109,6 +114,7 @@ def build_app(
                 controls.inference_size,
                 controls.ocr_engine,
                 controls.bar_orientation,
+                controls.keep_legend_matches,
             ],
             outputs=[*results.components(), *controls.components(), analysis_admission, review_stamp],
             queue=False, trigger_mode="once", api_name="admit_analysis", api_visibility="private",
@@ -124,6 +130,7 @@ def build_app(
                 controls.ocr_engine,
                 controls.bar_orientation,
                 analysis_admission,
+                controls.keep_legend_matches,
             ],
             outputs=[*results.components(), *controls.components(), review_stamp],
             show_progress="full", show_progress_on=results.annotated_output,
@@ -145,10 +152,17 @@ def build_app(
         )
         generation_start = results.generate_button.click(
             callbacks.admit_generation,
-            inputs=[results.review_state, results.review_fields, review_stamp],
+            inputs=[results.review_state, results.review_fields, review_stamp, results.include_legend],
             outputs=[results.review_state, results.review_fields, results.review_error_output,
                      generation_admission, review_stamp],
             queue=False, api_name="admit_generation", api_visibility="private",
+        )
+        results.include_legend.input(
+            callbacks.update_legend_event,
+            inputs=[results.review_state, results.review_fields, review_stamp, results.include_legend],
+            outputs=[results.review_state, results.review_fields, results.review_error_output,
+                     review_stamp],
+            queue=False, api_name="update_legend", api_visibility="private",
         )
         generation_start.then(
             callbacks.generate_event,
@@ -270,6 +284,18 @@ def _build_controls(gr, initial_imgsz: int, initial_ocr_engine: str) -> Controls
                       "RapidOCR uses its multilingual model and ignores this field."),
                 elem_classes="borealis-setting",
             )
+        with gr.Column(elem_classes="borealis-legend-option"):
+            keep_legend_matches = gr.Checkbox(
+                label="Keep only legend-matched bars",
+                value=False,
+                container=False,
+                elem_classes="borealis-legend-checkbox",
+            )
+            gr.Markdown(
+                "Remove bars whose colours cannot be matched to the detected legend. "
+                "Leave off to keep all detected bars. Select Analyze chart after changing this.",
+                elem_classes=["borealis-helper", "borealis-legend-help"],
+            )
         with gr.Row(elem_classes="borealis-actions"):
             analyze_button = gr.Button("Analyze chart", variant="primary")
             clear_button = gr.Button("Clear", variant="secondary")
@@ -286,6 +312,7 @@ def _build_controls(gr, initial_imgsz: int, initial_ocr_engine: str) -> Controls
         analyze_button=analyze_button,
         clear_button=clear_button,
         size_presets=tuple(size_presets),
+        keep_legend_matches=keep_legend_matches,
     )
 
 
@@ -334,17 +361,28 @@ def _build_results(gr) -> AnalysisComponents:
             elem_classes="borealis-review",
         ) as review_panel:
             gr.Markdown(
-                "## Review reconstructed chart\n\n"
-                "Review the labels below. Numeric values are read-only. "
-                "Your text changes are applied when you generate tactile pages.",
-                elem_classes="borealis-summary",
+                "## Review your chart\n\n"
+                "Check the text and values, then generate your tactile graphic.",
+                elem_classes=["borealis-summary", "borealis-review-heading"],
             )
+            with gr.Column(elem_classes="borealis-legend-option"):
+                include_legend = gr.Checkbox(
+                    label="Include legend",
+                    value=True,
+                    container=False,
+                    elem_classes="borealis-legend-checkbox",
+                )
+                gr.Markdown(
+                    "No legend in the original? Turn this off to leave series names blank. "
+                    "All bars and values stay in your chart.",
+                    elem_classes=["borealis-helper", "borealis-legend-help"],
+                )
             review_fields = gr.Dataframe(
                 value=[],
                 headers=["Field", "Text"],
                 datatype=["str", "str"],
                 type="array",
-                label="Reconstructed text",
+                label="Chart text · editable",
                 interactive=True,
                 visible=True,
                 wrap=True,
@@ -361,7 +399,7 @@ def _build_results(gr) -> AnalysisComponents:
                 ],
                 datatype=["number", "str", "number", "str", "number"],
                 type="array",
-                label="Reconstructed values (read-only)",
+                label="Bar values · read-only",
                 interactive=False,
                 visible=True,
                 wrap=True,
@@ -513,5 +551,6 @@ def _build_results(gr) -> AnalysisComponents:
         diagnostics_download=diagnostics_download,
         diagnostics_info=diagnostics_info,
         orientation_output=orientation_output,
+        include_legend=include_legend,
     )
 

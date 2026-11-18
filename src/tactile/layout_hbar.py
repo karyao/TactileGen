@@ -267,4 +267,5 @@ def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
         usable=usable, plot=Rect(axis_x, plot_top, plot_right, axis_y),
         lines=tuple(lines), bars=tuple(bars), labels=tuple(labels),
         key_samples=tuple(samples), category_count=n_cat, series_textures=textures,
-        x_label_mode=mode, notes=tuple(notes), orientation="horizontal")
+        x_label_mode=mode, notes=tuple(notes), orientation="horizontal",
+        omit_legend=chart.omit_legend)

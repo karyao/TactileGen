@@ -1725,3 +1725,65 @@ def test_complete_mismatched_series_can_be_named_in_review(missed_entry):
     assessment = check_completeness(spec)
     assert assessment.status == "needs_input"
     assert any(item.field == "series_name[1]" for item in assessment.missing)
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+def test_complete_fallback_grid_can_be_named_in_review(horizontal):
+    from src.tactile.completeness import Overrides, apply_overrides
+
+    chart = _grouped((RED, GREEN))
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    # No semantic identities are available; every bar has mismatch evidence.
+    mapping = LegendMappingFrame(chart.frame().source_key, tuple(
+        LegendBarAssignment(bar.id) for bar in bars))
+    spec, _ = _record_short_rescue(chart, [bar.id for bar in bars], horizontal,
+                                 legend_mapping=mapping)
+
+    assert [series.name for series in spec.series] == [None, None]
+    assert_values(spec, [100, 150, 40], series=0)
+    assert_values(spec, [50, 80, 120], series=1)
+    assert "bar_colour_mismatch:6" in spec.flags
+    assessment = check_completeness(spec)
+    assert assessment.status == "needs_input"
+    assert not assessment.blockers
+    assert {item.field for item in assessment.missing} >= {
+        "series_name[0]", "series_name[1]"}
+
+    corrected, _ = apply_overrides(spec, Overrides(
+        title="Sales", x_axis_title="Group", y_axis_title="Revenue",
+        series_names={0: "Alpha", 1: "Beta"}))
+    assert check_completeness(corrected).status == "ready"
+    assert [series.values for series in corrected.series] == [
+        series.values for series in spec.series]
+
+
+@pytest.mark.parametrize("horizontal", [False, True])
+@pytest.mark.parametrize("failure", ["incomplete", "collision", "order", "missing_evidence"])
+def test_unsafe_fallback_grid_keeps_review_blocked(horizontal, failure):
+    chart = _grouped((RED, GREEN))
+    bars = [d for d in chart.detections if d.role == "vertical_bar"]
+    if failure == "incomplete":
+        # Leave pixels in place: pixel rescue must not establish review eligibility.
+        chart.detections.remove(bars[2])
+    elif failure == "collision":
+        box = bars[0].box
+        moved = Box(box.x1 - 50, bars[2].box.y1, box.x2 - 50, ZERO_Y)
+        chart.detections[chart.detections.index(bars[2])] = replace(bars[2], box=moved)
+        chart.paint((moved.x1, moved.y1, moved.x2, moved.y2), RED)
+    elif failure == "order":
+        for bar, colour in zip(bars[2:4], (GREEN, RED)):
+            box = bar.box
+            chart.paint((box.x1, box.y1, box.x2, box.y2), colour)
+    remaining = [d for d in chart.detections if d.role == "vertical_bar"]
+    mapping = LegendMappingFrame(chart.frame().source_key, tuple(
+        LegendBarAssignment(bar.id) for bar in remaining))
+    mismatch_ids = [bar.id for bar in remaining]
+    if failure == "missing_evidence":
+        mismatch_ids.pop()
+    spec, _ = _record_short_rescue(chart, mismatch_ids, horizontal,
+                                 legend_mapping=mapping)
+
+    assert "series_ambiguous" in spec.flags
+    assert check_completeness(spec).status == "cannot_build"
+    if failure == "collision":
+        assert "category_ambiguous" in spec.flags
