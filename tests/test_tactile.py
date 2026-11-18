@@ -1592,7 +1592,8 @@ class Pipeline(unittest.TestCase):
             out, err = io.StringIO(), io.StringIO()
             code = pipeline.run(args, analyse_fn=lambda *_, **__: (pipeline_spec(series=series), None, None),
                                 input_fn=input, stdin_is_tty=False, out=out, err=err)
-            svg = path.read_text()
+            # Value labels can push the key onto its own page (out-1.svg, out-2.svg, ...).
+            svg = "".join(page.read_text() for page in sorted(path.parent.glob("out*.svg")))
         self.assertEqual(code, 0)
         shown = out.getvalue()
         self.assertIn("0: Low & middle income (no visible bars)", shown)
