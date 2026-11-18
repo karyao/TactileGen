@@ -1,9 +1,10 @@
-"""In-memory OpenCV matching between legend swatches and vertical bars."""
+"""In-memory OpenCV matching between legend swatches and bars."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
+from typing import Literal
 
 from src.diagnostics.tracking import AnalysisDiagnostics
 from src.text_provenance import consumer_text
@@ -368,11 +369,15 @@ def _unavailable_scores(
 
 
 def _score_legend_to_bars(
-    image, detections: DetectionFrame, ocr: OCRFrame | None, *, diagnostics=None
+    image, detections: DetectionFrame, ocr: OCRFrame | None, *,
+    bar_role: Literal["vertical_bar", "horizontal_bar"] = "vertical_bar",
+    diagnostics=None
 ) -> _LegendScores:
     """Compute reusable color errors without applying acceptance thresholds."""
     import numpy as np
 
+    if bar_role not in BAR_ROLES:
+        raise ValueError(f"Unsupported bar_role: {bar_role!r}")
     if not isinstance(image, np.ndarray):
         raise TypeError("image must be a NumPy array")
     if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
@@ -382,7 +387,7 @@ def _score_legend_to_bars(
     if ocr is not None and ocr.source_key != detections.source_key:
         raise ValueError("OCR and detections refer to different source images")
 
-    bars = [item for item in detections.detections if item.role == "vertical_bar"]
+    bars = [item for item in detections.detections if item.role == bar_role]
     if not bars:
         return _LegendScores(detections.source_key, ())
     if ocr is None:
@@ -502,10 +507,14 @@ def match_legend_to_bars(
     *,
     max_error: float = 0.03,
     min_margin: float = 0.01,
+    bar_role: Literal["vertical_bar", "horizontal_bar"] = "vertical_bar",
     diagnostics: AnalysisDiagnostics | None = None,
 ) -> LegendMappingFrame:
-    """Return one deterministic, in-memory legend assignment per vertical bar."""
-    scores = _score_legend_to_bars(image, detections, ocr,
+    """Return one assignment per bar of ``bar_role``, in detection order.
+
+    Vertical bars are selected by default; other roles are ignored.
+    """
+    scores = _score_legend_to_bars(image, detections, ocr, bar_role=bar_role,
         **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     result = _classify_legend_scores(scores, max_error=max_error, min_margin=min_margin)
     if diagnostics is not None:
@@ -578,7 +587,7 @@ def filter_bars_by_legend(
     *,
     max_error: float = COLOUR_MAX_ERROR,
     min_margin: float = 0.01,
-    score_detections: DetectionFrame | None = None,
+    bar_role: Literal["vertical_bar", "horizontal_bar"] = "vertical_bar",
     diagnostics: AnalysisDiagnostics | None = None,
 ) -> LegendFilterResult:
     """Drop the bars whose colour matches no legend swatch, keeping the rest.
@@ -590,23 +599,15 @@ def filter_bars_by_legend(
     unusable crop, a box too small to read, or no OCR) keep their detection and
     receive a decision recording why; nothing is dropped on partial evidence.
 
-    ``score_detections`` scores the same bars under another view of the same
-    image (horizontal charts score swapped roles). ``detections`` alone decides
-    which detections survive, in its own order and with its own roles.
+    Only detections with ``bar_role`` are scored and eligible for removal;
+    all other detections retain their original roles and order.
     """
     max_error = validate_unit_interval(max_error, "max_error")
-    scoring = detections if score_detections is None else score_detections
-    if scoring.source_key != detections.source_key:
-        raise ValueError("scoring detections refer to a different source image")
-    if (scoring.width, scoring.height) != (detections.width, detections.height):
-        raise ValueError("scoring detections have different image dimensions")
-    scores = _score_legend_to_bars(image, scoring, ocr,
+    scores = _score_legend_to_bars(image, detections, ocr, bar_role=bar_role,
         **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     bars_by_id = {
-        item.id: item for item in detections.detections if item.role in BAR_ROLES
+        item.id: item for item in detections.detections if item.role == bar_role
     }
-    if {scored.bar_id for scored in scores.bars} != set(bars_by_id):
-        raise ValueError("scoring detections do not cover the same bars")
     mapping = _classify_legend_scores(scores, max_error=max_error, min_margin=min_margin)
 
     decisions: list[ColourDecision] = []

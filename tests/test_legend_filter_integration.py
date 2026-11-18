@@ -12,7 +12,6 @@ from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.analysis import analyze_image
 from src.presentation import render_detection_overlay, summarize_detections
 from src.reconstruction.legend_matcher import filter_bars_by_legend
-from src.reconstruction.horizontal import filter_hbars_by_legend
 from src.tactile.completeness import CANNOT_BUILD, READY, Completeness
 from src.tactile.pipeline import analyse
 from tests.gradio.session_helpers import make_spec
@@ -30,19 +29,20 @@ def test_consumers_use_filtered_frame(chart, tmp_path, horizontal, blocked, cons
         raw = replace(raw, detections=tuple(
             replace(d, role="horizontal_bar") if d.role == "vertical_bar" else d
             for d in raw.detections))
-    filtered = (filter_hbars_by_legend if horizontal else filter_bars_by_legend)(image, raw, ocr)
+    filtered = filter_bars_by_legend(
+        image, raw, ocr, bar_role="horizontal_bar" if horizontal else "vertical_bar")
     assert filtered.blocked == blocked
     path = tmp_path / "chart.png"
     assert cv2.imwrite(str(path), image)
     spec = make_spec(orientation="horizontal" if horizontal else "vertical")
     diagnostics = AnalysisDiagnostics(settings={})
     module = "src.gradio_ui.analysis" if consumer == "app" else "src.reconstruction"
-    filter_module = module if consumer == "app" else module + (".horizontal" if horizontal else ".legend_matcher")
+    filter_module = module if consumer == "app" else module + ".legend_matcher"
     reconstruct_module = module if consumer == "app" else module + (".horizontal" if horizontal else ".vertical")
     with ExitStack() as stack:
         stack.enter_context(patch((module if consumer == "app" else "src.detection") + ".run_detection", return_value=raw))
         stack.enter_context(patch((module if consumer == "app" else "src.ocr") + ".run_ocr", return_value=ocr))
-        filter_call = stack.enter_context(patch(filter_module + (".filter_hbars_by_legend" if horizontal else ".filter_bars_by_legend"), return_value=filtered))
+        filter_call = stack.enter_context(patch(filter_module + ".filter_bars_by_legend", return_value=filtered))
         reconstruct = stack.enter_context(patch(reconstruct_module + (".reconstruct_hbar" if horizontal else ".reconstruct_vbar"), return_value=spec))
         cutoff = stack.enter_context(patch((module if consumer == "app" else "src.tactile.pipeline") + ".cut_off_flags", return_value=[]))
         if consumer == "app":
@@ -75,6 +75,7 @@ def test_consumers_use_filtered_frame(chart, tmp_path, horizontal, blocked, cons
             else:
                 assert error is None
                 assert result_spec == spec
+        assert filter_call.call_args.kwargs["bar_role"] == ("horizontal_bar" if horizontal else "vertical_bar")
         assert filter_call.call_args.args[1] == raw
         if blocked:
             reconstruct.assert_not_called()

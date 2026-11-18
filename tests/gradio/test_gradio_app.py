@@ -250,9 +250,8 @@ class GradioAnalysisTest(GradioTestCase):
                 with (
                     patch("src.gradio_ui.analysis.run_detection", return_value=frame),
                     patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),
-                    patch("src.gradio_ui.analysis.filter_bars_by_legend") as vertical_match,
                     patch("src.gradio_ui.analysis.reconstruct_vbar") as vertical,
-                    patch("src.gradio_ui.analysis.filter_hbars_by_legend", autospec=True,
+                    patch("src.gradio_ui.analysis.filter_bars_by_legend", autospec=True,
                           return_value=LegendFilterResult(frame, mapping)) as horizontal_match,
                     patch("src.gradio_ui.analysis.reconstruct_hbar", autospec=True,
                           return_value=spec) as horizontal,
@@ -263,7 +262,7 @@ class GradioAnalysisTest(GradioTestCase):
                         diagnostics=diagnostics,
                     )
 
-                vertical_match.assert_not_called()
+                self.assertEqual(horizontal_match.call_args.kwargs["bar_role"], "horizontal_bar")
                 vertical.assert_not_called()
                 self.assertEqual(horizontal_match.call_args.args[1:], (frame, ocr))
                 self.assertEqual(horizontal.call_args.kwargs, {"legend_mapping": mapping})

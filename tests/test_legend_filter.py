@@ -7,7 +7,6 @@ import pytest
 
 from src.contracts import OCRFrame, RecognizedText
 from src.diagnostics.tracking import AnalysisDiagnostics
-from src.reconstruction.horizontal import filter_hbars_by_legend
 from src.reconstruction.legend_matcher import filter_bars_by_legend
 from tests.test_legend_matcher import detection, frame
 
@@ -36,8 +35,9 @@ def test_mixed_colours_filter_in_order_with_evidence(chart, horizontal):
             for d in raw.detections))
     before = asdict(raw)
     diagnostics = AnalysisDiagnostics(settings={})
-    result = (filter_hbars_by_legend if horizontal else filter_bars_by_legend)(
-        image, raw, ocr, diagnostics=diagnostics)
+    result = filter_bars_by_legend(
+        image, raw, ocr, bar_role="horizontal_bar" if horizontal else "vertical_bar",
+        diagnostics=diagnostics)
     assert [d.id for d in result.frame.detections] == ["swatch", "label", "good"]
     assert [a.bar_id for a in result.mapping.assignments] == ["good"]
     assert result.rejected[0].detection is raw.detections[-1]
@@ -81,3 +81,65 @@ def test_cutoff_is_inclusive_and_does_not_depend_on_label_text(chart):
     assert not result.rejected
     assert all(d.outcome == "kept" for d in result.decisions)
     assert all(a.status != "matched" for a in result.mapping.assignments)
+
+
+@pytest.mark.parametrize("bar_role", ["vertical_bar", "horizontal_bar"])
+@pytest.mark.parametrize("blocked", [False, True])
+def test_mixed_roles_only_score_and_remove_selected_bars(chart, bar_role, blocked):
+    from src.reconstruction.legend_matcher import match_legend_to_bars
+
+    image, raw, ocr = chart
+    opposite_role = "horizontal_bar" if bar_role == "vertical_bar" else "vertical_bar"
+    opposite = detection("opposite", opposite_role, (40, 25, 50, 55))
+    raw = replace(raw, detections=(
+        raw.detections[0], opposite, raw.detections[1],
+        *(replace(d, role=bar_role) for d in raw.detections[2:]),
+    ))
+    if blocked:
+        image[25:55, 5:15] = (0, 255, 0)
+    before = asdict(raw)
+    mapping = match_legend_to_bars(image, raw, ocr, bar_role=bar_role)
+    assert [a.bar_id for a in mapping.assignments] == ["good", "bad"]
+    assert mapping.assignments[-1].status == "weak_match"
+    assert mapping.assignments[0].status == ("weak_match" if blocked else "matched")
+    result = filter_bars_by_legend(image, raw, ocr, bar_role=bar_role)
+    assert result.blocked == blocked
+    assert [d.bar_id for d in result.decisions] == ["good", "bad"]
+    assert [d.id for d in result.frame.detections] == (
+        ["swatch", "opposite", "label"] + ([] if blocked else ["good"]))
+    assert result.frame.detections[1] is opposite
+    assert [a.bar_id for a in result.mapping.assignments] == ([] if blocked else ["good"])
+    assert all(r.detection is next(d for d in raw.detections if d.id == r.detection.id)
+               for r in result.rejected)
+    assert asdict(raw) == before
+
+
+@pytest.mark.parametrize("bar_role", ["vertical_bar", "horizontal_bar"])
+def test_no_selected_bars_keeps_original_frame(chart, bar_role):
+    from src.reconstruction.legend_matcher import match_legend_to_bars
+
+    image, raw, ocr = chart
+    opposite_role = "horizontal_bar" if bar_role == "vertical_bar" else "vertical_bar"
+    raw = replace(raw, detections=tuple(
+        replace(d, role=opposite_role) if d.role == "vertical_bar" else d
+        for d in raw.detections))
+    assert not match_legend_to_bars(image, raw, ocr, bar_role=bar_role).assignments
+    result = filter_bars_by_legend(image, raw, ocr, bar_role=bar_role)
+    assert result.frame is raw
+    assert not result.mapping.assignments
+    assert not result.decisions
+    assert not result.rejected
+    assert not result.blocked
+
+
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("function", ["match_legend_to_bars", "filter_bars_by_legend",
+                                     "_score_legend_to_bars"])
+def test_invalid_bar_role_is_rejected(chart, empty, function):
+    from src.reconstruction import legend_matcher
+
+    image, raw, ocr = chart
+    if empty:
+        raw = replace(raw, detections=())
+    with pytest.raises(ValueError, match="bar_role"):
+        getattr(legend_matcher, function)(image, raw, ocr, bar_role="dot")

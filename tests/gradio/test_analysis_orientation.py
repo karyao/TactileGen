@@ -44,7 +44,7 @@ def test_uncertainty_skips_every_downstream_call(image_path, diagnostic, prefere
     raw = DetectionFrame("input/chart.png", 100, 80, (TITLE, *bars))
     diagnostics = AnalysisDiagnostics(settings={}) if diagnostic else None
     factory = Mock()
-    names = ("TesseractBackend", "run_ocr", "filter_bars_by_legend", "filter_hbars_by_legend",
+    names = ("TesseractBackend", "run_ocr", "filter_bars_by_legend",
              "reconstruct_vbar", "reconstruct_hbar", "cut_off_flags", "check_completeness")
     with ExitStack() as stack:
         stack.enter_context(patch("src.gradio_ui.analysis.run_detection", return_value=raw))
@@ -116,13 +116,14 @@ def test_effective_frame_reaches_all_consumers(image_path, diagnostic, preferenc
         stack.enter_context(patch("src.gradio_ui.analysis.run_detection", return_value=raw))
         ocr = stack.enter_context(patch("src.gradio_ui.analysis.run_ocr", return_value=OCRFrame("input/chart.png", ())))
         calls = {}
-        for orientation, match_name, reconstruct_name in (
-            ("vertical", "filter_bars_by_legend", "reconstruct_vbar"),
-            ("horizontal", "filter_hbars_by_legend", "reconstruct_hbar"),
+        matcher = stack.enter_context(patch("src.gradio_ui.analysis.filter_bars_by_legend",
+                                            side_effect=passthrough_filter))
+        for orientation, reconstruct_name in (
+            ("vertical", "reconstruct_vbar"),
+            ("horizontal", "reconstruct_hbar"),
         ):
             calls[orientation] = (
-                stack.enter_context(patch("src.gradio_ui.analysis." + match_name,
-                                          side_effect=passthrough_filter)),
+                matcher,
                 stack.enter_context(patch("src.gradio_ui.analysis." + reconstruct_name,
                                           return_value=make_spec(orientation=orientation))),
             )
@@ -139,13 +140,14 @@ def test_effective_frame_reaches_all_consumers(image_path, diagnostic, preferenc
     matcher, reconstruct = calls[selected]
     for call, index in ((ocr, 1), (matcher, 1), (reconstruct, 0), (cutoff, 0), (overlay, 1), (summary, 0)):
         assert call.call_args.args[index] is effective
-    for call in calls["horizontal" if selected == "vertical" else "vertical"]:
-        call.assert_not_called()
+    calls["horizontal" if selected == "vertical" else "vertical"][1].assert_not_called()
+    assert matcher.call_args.kwargs["bar_role"] == selected + "_bar"
     assert complete.call_args.args[0] is result.spec
     assert result.spec.orientation == selected
     assert "Bar orientation: " + selected in result.summary
     if selected == "horizontal":
-        assert matcher.call_args.kwargs == ({"diagnostics": diagnostics} if diagnostic else {})
+        assert matcher.call_args.kwargs == {"bar_role": "horizontal_bar",
+                                             **({"diagnostics": diagnostics} if diagnostic else {})}
         assert "diagnostics" not in reconstruct.call_args.kwargs
     assert asdict(raw) == before
     if diagnostics:

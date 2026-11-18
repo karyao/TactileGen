@@ -31,11 +31,7 @@ from src.contracts import (
     NO_BARS_MATCHED_LEGEND,
     VerticalBarSpec,
 )
-from src.reconstruction.legend_matcher import (
-    LegendFilterResult,
-    filter_bars_by_legend,
-    match_legend_to_bars,
-)
+from src.reconstruction.legend_matcher import filter_bars_by_legend
 from src.reconstruction.vertical import (
     MIN_CONFIDENCE,
     TITLE_EDGE_PX,
@@ -95,31 +91,6 @@ def transpose_image(image: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(np.swapaxes(image, 0, 1))
 
 
-def bars_as_vertical(frame: DetectionFrame) -> DetectionFrame:
-    """Same boxes, with horizontal bars labelled as the bars the legend matcher reads."""
-    swap = {"horizontal_bar": "vertical_bar", "vertical_bar": "horizontal_bar"}
-    return replace(frame, detections=tuple(
-        replace(d, role=swap.get(d.role, d.role)) for d in frame.detections))
-
-
-def match_legend_to_hbars(image: np.ndarray, frame: DetectionFrame,
-                          ocr: OCRFrame | None) -> LegendMappingFrame:
-    """Legend assignments for the horizontal bars, one per bar in detection order."""
-    return match_legend_to_bars(image, bars_as_vertical(frame), ocr)
-
-
-def filter_hbars_by_legend(image: np.ndarray, frame: DetectionFrame,
-                           ocr: OCRFrame | None, **kwargs) -> LegendFilterResult:
-    """Colour-filter the horizontal bars, scoring the legend on the same boxes.
-
-    Same arguments and meaning as ``filter_bars_by_legend``; ``frame`` keeps the
-    horizontal roles and only horizontal bars are dropped.
-    """
-    kwargs.pop("score_detections", None)
-    return filter_bars_by_legend(image, frame, ocr,
-                                 score_detections=bars_as_vertical(frame), **kwargs)
-
-
 def reconstruct_hbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      min_confidence: float = MIN_CONFIDENCE,
                      rescue_bars: bool = True,
@@ -138,7 +109,8 @@ def reconstruct_hbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     if legend_mapping is None:
         legend_ocr = (ocr_texts if isinstance(ocr_texts, OCRFrame)
                       else _legend_ocr_frame(frame, _text_table(ocr_texts)))
-        filtered = filter_hbars_by_legend(image, frame, legend_ocr)
+        filtered = filter_bars_by_legend(image, frame, legend_ocr,
+                                         bar_role="horizontal_bar")
         if filtered.blocked:
             raise ChartInterpretationError(NO_BARS_MATCHED_LEGEND)
         frame = filtered.frame

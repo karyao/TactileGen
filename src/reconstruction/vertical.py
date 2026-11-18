@@ -561,7 +561,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             if isinstance(ocr_texts, OCRFrame)
             else _legend_ocr_frame(frame, texts)
         )
-        filtered = filter_bars_by_legend(image, frame, legend_ocr,
+        filtered = filter_bars_by_legend(image, frame, legend_ocr, bar_role="vertical_bar",
             **({"diagnostics": diagnostics} if diagnostics is not None else {}))
         if filtered.blocked:
             trace("reconstruction_blocked", reason="no_bars_matched_legend",

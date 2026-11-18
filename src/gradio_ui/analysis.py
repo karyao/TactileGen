@@ -41,7 +41,6 @@ from src.ocr import run_ocr
 from src.presentation import render_detection_overlay, summarize_detections
 from src.reconstruction.vertical import reconstruct_vbar
 from src.reconstruction.horizontal import (
-    filter_hbars_by_legend,
     reconstruct_hbar,
 )
 from src.tactile.completeness import (
@@ -281,8 +280,10 @@ def analyze_image(
         colour_filter = None
         try:
             with stage("legend_matching"):
-                filter_legend = filter_hbars_by_legend if horizontal else filter_bars_by_legend
-                colour_filter = filter_legend(image, frame, ocr_frame, **diagnostic_options)
+                colour_filter = filter_bars_by_legend(
+                    image, frame, ocr_frame,
+                    bar_role="horizontal_bar" if horizontal else "vertical_bar",
+                    **diagnostic_options)
                 # Every later stage sees the bars the colour check kept, so the
                 # overlay, the detection count and the reconstruction agree.
                 frame = colour_filter.frame

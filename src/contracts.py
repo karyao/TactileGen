@@ -276,8 +276,8 @@ def join_legend_assignments(
 ) -> tuple[tuple[Detection, LegendBarAssignment], ...]:
     """Validate and join one legend assignment to every bar.
 
-    The assignments cover every vertical bar, or, for a horizontal bar chart
-    (``src.reconstruction.horizontal.match_legend_to_hbars``), every horizontal bar.
+    The assignments cover every bar of the role selected by the legend matcher,
+    in detection order.
     """
     if detections.source_key != mapping.source_key:
         raise ValueError("Legend mapping and detections refer to different source images")

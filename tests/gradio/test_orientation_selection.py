@@ -89,7 +89,6 @@ def test_preference_reruns_uncertainty_and_generation_reset(app, tmp_path):
     with patch("src.gradio_ui.analysis.run_detection", return_value=frame(.9, .2)) as detect, \
          patch("src.gradio_ui.analysis.run_ocr", return_value=OCRFrame("input/chart.png", ())) as ocr, \
          patch("src.gradio_ui.analysis.filter_bars_by_legend", side_effect=passthrough_filter), \
-         patch("src.gradio_ui.analysis.filter_hbars_by_legend", side_effect=passthrough_filter), \
          patch("src.gradio_ui.analysis.reconstruct_vbar", return_value=make_spec()), \
          patch("src.gradio_ui.analysis.reconstruct_hbar", return_value=make_spec(orientation="horizontal")), \
          patch("src.gradio_ui.analysis.cut_off_flags", return_value=[]):

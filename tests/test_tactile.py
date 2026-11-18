@@ -1211,7 +1211,7 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.ocr.tesseract.TesseractBackend", return_value=backend),
             mock.patch(
                 "src.reconstruction.legend_matcher.filter_bars_by_legend",
-                side_effect=lambda image, frame, ocr: LegendFilterResult(frame, mapping)
+                side_effect=lambda image, frame, ocr, **kwargs: LegendFilterResult(frame, mapping)
             ) as matcher,
             mock.patch(
                 "src.reconstruction.vertical.reconstruct_vbar", return_value=reconstructed
@@ -1223,7 +1223,7 @@ class Pipeline(unittest.TestCase):
         effective = matcher.call_args.args[1]
         self.assertEqual([d.role for d in effective.detections], ["vertical_bar"] * 3)
         ocr_call.assert_called_once_with(image, effective, backend, "eng")
-        matcher.assert_called_once_with(image, effective, ocr)
+        matcher.assert_called_once_with(image, effective, ocr, bar_role="vertical_bar")
         reconstruct.assert_called_once_with(
             effective, ocr, image, legend_mapping=mapping
         )
@@ -1424,8 +1424,7 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr) as ocr_call,
             mock.patch("src.ocr.tesseract.TesseractBackend", return_value=mock.sentinel.backend),
-            mock.patch("src.reconstruction.legend_matcher.filter_bars_by_legend") as vertical_matcher,
-            mock.patch("src.reconstruction.horizontal.filter_hbars_by_legend",
+            mock.patch("src.reconstruction.legend_matcher.filter_bars_by_legend",
                        side_effect=passthrough_filter) as horizontal_filter,
             mock.patch("src.reconstruction.horizontal.reconstruct_hbar",
                        return_value=reconstructed) as reconstruct,
@@ -1436,9 +1435,8 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([d.role for d in effective.detections], ["horizontal_bar"] * 3)
         ocr_call.assert_called_once_with(image, effective, mock.sentinel.backend, "eng")
         reconstruct.assert_called_once_with(effective, ocr, image,
-                                            legend_mapping=passthrough_filter(image, effective, ocr).mapping)
-        horizontal_filter.assert_called_once_with(image, effective, ocr)
-        vertical_matcher.assert_not_called()
+                                            legend_mapping=passthrough_filter(image, effective, ocr, bar_role="horizontal_bar").mapping)
+        horizontal_filter.assert_called_once_with(image, effective, ocr, bar_role="horizontal_bar")
         cut_off.assert_called_once_with(effective, image)
         self.assertEqual(result, (reconstructed, None, effective))
         self.assertEqual(len(raw.detections), 4)  # raw detections untouched
@@ -1528,7 +1526,7 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.ocr.tesseract.TesseractBackend",
                        return_value=mock.sentinel.backend),
             mock.patch("src.reconstruction.legend_matcher.filter_bars_by_legend",
-                       side_effect=lambda image, frame, ocr: LegendFilterResult(frame, mapping)) as matcher,
+                       side_effect=lambda image, frame, ocr, **kwargs: LegendFilterResult(frame, mapping)) as matcher,
             mock.patch("src.reconstruction.vertical.reconstruct_vbar",
                        return_value=reconstructed) as reconstruct,
             mock.patch("src.reconstruction.horizontal.reconstruct_hbar") as h_reconstruct,

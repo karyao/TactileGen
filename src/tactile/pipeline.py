@@ -89,7 +89,7 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     from src.reconstruction.legend_matcher import filter_bars_by_legend
     from src.ocr import run_ocr
     from src.reconstruction.vertical import reconstruct_vbar
-    from src.reconstruction.horizontal import filter_hbars_by_legend, reconstruct_hbar
+    from src.reconstruction.horizontal import reconstruct_hbar
 
     image = cv2.imread(str(image_path))
     if image is None:
@@ -103,9 +103,9 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     backend, language = _ocr_backend(ocr_engine)
     ocr = run_ocr(image, frame, backend, language)
     try:
-        filter_legend = (filter_hbars_by_legend if resolution.orientation == "horizontal"
-                         else filter_bars_by_legend)
-        colour_filter = filter_legend(image, frame, ocr)
+        colour_filter = filter_bars_by_legend(
+            image, frame, ocr,
+            bar_role="horizontal_bar" if resolution.orientation == "horizontal" else "vertical_bar")
         if colour_filter.blocked:
             return None, ChartInterpretationError(NO_BARS_MATCHED_LEGEND), colour_filter.frame
         frame = colour_filter.frame
