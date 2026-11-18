@@ -1,4 +1,5 @@
 from tests.gradio.callback_helpers import invoke
+from tests.gradio.session_helpers import make_spec
 """Gradio startup, analysis, review, callbacks, components, theme, and diagnostics."""
 
 import contextlib
@@ -30,8 +31,6 @@ from src.contracts import (
     OCRFrame,
     RecognizedText,
     SeriesSpec,
-    VerticalBarSpec,
-    YAxisSpec,
 )
 from src.diagnostics import AnalysisDiagnostics
 from src.gradio_app import (
@@ -70,25 +69,6 @@ from src.tactile.completeness import CANNOT_BUILD, Completeness, MissingItem, NE
 
 from tests.test_ocr import IMAGE, SHORT, collector, fake_rapidocr, output
 from tests.test_reconstruct import base_chart
-
-
-# Gradio fixtures
-
-def make_spec(**changes):
-    fields = dict(
-        source_key="input/chart.png",
-        title="Sales",
-        x_axis_title="Year",
-        y_axis_title="Revenue",
-        y_axis=YAxisSpec(0, 100, [0, 50, 100]),
-        categories=["2024"],
-        series=[SeriesSpec(None, "#112233", [50.0])],
-        bars_adjacent=False,
-        flags=[],
-        confidence={},
-    )
-    fields.update(changes)
-    return VerticalBarSpec(**fields)
 
 
 class GradioTestCase(unittest.TestCase):

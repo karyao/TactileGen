@@ -14,7 +14,7 @@ from src.diagnostics import AnalysisDiagnostics
 from src.gradio_ui.analysis import analyze_image
 from src.presentation import render_detection_overlay, summarize_detections
 from src.tactile.completeness import Completeness, READY
-from tests.gradio.test_gradio_app import make_spec
+from tests.gradio.session_helpers import make_spec
 from tests.test_diagnostics import assert_links
 
 

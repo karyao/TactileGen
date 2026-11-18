@@ -12,7 +12,7 @@ from src.contracts import Box, Detection, DetectionFrame, LegendBarAssignment, L
 from src.gradio_app import build_app
 from src.gradio_ui.components import AnalysisComponents, GenerationComponents
 from src.gradio_ui.review import review_text_rows
-from tests.gradio.test_gradio_app import make_spec
+from tests.gradio.session_helpers import make_spec
 
 
 @pytest.fixture
@@ -121,11 +121,11 @@ def test_preference_reruns_uncertainty_and_generation_reset(app, tmp_path):
         assert "horizontal" in horizontal["orientation_output"]["value"]
         assert "manual" in horizontal["orientation_output"]["value"]
         assert settings(horizontal)["bar_orientation"] == "horizontal"
-        assert run("horizontal")["spec_output"]["value"]["orientation"] == "horizontal"
+        assert horizontal["spec_output"]["value"]["orientation"] == "horizontal"
 
         detect.return_value = frame(0, .9)
         unavailable = run("vertical")
         assert_cleared(unavailable)
         assert "No usable vertical bars were detected" in unavailable["orientation_output"]["value"]
         assert "Check the requested orientation or image" in unavailable["orientation_output"]["value"]
-        assert ocr.call_count == 3
+        assert ocr.call_count == 2
