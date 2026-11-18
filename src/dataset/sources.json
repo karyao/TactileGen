@@ -1,0 +1,21 @@
+{
+  "plotqa": {
+    "source": "https://github.com/NiteshMethani/PlotQA/blob/master/PlotQA_Dataset.md",
+    "release": "official detection assets (Drive file IDs, checked 2026-11-17)",
+    "license": "CC-BY-4.0",
+    "splits": {
+      "train": {"images": "1AYuaPX-Lx7T0GZvnsPgN11Twq2FZbWXL", "annotations": "1VzWwxBVrlep17BGZU17GpLuGpwjyWbzq"},
+      "val": {"images": "1i74NRCEb-x44xqzAovuglex5d583qeiF", "annotations": "1CCp1tvMd62LfBrWa6pRdb1lpg68A2yFw"},
+      "test": {"images": "1D_WPUy91vOrFl6cJUkE55n3ZuB6Qrc4u", "annotations": "1ikiPqkDgxNilYsU5hbK03T4_x2eDmopP"}
+    }
+  },
+  "chartqa": {
+    "source": "https://github.com/vis-nlp/ChartQA",
+    "repo_id": "ahmed-masry/ChartQA",
+    "revision": "af8b6f5c08c95085271561c2a3f9d15f2b5a9031",
+    "filename": "ChartQA Dataset.zip",
+    "size": 875370872,
+    "sha256": "1bf310e5a51101681495c4a24f4f29d22c4f70b52df24e2e4feb0d79cae3c160",
+    "license": "gpl-3.0 (Hugging Face dataset card)"
+  }
+}
