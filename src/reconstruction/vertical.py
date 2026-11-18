@@ -899,6 +899,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
     unaccounted = eligible_mismatched.copy()
+    rescue_measurements = []
     for c, members in enumerate(clusters):
         row: list[float | None] = [None] * len(categories)
         kept: dict[int, int] = {}
@@ -936,9 +937,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                     continue
                 centre_x = label_x[j] + offset
                 measured = _rescue_value(rgb, centre_x, bar_width, baseline, a, centre)
-                trace_series("pixel_rescue", series_index=c, category_index=j,
-                      center_x=centre_x, width=bar_width, baseline=baseline,
-                      value=measured, inferred_zero=measured == 0.0)
+                rescue_measurements.append((c, j, centre_x, measured))
                 rescued_zero += measured == 0.0
                 row[j] = measured
                 rescued[j] = True
@@ -968,6 +967,34 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             source = diagnostics.field_source(f"series_name[{c}]",
                 [identity[1]] if identity and name else [], [event_id])
             series_sources[id(series[-1])] = source
+    # Resolve provenance across every rescued slot before clearing any blocker.
+    # A slot value alone does not identify the short detection it replaced.
+    candidates_by_slot = {}
+    slots_by_bar = {}
+    for c, j, centre_x, measured in rescue_measurements:
+        candidates = []
+        if measured != 0.0:
+            for k in sorted(short):
+                bar = bars[k]
+                if bar_label[k] != j or not bar.box.x1 <= centre_x <= bar.box.x2:
+                    continue
+                assignment = assignment_by_bar.get(bar.id)
+                if assignment is not None and assignment.status == "matched":
+                    identity = (assignment.swatch_id, assignment.label_id, assignment.series_name)
+                    if identity != cluster_identities[c]:
+                        continue
+                candidates.append(k)
+                slots_by_bar.setdefault(k, []).append((c, j))
+        candidates_by_slot[c, j] = candidates
+    for c, j, centre_x, measured in rescue_measurements:
+        candidates = candidates_by_slot[c, j]
+        bar_id = None
+        if len(candidates) == 1 and len(slots_by_bar[candidates[0]]) == 1:
+            bar_id = bars[candidates[0]].id
+            unaccounted.discard(bar_id)
+        trace_series("pixel_rescue", series_index=c, category_index=j,
+              center_x=centre_x, width=bar_width, baseline=baseline,
+              value=measured, inferred_zero=measured == 0.0, bar_id=bar_id)
     # Share of category x series slots (for series with at least one detected
     # bar) that had a detected bar; very short bars were detected, just re-measured.
     slots = len(categories) * len(clusters)
