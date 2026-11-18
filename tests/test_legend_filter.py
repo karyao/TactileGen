@@ -1,4 +1,4 @@
-"""Colour filtering retains uncertain evidence and removes proven mismatches."""
+"""Legend colour checks report mismatches without discarding bars."""
 from dataclasses import asdict, replace
 from unittest.mock import patch
 
@@ -38,14 +38,14 @@ def test_mixed_colours_filter_in_order_with_evidence(chart, horizontal):
     result = filter_bars_by_legend(
         image, raw, ocr, bar_role="horizontal_bar" if horizontal else "vertical_bar",
         diagnostics=diagnostics)
-    assert [d.id for d in result.frame.detections] == ["swatch", "label", "good"]
-    assert [a.bar_id for a in result.mapping.assignments] == ["good"]
-    assert result.rejected[0].detection is raw.detections[-1]
-    assert [(d.bar_id, d.outcome) for d in result.decisions] == [("good", "kept"), ("bad", "rejected")]
-    assert not result.blocked
+    assert result.frame is raw
+    assert [a.bar_id for a in result.mapping.assignments] == ["good", "bad"]
+    assert result.mapping.assignments[-1].status == "weak_match"
+    assert result.mismatched_bar_ids == ("bad",)
+    assert [(d.bar_id, d.outcome) for d in result.decisions] == [("good", "kept"), ("bad", "mismatch")]
     assert asdict(raw) == before
     events = diagnostics.record["events"]
-    assert events[-1]["rejected_bar_ids"] == ["bad"]
+    assert events[-1]["mismatched_bar_ids"] == ["bad"]
 
 
 @pytest.mark.parametrize("guard", ["ocr", "legend", "incomplete", "tiny", "crop"])
@@ -63,8 +63,7 @@ def test_unreliable_evidence_keeps_bars(chart, guard):
             detection("bad", "vertical_bar", (40, 25, 45 if guard == "tiny" else 41, 55))))
     result = filter_bars_by_legend(image, raw, ocr)
     assert result.frame is raw
-    assert not result.rejected
-    assert not result.blocked
+    assert not result.mismatched_bar_ids
     assert [a.bar_id for a in result.mapping.assignments] == ["good", "bad"]
     expected_reason = {"ocr": "ocr_unavailable", "legend": "no_legend",
                        "incomplete": "incomplete_legend", "tiny": "unreliable_colour",
@@ -78,14 +77,14 @@ def test_cutoff_is_inclusive_and_does_not_depend_on_label_text(chart):
     ocr = OCRFrame(raw.source_key, (RecognizedText("label", "", 1),))
     with patch("src.reconstruction.legend_matcher._candidate_error", return_value=.03):
         result = filter_bars_by_legend(image, raw, ocr)
-    assert not result.rejected
+    assert not result.mismatched_bar_ids
     assert all(d.outcome == "kept" for d in result.decisions)
     assert all(a.status != "matched" for a in result.mapping.assignments)
 
 
 @pytest.mark.parametrize("bar_role", ["vertical_bar", "horizontal_bar"])
-@pytest.mark.parametrize("blocked", [False, True])
-def test_mixed_roles_only_score_and_remove_selected_bars(chart, bar_role, blocked):
+@pytest.mark.parametrize("all_mismatch", [False, True])
+def test_mixed_roles_only_score_selected_bars(chart, bar_role, all_mismatch):
     from src.reconstruction.legend_matcher import match_legend_to_bars
 
     image, raw, ocr = chart
@@ -95,22 +94,18 @@ def test_mixed_roles_only_score_and_remove_selected_bars(chart, bar_role, blocke
         raw.detections[0], opposite, raw.detections[1],
         *(replace(d, role=bar_role) for d in raw.detections[2:]),
     ))
-    if blocked:
+    if all_mismatch:
         image[25:55, 5:15] = (0, 255, 0)
     before = asdict(raw)
     mapping = match_legend_to_bars(image, raw, ocr, bar_role=bar_role)
     assert [a.bar_id for a in mapping.assignments] == ["good", "bad"]
     assert mapping.assignments[-1].status == "weak_match"
-    assert mapping.assignments[0].status == ("weak_match" if blocked else "matched")
+    assert mapping.assignments[0].status == ("weak_match" if all_mismatch else "matched")
     result = filter_bars_by_legend(image, raw, ocr, bar_role=bar_role)
-    assert result.blocked == blocked
+    assert result.frame is raw
+    assert result.mapping == mapping
     assert [d.bar_id for d in result.decisions] == ["good", "bad"]
-    assert [d.id for d in result.frame.detections] == (
-        ["swatch", "opposite", "label"] + ([] if blocked else ["good"]))
-    assert result.frame.detections[1] is opposite
-    assert [a.bar_id for a in result.mapping.assignments] == ([] if blocked else ["good"])
-    assert all(r.detection is next(d for d in raw.detections if d.id == r.detection.id)
-               for r in result.rejected)
+    assert result.mismatched_bar_ids == (("good", "bad") if all_mismatch else ("bad",))
     assert asdict(raw) == before
 
 
@@ -128,8 +123,7 @@ def test_no_selected_bars_keeps_original_frame(chart, bar_role):
     assert result.frame is raw
     assert not result.mapping.assignments
     assert not result.decisions
-    assert not result.rejected
-    assert not result.blocked
+    assert not result.mismatched_bar_ids
 
 
 @pytest.mark.parametrize("empty", [False, True])

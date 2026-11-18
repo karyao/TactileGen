@@ -28,7 +28,6 @@ from src.contracts import (
     DetectionFrame,
     LegendMappingFrame,
     OCRFrame,
-    NO_BARS_MATCHED_LEGEND,
     VerticalBarSpec,
 )
 from src.reconstruction.legend_matcher import filter_bars_by_legend
@@ -96,32 +95,25 @@ def reconstruct_hbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      rescue_bars: bool = True,
                      category_guard: bool = True, *,
                      legend_mapping: LegendMappingFrame | None = None,
-                     rejected_bars: tuple[Detection, ...] = ()
+                     mismatched_bar_ids: tuple[str, ...] = ()
                      ) -> VerticalBarSpec:
     """Turn detections plus OCR of a horizontal bar chart into a spec.
 
     Same arguments and errors as ``reconstruct_vbar``; the returned spec has
     ``orientation="horizontal"`` (see the module docstring for its axes).
-    ``rejected_bars`` are detections in this frame's own coordinates that a
-    legend colour check already dropped.
     """
-    rejected_bars = tuple(rejected_bars)
     if legend_mapping is None:
         legend_ocr = (ocr_texts if isinstance(ocr_texts, OCRFrame)
                       else _legend_ocr_frame(frame, _text_table(ocr_texts)))
         filtered = filter_bars_by_legend(image, frame, legend_ocr,
                                          bar_role="horizontal_bar")
-        if filtered.blocked:
-            raise ChartInterpretationError(NO_BARS_MATCHED_LEGEND)
-        frame = filtered.frame
         legend_mapping = filtered.mapping
-        rejected_bars = (*rejected_bars,
-                         *(item.detection for item in filtered.rejected))
+        mismatched_bar_ids = (*mismatched_bar_ids, *filtered.mismatched_bar_ids)
     try:
         spec = reconstruct_vbar(transpose_frame(frame), ocr_texts, transpose_image(image),
                                 min_confidence, rescue_bars, category_guard,
                                 legend_mapping=legend_mapping,
-                                rejected_bars=tuple(_swapped(d) for d in rejected_bars))
+                                mismatched_bar_ids=mismatched_bar_ids)
     except ChartInterpretationError as error:
         raise ChartInterpretationError(_ERRORS.get(str(error), str(error))) from error
 

@@ -25,7 +25,6 @@ from pathlib import Path
 from src.bar_orientation import BarOrientationResult, resolve_bar_orientation
 from src.contracts import (
     ChartInterpretationError,
-    NO_BARS_MATCHED_LEGEND,
     VerticalBarSpec,
 )
 from src.tactile.completeness import (
@@ -79,9 +78,8 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     """Run YOLO, resolve bar orientation, then OCR and reconstruction.
 
     Returns ``(spec, None, frame)`` or ``(None, error, frame)``. On success the
-    frame is the resolver's effective frame with opposite-orientation bars and
-    bars that matched no legend swatch removed; on uncertainty it is the raw
-    detection frame.
+    frame is the resolver's effective frame with opposite-orientation bars
+    removed. On uncertainty it is the raw detection frame.
     """
     import cv2
 
@@ -106,18 +104,15 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
         colour_filter = filter_bars_by_legend(
             image, frame, ocr,
             bar_role="horizontal_bar" if resolution.orientation == "horizontal" else "vertical_bar")
-        if colour_filter.blocked:
-            return None, ChartInterpretationError(NO_BARS_MATCHED_LEGEND), colour_filter.frame
-        frame = colour_filter.frame
         legend_mapping = colour_filter.mapping
-        rejected_bars = tuple(item.detection for item in colour_filter.rejected)
+        mismatched_bar_ids = colour_filter.mismatched_bar_ids
         if resolution.orientation == "horizontal":
             spec = reconstruct_hbar(frame, ocr, image, legend_mapping=legend_mapping,
-                                    rejected_bars=rejected_bars)
+                                    mismatched_bar_ids=mismatched_bar_ids)
         else:
             spec = reread_categories(
                 reconstruct_vbar(frame, ocr, image, legend_mapping=legend_mapping,
-                                 rejected_bars=rejected_bars),
+                                 mismatched_bar_ids=mismatched_bar_ids),
                 frame, image)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:
@@ -188,12 +183,16 @@ def _print_missing(result: Completeness, out) -> None:
     for item in result.missing:
         print(f"  {item.field}: {item.reason} Supply it with {item.cli_flag}", file=out)
     print("Or put the same fields in a JSON file and pass --overrides FILE.", file=out)
+    for note in result.notes:
+        print(f"Note: {note}", file=out)
 
 
 def _print_blockers(result: Completeness, out, *, forceable_hint: bool) -> None:
     print("This chart cannot be turned into a tactile graphic:", file=out)
     for blocker in result.blockers:
         print(f"  - {blocker}", file=out)
+    for note in result.notes:
+        print(f"Note: {note}", file=out)
     if forceable_hint and result.forceable:
         print("  --force continues past these ambiguity warnings at your own risk.", file=out)
 

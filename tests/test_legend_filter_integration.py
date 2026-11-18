@@ -1,4 +1,4 @@
-"""The app and CLI share the filtered frame and stop when all bars are rejected."""
+"""The app and CLI forward every bar and its mismatch evidence."""
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,12 +7,11 @@ from unittest.mock import patch
 import cv2
 import pytest
 
-from src.contracts import ChartInterpretationError, NO_BARS_MATCHED_LEGEND
 from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.analysis import analyze_image
 from src.presentation import render_detection_overlay, summarize_detections
 from src.reconstruction.legend_matcher import filter_bars_by_legend
-from src.tactile.completeness import CANNOT_BUILD, READY, Completeness
+from src.tactile.completeness import READY, Completeness
 from src.tactile.pipeline import analyse
 from tests.gradio.session_helpers import make_spec
 from tests.test_legend_filter import chart
@@ -24,24 +23,23 @@ def orientation(request):
 
 
 @pytest.fixture(params=["none", "some", "all"])
-def rejection(request):
+def mismatch(request):
     return request.param
 
 
 @pytest.fixture
-def legend_case(chart, tmp_path, orientation, rejection):
+def legend_case(chart, tmp_path, orientation, mismatch):
     image, raw, ocr = chart
-    if rejection == "none":
+    if mismatch == "none":
         image[25:55, 40:50] = (0, 0, 255)
-    elif rejection == "all":
+    elif mismatch == "all":
         image[25:55, 5:15] = (0, 255, 0)
     bar_role = orientation + "_bar"
     raw = replace(raw, detections=tuple(
         replace(d, role=bar_role) if d.role == "vertical_bar" else d
         for d in raw.detections))
     filtered = filter_bars_by_legend(image, raw, ocr, bar_role=bar_role)
-    assert len(filtered.rejected) == {"none": 0, "some": 1, "all": 2}[rejection]
-    assert filtered.blocked == (rejection == "all")
+    assert len(filtered.mismatched_bar_ids) == {"none": 0, "some": 1, "all": 2}[mismatch]
     path = tmp_path / "chart.png"
     assert cv2.imwrite(str(path), image)
     return SimpleNamespace(
@@ -51,7 +49,7 @@ def legend_case(chart, tmp_path, orientation, rejection):
     )
 
 
-def test_app_uses_filtered_frame(legend_case):
+def test_app_preserves_orientation_frame(legend_case):
     case = legend_case
     filtered = case.filtered
     diagnostics = AnalysisDiagnostics(settings={})
@@ -78,32 +76,25 @@ def test_app_uses_filtered_frame(legend_case):
     assert filter_call.call_args.kwargs["bar_role"] == case.bar_role
     assert filter_call.call_args.args[1] == case.raw
     assert result.orientation_result.effective_frame is filter_call.call_args.args[1]
-    assert overlay.call_args.args[1] is filtered.frame
-    assert summary.call_args.args[0] is filtered.frame
-    assert result.detection_frame is filtered.frame
+    assert overlay.call_args.args[1] is filter_call.call_args.args[1]
+    assert summary.call_args.args[0] is filter_call.call_args.args[1]
+    assert result.detection_frame is filter_call.call_args.args[1]
     assert result.detection_count == len(filtered.frame.detections)
     assert result.legend_mapping is filtered.mapping
     assert diagnostics.record["outputs"]["detections"] == asdict(case.raw)
-    assert diagnostics.record["outputs"]["legend_filtered_detections"] == asdict(filtered.frame)
-    assert diagnostics.record["counts"]["colour_rejected_bars"] == len(filtered.rejected)
-    if filtered.blocked:
-        assert result.spec is None
-        assert result.completeness.status == CANNOT_BUILD
-        assert "No detected bar matched the legend colours" in result.completeness.blockers[0]
-        reconstruct.assert_not_called()
-        cutoff.assert_not_called()
-        completeness.assert_not_called()
-    else:
-        assert result.spec == case.spec
-        assert reconstruct.call_args.args[0] is filtered.frame
-        assert reconstruct.call_args.kwargs["legend_mapping"] is filtered.mapping
-        assert reconstruct.call_args.kwargs["rejected_bars"] == tuple(
-            item.detection for item in filtered.rejected)
-        assert cutoff.call_args.args[0] is filtered.frame
-        assert completeness.call_args.args[0] is result.spec
+    assert diagnostics.record["counts"]["colour_mismatched_bars"] == len(filtered.mismatched_bar_ids)
+    assert bool(result.legend_warning) == bool(filtered.mismatched_bar_ids)
+    if filtered.mismatched_bar_ids:
+        assert "Review the series assignments" in result.legend_warning
+    assert result.spec == case.spec
+    assert reconstruct.call_args.args[0] is filter_call.call_args.args[1]
+    assert reconstruct.call_args.kwargs["legend_mapping"] is filtered.mapping
+    assert reconstruct.call_args.kwargs["mismatched_bar_ids"] == filtered.mismatched_bar_ids
+    assert cutoff.call_args.args[0] is filter_call.call_args.args[1]
+    assert completeness.call_args.args[0] is result.spec
 
 
-def test_cli_uses_filtered_frame(legend_case):
+def test_cli_preserves_orientation_frame(legend_case):
     case = legend_case
     filtered = case.filtered
     with (
@@ -126,20 +117,12 @@ def test_cli_uses_filtered_frame(legend_case):
     other_reconstruct.assert_not_called()
     assert filter_call.call_args.kwargs["bar_role"] == case.bar_role
     assert filter_call.call_args.args[1] == case.raw
-    assert result_frame is filtered.frame
-    if filtered.blocked:
-        assert result_spec is None
-        assert isinstance(error, ChartInterpretationError)
-        assert str(error) == NO_BARS_MATCHED_LEGEND
-        reconstruct.assert_not_called()
-        cutoff.assert_not_called()
-    else:
-        assert error is None
-        assert result_spec == case.spec
-        reconstruct.assert_called_once()
-        assert reconstruct.call_args.args[0] is filtered.frame
-        assert reconstruct.call_args.args[1] is case.ocr
-        assert reconstruct.call_args.kwargs["legend_mapping"] is filtered.mapping
-        assert reconstruct.call_args.kwargs["rejected_bars"] == tuple(
-            item.detection for item in filtered.rejected)
-        assert cutoff.call_args.args[0] is filtered.frame
+    assert result_frame is filter_call.call_args.args[1]
+    assert error is None
+    assert result_spec == case.spec
+    reconstruct.assert_called_once()
+    assert reconstruct.call_args.args[0] is filter_call.call_args.args[1]
+    assert reconstruct.call_args.args[1] is case.ocr
+    assert reconstruct.call_args.kwargs["legend_mapping"] is filtered.mapping
+    assert reconstruct.call_args.kwargs["mismatched_bar_ids"] == filtered.mismatched_bar_ids
+    assert cutoff.call_args.args[0] is filter_call.call_args.args[1]

@@ -142,7 +142,7 @@ def test_effective_frame_reaches_all_consumers(image_path, diagnostic, preferenc
         assert call.call_args.args[index] is effective
     calls["horizontal" if selected == "vertical" else "vertical"][1].assert_not_called()
     assert matcher.call_args.kwargs["bar_role"] == selected + "_bar"
-    assert reconstruct.call_args.kwargs["rejected_bars"] == ()
+    assert reconstruct.call_args.kwargs["mismatched_bar_ids"] == ()
     assert complete.call_args.args[0] is result.spec
     assert result.spec.orientation == selected
     assert "Bar orientation: " + selected in result.summary

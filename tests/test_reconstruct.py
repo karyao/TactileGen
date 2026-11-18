@@ -1422,96 +1422,78 @@ def test_numeric_normalization_is_not_repeated_for_diagnostics():
         assert normalize.call_count == plain_calls
 
 
-def test_all_bars_rejected_by_legend_blocks_reconstruction():
-    from src.contracts import NO_BARS_MATCHED_LEGEND
-
+def test_all_bars_with_unmatched_colours_reach_reconstruction():
     chart = _legend_chart([_row("Alpha", RED), _row("Beta", GREEN)])
-    with pytest.raises(ChartInterpretationError, match=NO_BARS_MATCHED_LEGEND):
-        chart.run()
+    spec = chart.run()
+    assert "bar_colour_mismatch:3" in spec.flags
+    assert any(series.values == pytest.approx([120, 60, 180]) for series in spec.series)
+    assert any("Review the series assignments" in note for note in check_completeness(spec).notes)
 
 
 @pytest.mark.parametrize("horizontal", [False, True])
-def test_colour_rejected_bar_is_not_restored_by_pixel_rescue(horizontal):
+@pytest.mark.parametrize("loose_swatch", [False, True])
+def test_legend_mismatches_preserve_values_or_block_output(horizontal, loose_swatch):
     from src.reconstruction.horizontal import transpose_image
-
-    chart = _legend_chart([_row("Kenya", BAR_BGR)])
-    bars = [d for d in chart.detections if d.role == "vertical_bar"]
-    # The real colour filter rejects this bar, leaving its original pixels.
-    chart.paint(tuple(getattr(bars[1].box, k) for k in ("x1", "y1", "x2", "y2")), GREEN)
     from src.reconstruction.legend_matcher import filter_bars_by_legend
     from src.reconstruction.vertical import _legend_ocr_frame, _text_table
 
-    frame, image = chart.frame(), chart.image
-    filtered = filter_bars_by_legend(image, frame, _legend_ocr_frame(frame, _text_table(chart.texts)))
-    rejected = tuple(item.detection for item in filtered.rejected)
-    frame = filtered.frame
-    if horizontal:
-        frame, image = transpose_frame(frame), transpose_image(image)
-        rejected = transpose_frame(replace(filtered.frame, detections=rejected)).detections
-    # Simulate a pixel rescue finding the rejected bar's original height.
-    with patch("src.reconstruction.vertical._rescue_value", return_value=60):
-        spec = (reconstruct_hbar if horizontal else reconstruct_vbar)(
-            frame, chart.texts, image, legend_mapping=filtered.mapping, rejected_bars=rejected)
-    assert spec.series[0].values == pytest.approx([120, 0, 180])
-    assert "bar_colour_rejected:1" in spec.flags
-    assert "bars_rescued:1" not in spec.flags
-    assert any("matched no legend swatch" in note for note in check_completeness(spec).notes)
-
-
-@pytest.mark.parametrize("horizontal", [False, True])
-def test_colour_rejected_bar_keeps_explanation_with_real_pixel_rescue(horizontal):
-    from src.reconstruction.horizontal import transpose_image
-
-    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    legend_rows = [_row("Kenya", BAR_BGR)]
+    if loose_swatch:
+        legend_rows.append(_row("Other", GREEN))
+    chart = _legend_chart(legend_rows)
     bar = [d for d in chart.detections if d.role == "vertical_bar"][1]
     chart.paint((bar.box.x1, bar.box.y1, bar.box.x2, bar.box.y2), GREEN)
     frame, image = chart.frame(), chart.image
+    if loose_swatch:
+        swatches = [d for d in frame.detections if d.role == "legend_swatch"]
+        swatch = swatches[-1]
+        # Retain the swatch detection and label while diluting the crop with white.
+        chart.paint((swatch.box.x1, swatch.box.y1,
+                     swatch.box.x2, swatch.box.y2), (255, 255, 255))
+        x = int((swatch.box.x1 + swatch.box.x2) / 2)
+        y = int((swatch.box.y1 + swatch.box.y2) / 2)
+        chart.paint((x - 1, y - 1, x + 1, y + 1), GREEN)
+    filtered = filter_bars_by_legend(image, frame, _legend_ocr_frame(frame, _text_table(chart.texts)))
+    assert filtered.frame is frame
+    assert filtered.mismatched_bar_ids == (bar.id,)
     if horizontal:
-        from src.reconstruction.legend_matcher import filter_bars_by_legend
-        from src.reconstruction.vertical import _legend_ocr_frame, _text_table
-
-        # Filter before transposing: swapping axes also moves legend labels
-        # below their swatches, outside the matcher's horizontal label layout.
-        filtered = filter_bars_by_legend(
-            image, frame, _legend_ocr_frame(frame, _text_table(chart.texts)))
-        rejected = tuple(item.detection for item in filtered.rejected)
-        rejected = transpose_frame(replace(filtered.frame, detections=rejected)).detections
-        frame = filtered.frame
         frame, image = transpose_frame(frame), transpose_image(image)
-        spec = reconstruct_hbar(frame, chart.texts, image,
-                                legend_mapping=filtered.mapping, rejected_bars=rejected)
+    reconstruct = reconstruct_hbar if horizontal else reconstruct_vbar
+    spec = reconstruct(frame, chart.texts, image, legend_mapping=filtered.mapping,
+                       mismatched_bar_ids=filtered.mismatched_bar_ids)
+    assert "bar_colour_mismatch:1" in spec.flags
+    assert any(value == pytest.approx(60) for series in spec.series for value in series.values)
+    assert any("Review the series assignments" in note for note in check_completeness(spec).notes)
+
+
+def test_unaccounted_colour_mismatch_is_a_non_forceable_blocker():
+    chart = _legend_chart([_row("Kenya", BAR_BGR)])
+    frame = chart.frame()
+    duplicate = next(d for d in frame.detections if d.role == "vertical_bar")
+    duplicate = replace(duplicate, id="duplicate", confidence=0.3)
+    frame = replace(frame, detections=(*frame.detections, duplicate))
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, mismatched_bar_ids=(duplicate.id,))
+    assessment = check_completeness(spec)
+    assert "bar_colour_unaccounted:1" in spec.flags
+    assert assessment.status == "cannot_build"
+    assert not assessment.forceable
+
+
+@pytest.mark.parametrize("missed_entry", [True, False])
+def test_complete_mismatched_series_can_be_named_in_review(missed_entry):
+    chart = _grouped((RED, GREEN))
+    swatch = chart.detections[-2]
+    if missed_entry:
+        del chart.detections[-2:]
     else:
-        spec, diagnostics = recorded(chart)
-        rejection, = events(diagnostics, "bar_colour_rejected")
-        assert rejection["bar_id"] == bar.id
-        assert rejection["category_index"] == 1
-        assert rejection["reason"] == "legend_colour_mismatch"
-        assert not [e for e in events(diagnostics, "pixel_rescue")
-                    if e["category_index"] == 1]
-
-    assert spec.series[0].values == pytest.approx([120, 0, 180])
-    assert spec.series[0].value_rescued == [False, False, False]
-    assert "bar_colour_rejected:1" in spec.flags
-    assert not any(flag.startswith("bars_rescued:") for flag in spec.flags)
-    assert "value_inferred_zero" not in spec.flags
-    assert "category_count_mismatch" not in spec.flags
-    assert any("matched no legend swatch" in note for note in check_completeness(spec).notes)
-
-
-@pytest.mark.parametrize("box, matches", [
-    ((90, 50, 110, 100), True),   # positive bar ending at the baseline
-    ((90, 100, 110, 150), True),  # negative bar starting at the baseline
-    ((90, 50, 110, 98), True),   # small gap allowed for the axis stroke
-    ((90, 102, 110, 150), True),
-    ((120, 50, 140, 100), False),  # another category or series slot
-    ((90, 50, 110, 90), False),    # same column, far above the baseline
-    ((90, 110, 110, 150), False),  # same column, far below the baseline
-    ((90, 50, 110, 97), False),    # touches but does not overlap baseline region
-    ((90, 103, 110, 150), False),
-])
-def test_rejected_probe_matches_slot_near_baseline(box, matches):
-    from src.reconstruction.vertical import _rejected_probe
-
-    rejected = Detection("rejected", "vertical_bar", Box(*box), .9)
-    result = _rejected_probe((rejected,), centre_x=100, width=20, baseline=100)
-    assert result is (rejected if matches else None)
+        box = swatch.box
+        chart.paint((box.x1, box.y1, box.x2, box.y2), (255, 255, 255))
+        chart.paint((box.x1 + 6, box.y1 + 6, box.x1 + 8, box.y1 + 8), GREEN)
+    spec = chart.run()
+    assert "bar_colour_mismatch:3" in spec.flags
+    assert [series.name for series in spec.series] == ["Alpha", None]
+    assert spec.series[0].values == pytest.approx([100, 150, 40])
+    assert spec.series[1].values == pytest.approx([50, 80, 120])
+    assessment = check_completeness(spec)
+    assert assessment.status == "needs_input"
+    assert any(item.field == "series_name[1]" for item in assessment.missing)

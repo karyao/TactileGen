@@ -24,8 +24,8 @@ from src.contracts import (
 COLOUR_MAX_ERROR = 0.03
 # Boxes shorter than this on either side carry mostly outline and antialiasing
 # pixels (the cut-off ``reconstruction.vertical`` re-measures short bars at),
-# so their interior colour cannot condemn a detection.
-MIN_REJECT_EXTENT_PX = 6
+# so their interior colour is unreliable.
+MIN_COLOUR_EXTENT_PX = 6
 # The bar roles this module scores and filters.
 BAR_ROLES = ("vertical_bar", "horizontal_bar")
 
@@ -59,8 +59,8 @@ class _LegendScores:
 class ColourDecision:
     """Colour-only verdict for one detected bar, before any OCR name check.
 
-    ``outcome`` is ``"kept"`` (the colour is inside the legend tolerance or the
-    check could not run), ``"rejected"`` (no swatch is within ``max_error``), or
+    ``outcome`` is ``"kept"`` (the colour is inside the legend tolerance),
+    ``"mismatch"`` (no swatch is within ``max_error``), or
     ``"skipped"`` with ``reason`` naming the guard that stopped the check.
     """
 
@@ -73,35 +73,17 @@ class ColourDecision:
 
 
 @dataclass(frozen=True)
-class RejectedBar:
-    """A detected bar dropped by the colour check, with its evidence."""
-
-    detection: Detection
-    swatch_id: str
-    best_error: float
-    max_error: float
-
-
-@dataclass(frozen=True)
 class LegendFilterResult:
-    """Filtered detections plus the mapping and colour decisions behind them.
-
-    ``frame`` and ``mapping`` always agree: every bar still in ``frame`` has
-    exactly one assignment, in detection order, so they can be joined.
-    """
+    """Original detections, with a legend assignment and colour decision for each bar."""
 
     frame: DetectionFrame
     mapping: LegendMappingFrame
     decisions: tuple[ColourDecision, ...] = ()
-    rejected: tuple[RejectedBar, ...] = ()
     guard: str | None = None
 
     @property
-    def blocked(self) -> bool:
-        """True when every detected bar was rejected, so nothing can be built."""
-        return bool(self.decisions) and all(
-            item.outcome == "rejected" for item in self.decisions
-        )
+    def mismatched_bar_ids(self) -> tuple[str, ...]:
+        return tuple(item.bar_id for item in self.decisions if item.outcome == "mismatch")
 
 
 @dataclass
@@ -550,7 +532,7 @@ def _colour_decisions(scores: _LegendScores, *, max_error: float) -> list[Colour
         else:
             within = scored.best_error <= max_error
             decisions.append(ColourDecision(
-                scored.bar_id, "kept" if within else "rejected",
+                scored.bar_id, "kept" if within else "mismatch",
                 "within_tolerance" if within else "colour_mismatch",
                 scored.best_error, swatch_id, label_id))
     return decisions
@@ -560,7 +542,6 @@ def _trace_colour_filter(
     diagnostics: AnalysisDiagnostics,
     bars_by_id: dict[str, Detection],
     decisions: tuple[ColourDecision, ...],
-    rejected: tuple[RejectedBar, ...],
     max_error: float,
     guard: str | None,
 ) -> None:
@@ -570,14 +551,11 @@ def _trace_colour_filter(
             outcome=decision.outcome, reason=decision.reason,
             best_error=decision.best_error, cutoff=max_error,
             swatch_id=decision.swatch_id, label_id=decision.label_id)
-    blocked = bool(decisions) and all(
-        item.outcome == "rejected" for item in decisions)
-    diagnostics.event("legend_matching",
-        "no_bars_matched_legend" if blocked else "legend_colour_filter",
-        rejected_bar_ids=[item.detection.id for item in rejected],
+    diagnostics.event("legend_matching", "legend_colour_filter",
+        mismatched_bar_ids=[item.bar_id for item in decisions if item.outcome == "mismatch"],
         kept_bar_ids=[item.bar_id for item in decisions if item.outcome == "kept"],
         skipped_bar_ids=[item.bar_id for item in decisions if item.outcome == "skipped"],
-        cutoff=max_error, guard=guard, blocked=blocked)
+        cutoff=max_error, guard=guard)
 
 
 def filter_bars_by_legend(
@@ -590,18 +568,7 @@ def filter_bars_by_legend(
     bar_role: Literal["vertical_bar", "horizontal_bar"] = "vertical_bar",
     diagnostics: AnalysisDiagnostics | None = None,
 ) -> LegendFilterResult:
-    """Drop the bars whose colour matches no legend swatch, keeping the rest.
-
-    The legend is scored once and reused for both the colour decision and the
-    assignment mapping, so the returned ``frame`` and ``mapping`` always agree:
-    every surviving bar keeps exactly one assignment, in detection order.
-    Bars the colour check cannot judge (no legend, an incomplete legend, an
-    unusable crop, a box too small to read, or no OCR) keep their detection and
-    receive a decision recording why; nothing is dropped on partial evidence.
-
-    Only detections with ``bar_role`` are scored and eligible for removal;
-    all other detections retain their original roles and order.
-    """
+    """Assess the selected bar role against the legend without dropping detections."""
     max_error = validate_unit_interval(max_error, "max_error")
     scores = _score_legend_to_bars(image, detections, ocr, bar_role=bar_role,
         **({"diagnostics": diagnostics} if diagnostics is not None else {}))
@@ -611,34 +578,18 @@ def filter_bars_by_legend(
     mapping = _classify_legend_scores(scores, max_error=max_error, min_margin=min_margin)
 
     decisions: list[ColourDecision] = []
-    rejected: list[RejectedBar] = []
     for decision in _colour_decisions(scores, max_error=max_error):
         bar = bars_by_id[decision.bar_id]
         extent = min(bar.box.x2 - bar.box.x1, bar.box.y2 - bar.box.y1)
-        if decision.outcome == "rejected" and extent < MIN_REJECT_EXTENT_PX:
+        if decision.outcome == "mismatch" and extent < MIN_COLOUR_EXTENT_PX:
             decision = replace(decision, outcome="skipped", reason="unreliable_colour")
         decisions.append(decision)
-        if decision.outcome == "rejected":
-            rejected.append(RejectedBar(bar, decision.swatch_id, decision.best_error, max_error))
 
     guard = None
     if decisions and all(item.outcome == "skipped" for item in decisions):
         reasons = {item.reason for item in decisions}
         guard = reasons.pop() if len(reasons) == 1 else "unusable_legend"
 
-    rejected_ids = {item.detection.id for item in rejected}
-    if rejected_ids:
-        frame = replace(detections, detections=tuple(
-            item for item in detections.detections if item.id not in rejected_ids))
-        mapping = LegendMappingFrame(
-            mapping.source_key,
-            tuple(item for item in mapping.assignments
-                  if item.bar_id not in rejected_ids),
-            mapping.entries,
-        )
-    else:
-        frame = detections
     if diagnostics is not None:
-        _trace_colour_filter(diagnostics, bars_by_id, tuple(decisions),
-                             tuple(rejected), max_error, guard)
-    return LegendFilterResult(frame, mapping, tuple(decisions), tuple(rejected), guard)
+        _trace_colour_filter(diagnostics, bars_by_id, tuple(decisions), max_error, guard)
+    return LegendFilterResult(detections, mapping, tuple(decisions), guard)

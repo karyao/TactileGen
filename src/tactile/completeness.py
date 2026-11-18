@@ -33,9 +33,13 @@ from src.contracts import (
 
 READY, NEEDS_INPUT, CANNOT_BUILD = "ready", "needs_input", "cannot_build"
 
-# Flags that mean the numbers or structure cannot be trusted. Any one of them
-# makes the spec ``cannot_build``.
+LEGEND_COLOUR_WARNING = ("{n} detected bar(s) could not be matched to the legend. "
+                         "Review the series assignments.")
+
+# Flags that make the spec ``cannot_build``.
 BLOCKING_FLAGS = {
+    "bar_colour_unaccounted": ("Reconstruction could not account for {n} bar(s) whose colours "
+                               "did not match the legend. Check the source chart and legend."),
     # bars and category labels do not pair one to one
     "category_count_mismatch": "The number of bars does not match the number of category labels.",
     # two bars claimed the same category slot
@@ -70,7 +74,7 @@ FORCEABLE_FLAGS = frozenset({
 })
 
 # Blocker messages that already say what to do, so no generic next steps are added.
-SELF_EXPLAINING_FLAGS = frozenset({"bars_mostly_missed"})
+SELF_EXPLAINING_FLAGS = frozenset({"bars_mostly_missed", "bar_colour_unaccounted"})
 
 # Flags worth telling the user about that do not stop a build. Each is matched
 # by name, or by the prefix before the colon.
@@ -90,9 +94,7 @@ NOTE_FLAGS = {
     "short_bars_remeasured": "{n} very short bar(s) were re-measured from pixels.",
     # a bar's top edge was re-measured from pixels because the detector box disagreed
     "bar_edge_corrected": "{n} bar(s) had their top edge corrected from the pixels.",
-    # a slot whose only detection failed the legend colour check: drawn as 0
-    "bar_colour_rejected": ("{n} value(s) are drawn as 0 because the detection at that slot "
-                            "matched no legend swatch colour."),
+    "bar_colour_mismatch": LEGEND_COLOUR_WARNING,
     # category labels the first OCR pass could not read were re-read with a rotated fallback
     "category_reread": ("{n} category label(s) were re-read with a rotated OCR fallback; "
                         "check them in the category list."),

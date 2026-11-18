@@ -20,7 +20,6 @@ from src.contracts import (
     TEXT_ROLES,
     DetectionFrame,
     LegendMappingFrame,
-    NO_BARS_MATCHED_LEGEND,
     OCRFrame,
     VerticalBarSpec,
 )
@@ -44,6 +43,7 @@ from src.reconstruction.horizontal import (
     reconstruct_hbar,
 )
 from src.tactile.completeness import (
+    LEGEND_COLOUR_WARNING,
     Completeness,
     check_completeness,
     completeness_from_error,
@@ -277,22 +277,20 @@ def analyze_image(
         reconstruction_options = {} if horizontal else diagnostic_options
         legend_mapping = None
         legend_warning = None
-        colour_filter = None
+        mismatched_bar_ids = ()
         try:
             with stage("legend_matching"):
                 colour_filter = filter_bars_by_legend(
                     image, frame, ocr_frame,
                     bar_role="horizontal_bar" if horizontal else "vertical_bar",
                     **diagnostic_options)
-                # Every later stage sees the bars the colour check kept, so the
-                # overlay, the detection count and the reconstruction agree.
-                frame = colour_filter.frame
                 legend_mapping = colour_filter.mapping
+                mismatched_bar_ids = colour_filter.mismatched_bar_ids
+                if mismatched_bar_ids:
+                    legend_warning = LEGEND_COLOUR_WARNING.format(n=len(mismatched_bar_ids))
                 if diagnostics is not None:
                     diagnostics.snapshot("legend", legend_mapping)
-                    diagnostics.snapshot("legend_filtered_detections", frame)
-                    diagnostics.record["counts"]["colour_rejected_bars"] = (
-                        len(colour_filter.rejected))
+                    diagnostics.record["counts"]["colour_mismatched_bars"] = len(mismatched_bar_ids)
                     diagnostics.record["counts"]["colour_kept_bars"] = sum(
                         item.outcome == "kept" for item in colour_filter.decisions)
         except Exception:
@@ -305,13 +303,7 @@ def analyze_image(
         spec = None
         completeness = None
         reconstruction_warning = None
-        if colour_filter is not None and colour_filter.blocked:
-            completeness = completeness_from_error(
-                ChartInterpretationError(NO_BARS_MATCHED_LEGEND), frame)
-            if diagnostics is not None:
-                diagnostics.skip("reconstruction", NO_BARS_MATCHED_LEGEND)
-                diagnostics.warning("no_bars_matched_legend", "reconstruction")
-        elif ocr_frame is None or legend_mapping is None:
+        if ocr_frame is None or legend_mapping is None:
             reconstruction_warning = RECONSTRUCTION_WARNING
             if diagnostics is not None:
                 dependencies = (("ocr", ocr_frame), ("legend_matching", legend_mapping))
@@ -325,13 +317,9 @@ def analyze_image(
             try:
                 with stage("reconstruction", blocked_errors=(ChartInterpretationError,)):
                     reconstruct = reconstruct_hbar if horizontal else reconstruct_vbar
-                    rejected_bars = (
-                        tuple(item.detection for item in colour_filter.rejected)
-                        if colour_filter is not None else ()
-                    )
                     reconstructed = reconstruct(
                         frame, ocr_frame, image, legend_mapping=legend_mapping,
-                        rejected_bars=rejected_bars, **reconstruction_options,
+                        mismatched_bar_ids=mismatched_bar_ids, **reconstruction_options,
                     )
                     edge_flags = cut_off_flags(frame, image, **diagnostic_options)
                     candidate = replace(

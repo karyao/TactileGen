@@ -229,7 +229,7 @@ class GradioAnalysisTest(GradioTestCase):
 
             args = reconstruct.call_args.args
             self.assertEqual(args[:2], (frame, ocr))
-            self.assertEqual(reconstruct.call_args.kwargs, {"legend_mapping": mapping, "rejected_bars": ()})
+            self.assertEqual(reconstruct.call_args.kwargs, {"legend_mapping": mapping, "mismatched_bar_ids": ()})
             edge_flags.assert_called_once_with(frame, args[2])
             self.assertEqual(result.spec.flags, ["title_cut_off"])
             self.assertEqual(result.completeness.status, NEEDS_INPUT)
@@ -265,7 +265,7 @@ class GradioAnalysisTest(GradioTestCase):
                 self.assertEqual(horizontal_match.call_args.kwargs["bar_role"], "horizontal_bar")
                 vertical.assert_not_called()
                 self.assertEqual(horizontal_match.call_args.args[1:], (frame, ocr))
-                self.assertEqual(horizontal.call_args.kwargs, {"legend_mapping": mapping, "rejected_bars": ()})
+                self.assertEqual(horizontal.call_args.kwargs, {"legend_mapping": mapping, "mismatched_bar_ids": ()})
                 self.assertEqual(result.spec.orientation, "horizontal")
                 self.assertIsNone(result.legend_warning)
                 self.assertIsNone(result.reconstruction_warning)
@@ -1221,7 +1221,7 @@ class GradioDiagnosticsTest(unittest.TestCase):
                 self.assertEqual(records[0]["counts"], {
                     "detections": 3, "text_regions": 2, "effective_detections": 3,
                     "ocr_returned_regions": 2, "ocr_readable": 1, "ocr_empty": 1,
-                    "colour_rejected_bars": 0, "colour_kept_bars": 0,
+                    "colour_mismatched_bars": 0, "colour_kept_bars": 0,
                 })
                 for record, stage in ((records[1], "validation"), (records[2], "detection"),
                                       (records[5], "result_preparation")):

@@ -21,7 +21,6 @@ from src.contracts import (
     Detection,
     DetectionFrame,
     LegendMappingFrame,
-    NO_BARS_MATCHED_LEGEND,
     OCRFrame,
     RecognizedText,
     SeriesSpec,
@@ -410,25 +409,6 @@ def _rescue_value(rgb: np.ndarray, centre_x: float, width: float, baseline: floa
     return -slope * up if up >= down else slope * down
 
 
-def _rejected_probe(rejected: tuple[Detection, ...], centre_x: float, width: float,
-                    baseline: float) -> Detection | None:
-    """The rejected detection occupying this rescue slot near the zero line.
-
-    Match the central rescue strip and the baseline region, allowing for the
-    scanner's starting rows and axis gap. Attribution depends on box geometry,
-    since pixels of a rejected colour can yield a zero rescue measurement.
-    """
-    half = RESCUE_STRIP_FRACTION * width / 2
-    left, right = centre_x - half, centre_x + half
-    tolerance = RESCUE_AXIS_ROWS + 1
-    top, bottom = baseline - tolerance, baseline + tolerance
-    for detection in rejected:
-        box = detection.box
-        if box.x1 < right and box.x2 > left and box.y1 < bottom and box.y2 > top:
-            return detection
-    return None
-
-
 # --- main ----------------------------------------------------------------------
 
 def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: str,
@@ -526,26 +506,17 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      category_guard: bool = True, *,
                      legend_mapping: LegendMappingFrame | None = None,
                      diagnostics: AnalysisDiagnostics | None = None,
-                     rejected_bars: Iterable[Detection] = ()
+                     mismatched_bar_ids: Iterable[str] = ()
                      ) -> VerticalBarSpec:
     """Turn detections plus OCR into a ``VerticalBarSpec``.
 
-    ``legend_mapping`` supplies validated series names from the shared matcher.
-    When omitted, the mapping is computed from ``frame``, ``ocr_texts``, and
-    ``image`` so legacy callers use the same matching implementation, and the
-    bars that fail the legend colour check are dropped from ``frame`` first.
-
-    ``rejected_bars`` are detections a caller's colour check already dropped;
-    they are not in ``frame``, and a positive rescue never measures their
-    pixels back into a value.
-
-    Raises ``ChartInterpretationError`` when there are no bars, no x tick
-    labels, fewer than two consistent y ticks, or no bar matches the legend
-    colours. Everything else unresolved is reported through ``flags``.
+    When a caller supplies legend assignments, it can also supply the IDs of
+    bars whose colours did not match. Otherwise both come from the matcher.
+    Unmatched bars remain available for colour grouping and value reconstruction.
     """
     if diagnostics is not None:
         diagnostics.record["spec_sources"] = {}
-    rejected_bars = tuple(rejected_bars)
+    mismatched = set(mismatched_bar_ids)
     texts = _text_table(ocr_texts, diagnostics=diagnostics)
 
     def trace(code, **evidence):
@@ -560,16 +531,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         )
         filtered = filter_bars_by_legend(image, frame, legend_ocr, bar_role="vertical_bar",
             **({"diagnostics": diagnostics} if diagnostics is not None else {}))
-        if filtered.blocked:
-            trace("reconstruction_blocked", reason="no_bars_matched_legend",
-                  rejected_bar_ids=[item.detection.id for item in filtered.rejected],
-                  max_error=filtered.rejected[0].max_error if filtered.rejected else None,
-                  flag="chart_interpretation_blocked")
-            raise ChartInterpretationError(NO_BARS_MATCHED_LEGEND)
-        frame = filtered.frame
         legend_mapping = filtered.mapping
-        rejected_bars = (*rejected_bars,
-                         *(item.detection for item in filtered.rejected))
+        mismatched.update(filtered.mismatched_bar_ids)
     assignment_by_bar = {
         bar.id: assignment
         for bar, assignment in join_legend_assignments(frame, legend_mapping)
@@ -872,8 +835,18 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     has_detected_swatches = any(
         detection.role == "legend_swatch" for detection in frame.detections
     )
+    # Let the user name a fallback series when all unresolved bars are colour
+    # mismatches and the detected groups form a complete, consistent grid.
+    # Pixel rescue still requires settled legend identities in mixed groups.
+    expected_slots = tuple(range(len(categories)))
+    reviewable_groups = (
+        bool(matched_groups and unresolved)
+        and all(bars[k].id in mismatched for k in unresolved)
+        and all(tuple(bar_label[k] for k in members) == expected_slots for members in clusters)
+        and all(column == tuple(sorted(column)) for column in zip(*clusters, strict=True))
+    )
     ambiguous_series = bool(conflicting_swatches)
-    if unresolved and (has_detected_swatches or len(clusters) > 1):
+    if unresolved and (has_detected_swatches or len(clusters) > 1) and not reviewable_groups:
         ambiguous_series = True
     if any(bar_colors[members[0]] is None for members in clusters):
         ambiguous_series = True
@@ -921,7 +894,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             series_events.append((evidence["series_index"], diagnostics.record["events"][-1]))
 
     count_mismatch = category_ambiguous = False
-    rescued_total = rescued_zero = colour_rejected_total = 0
+    rescued_total = rescued_zero = 0
+    unaccounted = mismatched.copy()
     for c, members in enumerate(clusters):
         row: list[float | None] = [None] * len(categories)
         kept: dict[int, int] = {}
@@ -944,11 +918,12 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             kept[slot] = k
             row[slot] = values[k]
         detected_slots += len(kept)
+        unaccounted.difference_update(bars[k].id for k in kept.values())
         rescued = [False] * len(categories)
         value_conf: list[float | None] = [
             bars[kept[j]].confidence if j in kept else None for j in range(len(categories))]
         centre = cluster_centre[c]
-        n_rescued = n_colour_rejected = 0
+        n_rescued = 0
         if can_rescue and centre is not None and kept:
             # Groups sit at a fixed offset from the tick that depends on the
             # series count, so measure it from this series' detected bars.
@@ -957,33 +932,20 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                 if row[j] is not None:
                     continue
                 centre_x = label_x[j] + offset
-                rejected = _rejected_probe(rejected_bars, centre_x, bar_width, baseline)
-                if rejected is not None:
-                    # Keep attribution even if these pixels would measure zero.
-                    # The slot is filled with 0
-                    # but is neither a detection nor a pixel measurement.
-                    measured = 0.0
-                    n_colour_rejected += 1
-                    trace_series("bar_colour_rejected", series_index=c, category_index=j,
-                          bar_id=rejected.id, center_x=centre_x, width=bar_width,
-                          baseline=baseline, value=0.0, reason="legend_colour_mismatch")
-                else:
-                    measured = _rescue_value(rgb, centre_x, bar_width, baseline, a, centre)
-                    trace_series("pixel_rescue", series_index=c, category_index=j,
-                          center_x=centre_x, width=bar_width, baseline=baseline,
-                          value=measured, inferred_zero=measured == 0.0)
-                    rescued_zero += measured == 0.0
+                measured = _rescue_value(rgb, centre_x, bar_width, baseline, a, centre)
+                trace_series("pixel_rescue", series_index=c, category_index=j,
+                      center_x=centre_x, width=bar_width, baseline=baseline,
+                      value=measured, inferred_zero=measured == 0.0)
+                rescued_zero += measured == 0.0
                 row[j] = measured
-                if rejected is None:
-                    rescued[j] = True
+                rescued[j] = True
                 value_conf[j] = RESCUE_CONFIDENCE
                 n_rescued += 1
-        colour_rejected_total += n_colour_rejected
-        rescued_total += n_rescued - n_colour_rejected
+        rescued_total += n_rescued
         trace_series("category_count_mismatch"
               if len(members) + n_rescued != len(categories)
               else "category_counts", series_index=c, detected_bars=len(members),
-              rescued_bars=n_rescued, colour_rejected_bars=n_colour_rejected,
+              rescued_bars=n_rescued,
               category_count=len(categories),
               missing_slots=[j for j, v in enumerate(row) if v is None])
         if len(members) + n_rescued != len(categories):
@@ -1014,8 +976,12 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         flags.append(f"short_bars_remeasured:{short_bars}")
     if rescued_total:
         flags.append(f"bars_rescued:{rescued_total}")
-    if colour_rejected_total:
-        flags.append(f"bar_colour_rejected:{colour_rejected_total}")
+    if mismatched:
+        flags.append(f"bar_colour_mismatch:{len(mismatched)}")
+    if unaccounted:
+        flag = f"bar_colour_unaccounted:{len(unaccounted)}"
+        flags.append(flag)
+        trace("bar_colour_unaccounted", bar_ids=sorted(unaccounted), flag=flag)
     if rescued_zero:
         flags.append("value_inferred_zero")
     if count_mismatch:

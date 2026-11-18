@@ -1225,7 +1225,7 @@ class Pipeline(unittest.TestCase):
         ocr_call.assert_called_once_with(image, effective, backend, "eng")
         matcher.assert_called_once_with(image, effective, ocr, bar_role="vertical_bar")
         reconstruct.assert_called_once_with(
-            effective, ocr, image, legend_mapping=mapping, rejected_bars=()
+            effective, ocr, image, legend_mapping=mapping, mismatched_bar_ids=()
         )
         cut_off.assert_called_once_with(effective, image)
         self.assertEqual(result, (reconstructed, None, effective))
@@ -1437,7 +1437,7 @@ class Pipeline(unittest.TestCase):
         reconstruct.assert_called_once_with(effective, ocr, image,
                                             legend_mapping=passthrough_filter(
                                                 image, effective, ocr, bar_role="horizontal_bar").mapping,
-                                            rejected_bars=())
+                                            mismatched_bar_ids=())
         horizontal_filter.assert_called_once_with(image, effective, ocr, bar_role="horizontal_bar")
         cut_off.assert_called_once_with(effective, image)
         self.assertEqual(result, (reconstructed, None, effective))
@@ -1539,7 +1539,7 @@ class Pipeline(unittest.TestCase):
         effective = matcher.call_args.args[1]
         self.assertEqual([d.role for d in effective.detections], ["vertical_bar"])
         reconstruct.assert_called_once_with(effective, ocr, image,
-                                            legend_mapping=mapping, rejected_bars=())
+                                            legend_mapping=mapping, mismatched_bar_ids=())
         h_reconstruct.assert_not_called()
         self.assertEqual(result, (reconstructed, None, effective))
         self.assertEqual(len(raw.detections), 4)  # raw detections untouched
