@@ -1,0 +1,11 @@
+{
+  "chart_type": "vbar_categorical",
+  "title": "Annual totals",
+  "x_axis_title": "Year",
+  "y_axis_title": "Sales",
+  "categories": ["2024", "2025"],
+  "series": [
+    {"name": "North", "values": [4, 6]},
+    {"name": "South", "values": [3, 5]}
+  ]
+}

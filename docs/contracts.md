@@ -16,6 +16,32 @@ category order and printed axis titles. It raises `ValueError` for invalid
 contracts, including unknown fields, without modifying the input. The file
 loader `load_bar_chart(path)` delegates to the same parser.
 
+For VLM response text, use the dependency-free adapter:
+
+```python
+from src.baseline.vlm_response import parse_chart_response
+
+result = parse_chart_response(raw_response, image="charts/sales.png")
+chart = result.chart  # source_key is "vlm/sales.png"
+placeholder_fields = result.placeholder_fields
+```
+
+The adapter accepts one complete JSON object, optionally enclosed in a single
+`json` code fence. It rejects prose, multiple objects, duplicate keys, malformed
+or truncated JSON, nonstandard numeric constants, and model error responses;
+it does not repair output. An explicit `source_key=` overrides the filename
+default. Either caller-derived key replaces any identity returned by the model.
+The image path supplies filename context only; the adapter does not read it.
+Gemma returns chart content without `schema_version` or `source_key`. The adapter
+supplies the internal schema version, replacing any model-supplied version, so
+existing JSON serialization and tactile rendering keep using version 1.
+
+Only this adapter substitutes missing, null, or blank titles with `Untitled chart`,
+`X axis`, and `Y axis`. `placeholder_fields` records substituted field names in
+title/x-axis/y-axis order, separately from chart JSON. Nonblank titles, categories,
+values, ordering, and supported optional fields pass through to contract validation.
+The Stage 2 model prompt should request `null` for absent titles.
+
 ## Handoffs
 
 | Result | Producer | Consumer | Contents |

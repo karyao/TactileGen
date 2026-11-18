@@ -1,0 +1,11 @@
+{
+  "chart_type": "hbar_categorical",
+  "title": null,
+  "x_axis_title": "Sales",
+  "y_axis_title": null,
+  "categories": ["North", "South"],
+  "series": [
+    {"name": null, "values": [6, 3], "rescued": [false, true]}
+  ],
+  "omit_legend": true
+}
