@@ -121,8 +121,21 @@ The full annotated ZIP includes PNGs, chart annotations, underlying CSV tables,
 and human/augmented QA files. Setup verifies required directories and checks QA
 image references. Rerun the download command to check the completed split.
 The authors describe bounding-box annotations as noisy; inspect them before
-using them as evaluation ground truth.
+using them as evaluation ground truth. Convert the annotated bar charts to the
+same 15 YOLO classes as PlotQA with:
 
-This milestone stages ChartQA's official files. A ChartQA-to-YOLO converter and
-scored TactileGen evaluation are not implemented. Use downloaded PNGs as inputs
-to the app or single-image CLI; PlotQA's converter expects a different schema.
+```bash
+python -m src.dataset.download chartqa
+for split in train val test; do
+  python -m src.dataset.prepare_chartqa \
+    --annotations "data/chartqa/$split/annotations" \
+    --images "data/chartqa/$split/png" \
+    --output dataset_yolo_chartqa --split "$split"
+done
+```
+
+Vertical and horizontal bars are included by default. Pie charts are skipped
+because the shared class list has no pie-slice class. Output images and labels
+use the same split layout and class IDs as PlotQA, so both image roots can be
+listed in an Ultralytics dataset YAML for joint training. Keep each dataset's
+official splits and check for duplicate images across sources before training.
