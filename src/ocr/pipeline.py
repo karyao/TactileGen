@@ -24,7 +24,7 @@ from src.contracts import (
 from src.contract_io import load_detection_frame, write_ocr_frame
 
 if TYPE_CHECKING:
-    from src.diagnostics import AnalysisDiagnostics
+    from src.diagnostics.tracking import AnalysisDiagnostics
 
 
 @dataclass(frozen=True)
@@ -103,7 +103,7 @@ def run_ocr(
     trace = None
     records = []
     if diagnostics is not None:
-        from src.ocr_trace import BatchTrace, adapter_evidence, trace_record
+        from src.ocr.trace import BatchTrace, adapter_evidence, trace_record
         trace = trace_record(diagnostics)
         for detection in text_detections:
             item = {"detection_id": detection.id, "submission": "not_submitted",
@@ -176,7 +176,7 @@ def _finish_ocr(frame, text_detections, results, *, batched, records=None) -> OC
                 "backend recognize_many must return one OCRBackendResult or None per detection"
             )
     if records is not None:
-        from src.ocr_trace import adapter_evidence
+        from src.ocr.trace import adapter_evidence
 
         for item, result in zip(records, results, strict=True):
             item.update(adapter_output_availability="available", adapter_result=adapter_evidence(result))
@@ -247,11 +247,11 @@ def _run_command(args: argparse.Namespace) -> OCRFrame:
     image = _read_image(args.image)
     detections = load_detection_frame(args.detections)
     if args.engine == "tesseract":
-        from src.tesseract_ocr import TesseractBackend
+        from src.ocr.tesseract import TesseractBackend
 
         backend = TesseractBackend()
     elif args.engine == "rapidocr":
-        from src.rapidocr_ocr import RapidOCRBackend
+        from src.ocr.rapidocr import RapidOCRBackend
 
         backend = RapidOCRBackend()
     else:  # argparse constrains this today; keep dispatch explicit for future engines.
@@ -275,8 +275,3 @@ def main(argv: Sequence[str] | None = None) -> None:
     }))
 
 
-if __name__ == "__main__":
-    # Keep protocol/result class identity stable when the adapter imports
-    # ``src.ocr`` while this file is executing under its ``-m`` name.
-    sys.modules.setdefault("src.ocr", sys.modules[__name__])
-    main()

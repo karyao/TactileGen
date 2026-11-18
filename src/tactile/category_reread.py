@@ -17,9 +17,9 @@ import cv2
 import numpy as np
 
 from src.contracts import Detection, DetectionFrame, VerticalBarSpec
-from src.ocr_crop import crop_text_region
+from src.ocr.crop import crop_text_region
 from src.tactile.completeness import _suspicious_categories, _unreadable_categories
-from src.tesseract_ocr import _MAX_UPSCALE, _TARGET_TEXT_HEIGHT, _grayscale, _load_pytesseract
+from src.ocr.tesseract import _MAX_UPSCALE, _TARGET_TEXT_HEIGHT, _grayscale, _load_pytesseract
 
 PAGE_SEGMENTATION_MODE = 7   # one line of text
 ROTATIONS = (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE)
@@ -70,7 +70,7 @@ def tesseract_rotated(image: np.ndarray, detection: Detection) -> tuple[str, flo
 
 def _x_labels(frame: DetectionFrame) -> list[Detection]:
     """The x tick labels in the order ``reconstruct_vbar`` assigned them to categories."""
-    from src.reconstruct import MIN_CONFIDENCE, _best, _centre, _group_roles
+    from src.reconstruction.vertical import MIN_CONFIDENCE, _best, _centre, _group_roles
 
     roles = _group_roles(frame, MIN_CONFIDENCE)
     plot = _best(roles.get("plot_area", []))

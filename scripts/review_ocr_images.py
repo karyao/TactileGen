@@ -15,10 +15,10 @@ import cv2
 import numpy as np
 
 from src.contracts import Box, Detection, DetectionFrame
-from src.diagnostics import AnalysisDiagnostics
+from src.diagnostics.tracking import AnalysisDiagnostics
 from src.ocr import run_ocr
-from src.rapidocr_ocr import RapidOCRBackend
-from src.tesseract_ocr import TesseractBackend
+from src.ocr.rapidocr import RapidOCRBackend
+from src.ocr.tesseract import TesseractBackend
 from tests.test_ocr import fake_rapidocr, output, fake_pytesseract, tesseract_data
 
 
@@ -81,7 +81,7 @@ def main():
                 return ([cv2.rotate(candidate, cv2.ROTATE_180) for candidate in images],
                         types.SimpleNamespace(cls_res=[('180', .99)] * len(images), elapse=0.0))
             engine.cls_and_rotate = classify
-            with patch('src.rapidocr_ocr._load_rapidocr', return_value=module):
+            with patch('src.ocr.rapidocr._load_rapidocr', return_value=module):
                 backend = RapidOCRBackend()
             run_ocr(image, frame, backend, 'eng', diagnostics=diagnostics)
             submitted = engine.rec_calls[0]
@@ -94,7 +94,7 @@ def main():
                     submitted.extend(np.array(page) for page in ImageSequence.Iterator(tiff))
                 return tesseract_data([[('fixture label', '90')]] * len(submitted))
             module.image_to_data.side_effect = recognize
-            with patch('src.tesseract_ocr._load_pytesseract', return_value=module):
+            with patch('src.ocr.tesseract._load_pytesseract', return_value=module):
                 run_ocr(image, frame, TesseractBackend(), 'eng', diagnostics=diagnostics)
         attempts = diagnostics.record['ocr_trace']['attempts']
         assert len(submitted) == len(attempts)

@@ -200,7 +200,7 @@ def cut_off_flags(frame, image, *, diagnostics=None) -> list[str]:
     ``image`` is a BGR array as ``cv2.imread`` returns it. Uses the same title
     detections as ``reconstruct_vbar`` (best detection at its confidence floor).
     """
-    from src.reconstruct import MIN_CONFIDENCE, _best, _group_roles
+    from src.reconstruction.vertical import MIN_CONFIDENCE, _best, _group_roles
 
     roles = _group_roles(frame, MIN_CONFIDENCE)
     flags = []

@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping
 
 import numpy as np
 
-from src.diagnostics import AnalysisDiagnostics
+from src.diagnostics.tracking import AnalysisDiagnostics
 
 from src.contracts import (
     ChartInterpretationError,
@@ -28,7 +28,7 @@ from src.contracts import (
     YAxisSpec,
     join_legend_assignments,
 )
-from src.legend_matcher import match_legend_to_bars
+from src.reconstruction.legend_matcher import match_legend_to_bars
 from src.text_provenance import consumer_text, text_evidence
 
 MIN_CONFIDENCE = 0.3

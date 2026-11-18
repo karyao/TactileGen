@@ -152,7 +152,7 @@ class PipelineSummary(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             args = pipeline.parse_args(["--image", "a.png", "--output", str(Path(tmp) / "o.svg"), "--yes"])
             out, err = io.StringIO(), io.StringIO()
-            code = pipeline.run(args, analyse_fn=lambda *_: (spec, None, None),
+            code = pipeline.run(args, analyse_fn=lambda *_, **__: (spec, None, None),
                                 stdin_is_tty=False, out=out, err=err)
         self.assertEqual(code, 0)
         self.assertIn("re-read by fallback: 2: 'Fiji'", out.getvalue())
@@ -162,7 +162,7 @@ class PipelineSummary(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             args = pipeline.parse_args(["--image", "a.png", "--output", str(Path(tmp) / "o.svg"), "--yes"])
             out = io.StringIO()
-            pipeline.run(args, analyse_fn=lambda *_: (make_spec(["Germany", "Greece", "Spain", "India"]), None, None),
+            pipeline.run(args, analyse_fn=lambda *_, **__: (make_spec(["Germany", "Greece", "Spain", "India"]), None, None),
                          stdin_is_tty=False, out=out, err=io.StringIO())
         self.assertNotIn("re-read by fallback", out.getvalue())
 
