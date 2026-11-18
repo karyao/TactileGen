@@ -175,7 +175,9 @@ class GradioAnalysisTest(GradioTestCase):
     def test_analysis_forwards_custom_size_and_collector(self):
         with tempfile.TemporaryDirectory() as temporary:
             image = self._image(Path(temporary))
-            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            frame = DetectionFrame("input/chart.png", 100, 80, (
+                Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
+            ))
             diagnostics = AnalysisDiagnostics(settings={})
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame) as detect,\
                  patch("src.gradio_ui.analysis.run_ocr", return_value=OCRFrame(frame.source_key, ())):
@@ -189,7 +191,9 @@ class GradioAnalysisTest(GradioTestCase):
             image_path = self._image(
                 Path(temporary), rgb=(30, 20, 10)  # OpenCV reads this as BGR 10,20,30.
             )
-            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            frame = DetectionFrame("input/chart.png", 100, 80, (
+                Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
+            ))
             progress = Mock()
             model = object()
             backend = object()
@@ -210,12 +214,12 @@ class GradioAnalysisTest(GradioTestCase):
                 model, image_path, confidence=0.4, nms_iou=0.6, device="cpu", imgsz=640
             )
             self.assertIsInstance(result, AnalysisResult)
-            self.assertEqual(result.detection_count, 0)
+            self.assertEqual(result.detection_count, 1)
             self.assertEqual(result.ocr_frame, ocr)
             recognize.assert_called_once()
             self.assertIs(recognize.call_args.args[2], backend)
             self.assertEqual(recognize.call_args.args[3], "eng")
-            self.assertIn("**Detected 0 chart elements**", result.summary)
+            self.assertIn("**Detected 1 chart element**", result.summary)
             self.assertIn("- OCR: 0 of 0 text regions readable", result.summary)
             self.assertEqual(tuple(result.overlay_rgb[0, 0]), (30, 20, 10))
             self.assertEqual(progress.call_count, 7)
@@ -223,9 +227,11 @@ class GradioAnalysisTest(GradioTestCase):
     def test_reconstruction_reuses_results_and_applies_edge_completeness(self):
         with tempfile.TemporaryDirectory() as temporary:
             image_path = self._image(Path(temporary))
-            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            frame = DetectionFrame("input/chart.png", 100, 80, (
+                Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
+            ))
             ocr = OCRFrame("input/chart.png", ())
-            mapping = LegendMappingFrame("input/chart.png", ())
+            mapping = LegendMappingFrame("input/chart.png", (LegendBarAssignment("bar"),))
             reconstructed = make_spec()
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame),\
                  patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),\
@@ -251,15 +257,16 @@ class GradioAnalysisTest(GradioTestCase):
         for diagnostics_enabled in (False, True):
             with self.subTest(diagnostics=diagnostics_enabled), tempfile.TemporaryDirectory() as temporary:
                 image_path = self._image(Path(temporary))
-                frame = DetectionFrame("input/chart.png", 100, 80, ())
+                frame = DetectionFrame("input/chart.png", 100, 80, (
+                Detection("bar", "horizontal_bar", Box(60, 20, 75, 70), .9),
+            ))
                 ocr = OCRFrame("input/chart.png", ())
-                mapping = LegendMappingFrame("input/chart.png", ())
+                mapping = LegendMappingFrame("input/chart.png", (LegendBarAssignment("bar"),))
                 spec = replace(make_spec(), orientation="horizontal")
                 diagnostics = AnalysisDiagnostics(settings={}) if diagnostics_enabled else None
                 with (
                     patch("src.gradio_ui.analysis.run_detection", return_value=frame),
                     patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),
-                    patch("src.gradio_ui.analysis.bar_orientation", return_value="horizontal"),
                     patch("src.gradio_ui.analysis.match_legend_to_bars") as vertical_match,
                     patch("src.gradio_ui.analysis.reconstruct_vbar") as vertical,
                     patch("src.gradio_ui.analysis.match_legend_to_hbars", autospec=True,
@@ -287,9 +294,11 @@ class GradioAnalysisTest(GradioTestCase):
     def test_interpretation_error_keeps_partial_results_and_explains_blocker(self):
         with tempfile.TemporaryDirectory() as temporary:
             image_path = self._image(Path(temporary))
-            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            frame = DetectionFrame("input/chart.png", 100, 80, (
+                Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
+            ))
             ocr = OCRFrame("input/chart.png", ())
-            mapping = LegendMappingFrame("input/chart.png", ())
+            mapping = LegendMappingFrame("input/chart.png", (LegendBarAssignment("bar"),))
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame),\
                  patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),\
                  patch("src.gradio_ui.analysis.match_legend_to_bars", return_value=mapping),\
@@ -308,9 +317,11 @@ class GradioAnalysisTest(GradioTestCase):
     def test_unexpected_completeness_failure_does_not_publish_unchecked_spec(self):
         with tempfile.TemporaryDirectory() as temporary:
             image_path = self._image(Path(temporary))
-            frame = DetectionFrame("input/chart.png", 100, 80, ())
+            frame = DetectionFrame("input/chart.png", 100, 80, (
+                Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
+            ))
             ocr = OCRFrame("input/chart.png", ())
-            mapping = LegendMappingFrame("input/chart.png", ())
+            mapping = LegendMappingFrame("input/chart.png", (LegendBarAssignment("bar"),))
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame),\
                  patch("src.gradio_ui.analysis.run_ocr", return_value=ocr),\
                  patch("src.gradio_ui.analysis.match_legend_to_bars", return_value=mapping),\
@@ -332,6 +343,7 @@ class GradioAnalysisTest(GradioTestCase):
             image_path = self._image(Path(temporary))
             frame = DetectionFrame("input/chart.png", 100, 80, (
                 Detection("title", "chart_title", Box(5, 5, 50, 15), 0.9),
+                Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
             ))
             with patch("src.gradio_ui.analysis.run_detection", return_value=frame),\
                  patch("src.gradio_ui.analysis.run_ocr", side_effect=RuntimeError("missing")),\
@@ -344,7 +356,7 @@ class GradioAnalysisTest(GradioTestCase):
             self.assertIsNone(result.ocr_frame)
             self.assertEqual(result.ocr_warning, OCR_WARNING)
             self.assertEqual(result.reconstruction_warning, RECONSTRUCTION_WARNING)
-            self.assertIn("**Detected 1 chart element**", result.summary)
+            self.assertIn("**Detected 2 chart elements**", result.summary)
             self.assertIsNotNone(result.overlay_rgb)
 
     def test_matcher_failure_is_independent_and_can_coexist_with_ocr_warning(self):
@@ -962,6 +974,17 @@ class GradioUiTest(GradioTestCase):
                          asdict(reconstructed))
         self.assertRegex(spec_path.name, r"chart_spec_[0-9a-f]{32}\.json")
 
+        uncertain_result = replace(
+            mapped_result, summary="Bar orientation is unclear.",
+            ocr_frame=None, legend_mapping=None, spec=None, completeness=None,
+        )
+        with patch("src.gradio_ui.callbacks.analyze_image", return_value=uncertain_result):
+            uncertain_updates = analyze("chart.png", 0.25, 0.70, "eng")
+        self.assertIsNone(uncertain_updates[8])
+        self.assertFalse(uncertain_updates[13]["interactive"])
+        for index in (4, 5, 6, 7, 9, 14, 15, 16, 17, 18, 19, 20, 21, 22):
+            self.assertFalse(uncertain_updates[index]["visible"])
+
         spec_blocked_result = AnalysisResult(
             "summary", np.zeros((20, 20, 3), dtype=np.uint8), 3,
             mapped_frame, None, None, mapped, None, reconstructed,
@@ -1165,6 +1188,7 @@ class GradioDiagnosticsTest(unittest.TestCase):
             frame = DetectionFrame("input/chart.png", 100, 80, (
                 Detection("title", "chart_title", Box(5, 5, 50, 15), .9),
                 Detection("tick", "y_tick_label", Box(5, 20, 15, 30), .9),
+                Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
             ))
             ocr = OCRFrame(frame.source_key, (
                 RecognizedText("title", "Sales", .8), RecognizedText("tick", "", 0),
@@ -1222,7 +1246,7 @@ class GradioDiagnosticsTest(unittest.TestCase):
                 self.assertEqual(records[0]["outcome"], "succeeded")
                 self.assertTrue(all(s["outcome"] == "succeeded" for s in records[0]["stages"].values()))
                 self.assertEqual(records[0]["counts"], {
-                    "detections": 2, "text_regions": 2, "ocr_returned_regions": 2,
+                    "detections": 3, "text_regions": 2, "ocr_returned_regions": 2,
                     "ocr_readable": 1, "ocr_empty": 1,
                 })
                 for record, stage in ((records[1], "validation"), (records[2], "detection"),
@@ -1264,7 +1288,9 @@ class GradioDiagnosticsTest(unittest.TestCase):
         module, _, _ = fake_rapidocr([output(" label ", .8)])
         with patch("src.rapidocr_ocr._load_rapidocr", return_value=module):
             backend = RapidOCRBackend()
-        frame = DetectionFrame("input/chart.png", 60, 40, (SHORT,))
+        frame = DetectionFrame("input/chart.png", 60, 40, (
+            SHORT, Detection("bar", "vertical_bar", Box(40, 20, 50, 35), .9),
+        ))
         diagnostics = collector()
         with patch("src.gradio_ui.analysis.decode_upload", return_value=(Path("chart.png"), IMAGE)),\
              patch("src.gradio_ui.analysis.run_detection", return_value=frame):

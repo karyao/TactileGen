@@ -7,7 +7,7 @@ from zipfile import ZipFile
 from PIL import Image
 import pytest
 
-from src.contracts import DetectionFrame, OCRFrame
+from src.contracts import Box, Detection, DetectionFrame, OCRFrame
 from src.gradio_app import analyze_image, build_app, parse_args
 from src.gradio_ui.ocr import OCRBackendResolver
 
@@ -73,7 +73,9 @@ def test_analysis_rejects_conflicting_backend_arguments():
 def test_engine_failure_switch_and_retry_preserve_results_and_diagnostics(tmp_path):
     image_path = tmp_path / "chart.png"
     Image.new("RGB", (100, 80), "white").save(image_path)
-    frame = DetectionFrame("input/chart.png", 100, 80, ())
+    frame = DetectionFrame("input/chart.png", 100, 80, (
+        Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
+    ))
     ocr = OCRFrame(frame.source_key, ())
     # Real adapter instances provide diagnostic metadata; their constructors and
     # recognition are mocked so this test requires neither models nor binaries.
