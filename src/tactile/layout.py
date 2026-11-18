@@ -933,3 +933,30 @@ def _layout_pass(chart: VerticalBarChart, mode: str, *,
         series_key_elsewhere=not show_series_key and has_key,
         omit_legend=chart.omit_legend,
     )
+    return layout, omitted, drawn
+
+
+def _cut_grid(lines: list[Line], labels) -> list[Line]:
+    """Remove the stretch of each grid line that passes within the label clearance of a
+    value label (grid lines are least distinct, §6.6.6.5, and labels need 1/8 inch, §3.4.3.12)."""
+    out: list[Line] = []
+    for line in lines:
+        if line.kind != "grid":
+            out.append(line)
+            continue
+        reach = LABEL_MIN_GAP + line.width / 2 + 0.02
+        cuts = sorted((l.bounds.x1 - reach, l.bounds.x2 + reach) for l in labels
+                      if l.bounds.y1 - reach < line.y1 < l.bounds.y2 + reach)
+        start, pieces = line.x1, []
+        for x1, x2 in cuts:
+            if x1 > start:
+                pieces.append((start, x1))
+            start = max(start, x2)
+        if start < line.x2:
+            pieces.append((start, line.x2))
+        if not cuts:
+            pieces = [(line.x1, line.x2)]
+        for k, (x1, x2) in enumerate(pieces):
+            if x2 - x1 >= LABEL_MIN_GAP:
+                out.append(replace(line, id=line.id if k == 0 else f"{line.id}-{k}", x1=x1, x2=x2))
+    return out
