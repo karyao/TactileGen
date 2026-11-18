@@ -451,7 +451,7 @@ import src.presentation
             legend_mapping=mapping,
         )
         self.assertIn(
-            "- Legend matching: 1 of 1 vertical bars matched; 0 unmatched",
+            "- Legend matching: 1 of 1 bars matched; 0 unmatched",
             summary,
         )
         self.assertEqual(LEGEND_TABLE_HEADERS, (

@@ -55,6 +55,7 @@ class AnalysisComponents(ComponentGroup):
     error_output: Any
     diagnostics_download: Any
     diagnostics_info: Any
+    orientation_output: Any
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,7 @@ class Controls:
     language: Any
     inference_size: Any
     ocr_engine: Any
+    bar_orientation: Any
     analyze_button: Any
     clear_button: Any
     size_presets: tuple[Any, ...]
@@ -96,6 +98,7 @@ class Controls:
             self.language,
             self.inference_size,
             self.ocr_engine,
+            self.bar_orientation,
             self.analyze_button,
             self.clear_button,
             *self.size_presets,

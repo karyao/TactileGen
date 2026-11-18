@@ -88,7 +88,7 @@ def summarize_detections(
                        join_legend_assignments(frame, legend_mapping)]
         matched = sum(item.status == "matched" for item in assignments)
         status_lines.append(
-            f"- Legend matching: {matched} of {len(assignments)} vertical "
+            f"- Legend matching: {matched} of {len(assignments)} "
             f"bars matched; {len(assignments) - matched} unmatched"
         )
     status_lines.append("- Numeric bar values are not reconstructed.")

@@ -2,9 +2,12 @@
 
     python -m src.tactile.pipeline --image chart.png --output output/tactile/chart.svg
 
-The bar direction is read from the detections: when most bars are
-horizontal, the horizontal reconstruction and layout are used. Detecting
-horizontal bars needs a checkpoint trained on them (``--weights``).
+Bar orientation comes from the shared resolver (``src.bar_orientation``),
+the same policy as the Gradio app: automatic selection needs enough
+consistent bar evidence, otherwise the chart cannot be built and you can
+retry with ``--bar-orientation vertical`` or ``--bar-orientation
+horizontal``. Detecting horizontal bars needs a checkpoint trained on them
+(``--weights``).
 
 Exit status: 0 written, 1 error, 2 text still needed, 3 chart cannot be
 built, 4 categories not confirmed.
@@ -19,6 +22,7 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
+from src.bar_orientation import BarOrientationResult, resolve_bar_orientation
 from src.contracts import ChartInterpretationError, VerticalBarSpec
 from src.tactile.completeness import (
     CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Completeness, Overrides,
@@ -48,10 +52,30 @@ def _ocr_backend(name: str):
     return TesseractBackend(), "eng"
 
 
-def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract"):
-    """Run YOLO, OCR, legend matching and reconstruction.
+def _orientation_error(result: BarOrientationResult) -> ChartInterpretationError:
+    """Explain an uncertain orientation decision, with a retry hint."""
+    if result.reason == "requested_orientation_unavailable":
+        reason = f"No usable {result.preference} bars were detected."
+    else:
+        reason = {
+            "no_qualifying_bars": "No usable bars were detected.",
+            "insufficient_evidence": "The detected bars provide too little evidence.",
+            "ambiguous_orientation":
+                "The detected bars provide conflicting orientation evidence.",
+        }[result.reason]
+    return ChartInterpretationError(
+        f"Bar orientation is unclear. {reason} "
+        "Pass --bar-orientation vertical or --bar-orientation horizontal to choose."
+    )
 
-    Returns ``(spec, None, frame)`` or ``(None, error, frame)``.
+
+def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
+            *, bar_orientation: str = "auto"):
+    """Run YOLO, resolve bar orientation, then OCR and reconstruction.
+
+    Returns ``(spec, None, frame)`` or ``(None, error, frame)``. On success the
+    frame is the resolver's effective frame with opposite-orientation bars
+    removed; on uncertainty it is the raw detection frame.
     """
     import cv2
 
@@ -59,16 +83,21 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract"):
     from src.legend_matcher import match_legend_to_bars
     from src.ocr import run_ocr
     from src.reconstruct import reconstruct_vbar
-    from src.reconstruct_hbar import bar_orientation, reconstruct_hbar
+    from src.reconstruct_hbar import reconstruct_hbar
 
     image = cv2.imread(str(image_path))
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
-    frame = run_detection(load_model(weights), image_path)
+    raw_frame = run_detection(load_model(weights), image_path)
+    resolution = resolve_bar_orientation(raw_frame, bar_orientation)
+    if resolution.status != "resolved":
+        return None, _orientation_error(resolution), raw_frame
+    frame = resolution.effective_frame
+    assert frame is not None
     backend, language = _ocr_backend(ocr_engine)
     ocr = run_ocr(image, frame, backend, language)
     try:
-        if bar_orientation(frame) == "horizontal":
+        if resolution.orientation == "horizontal":
             spec = reconstruct_hbar(frame, ocr, image)
         else:
             legend_mapping = match_legend_to_bars(image, frame, ocr)
@@ -175,7 +204,8 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
         return EXIT_ERROR
 
     try:
-        spec, error, frame = analyse_fn(args.image, args.weights)
+        spec, error, frame = analyse_fn(args.image, args.weights,
+                                        bar_orientation=args.bar_orientation)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=err)
         return EXIT_ERROR
@@ -299,6 +329,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="category labels (beside the bars for horizontal charts)")
     parser.add_argument("--ocr", choices=OCR_ENGINES, default="tesseract",
                         help="OCR engine (default tesseract)")
+    parser.add_argument("--bar-orientation", choices=("auto", "vertical", "horizontal"),
+                        default="auto",
+                        help="bar direction: auto picks it from the detections when "
+                             "the evidence is clear; vertical or horizontal forces "
+                             "that direction (default auto)")
     return parser.parse_args(argv)
 
 

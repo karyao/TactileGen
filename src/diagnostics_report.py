@@ -99,6 +99,13 @@ def explanation(event):
         return "The title-edge check used the recorded coordinates or ink counts and threshold."
     if code == "reconstruction_blocked":
         return "Reconstruction stopped at this recorded prerequisite check."
+    if code == "bar_orientation_resolved":
+        return (f"The shared orientation resolver selected {event.get('orientation')} "
+                f"from preference {event.get('preference')} ({event.get('source')}); "
+                "opposite-orientation detections were removed before OCR.")
+    if code == "bar_orientation_uncertain":
+        return ("The shared orientation resolver did not select an orientation from the "
+                "recorded scores. OCR, legend matching, and reconstruction were skipped.")
     if code == "completeness_check":
         rule = event["rule"]
         if rule == "braille_encoding":
@@ -113,6 +120,14 @@ def explanation(event):
         if rule == "blocked_early_return":
             return "Completeness returned early because of blockers. Later text and braille checks did not execute."
     return "Recorded pipeline evidence; the exact values are shown below."
+
+
+ORIENTATION_FACTS = (
+    "preference", "status", "source", "reason", "orientation",
+    "vertical_score", "horizontal_score", "min_bar_confidence",
+    "min_orientation_score", "min_orientation_share", "suppressed_ids",
+    "raw_detections", "effective_detections",
+)
 
 
 def decision_facts(event):
@@ -133,6 +148,8 @@ def decision_facts(event):
         "title_edge_check": ("detection_id", "x2", "accepted_maximum", "threshold_pixels"),
         "completeness_check": ("rule", "field", "text", "length", "median_length", "median_length_threshold",
                                "median_year", "distance", "threshold", "supplied_exemption", "rejected_characters"),
+        "bar_orientation_resolved": ORIENTATION_FACTS,
+        "bar_orientation_uncertain": ORIENTATION_FACTS,
     }.get(event["code"], ())
     return [f"- {prose(key.replace('_', ' '))}: {literal(event[key])}" for key in fields if key in event]
 
@@ -252,6 +269,7 @@ class DiagnosticReport:
                    e["code"] == "completeness_check" and e.get("rule") in ("blocking_flag", "blocked_early_return")]
             for reason in blockers:
                 lines.extend(self.issue("Build blocked", ids, reason))
+        lines.extend(self.orientation())
         if record["exceptions"]:
             lines.extend(["## Recorded errors", ""])
             for error in record["exceptions"]:
@@ -310,6 +328,44 @@ class DiagnosticReport:
             lines.append("- " + self.link(path, path))
         return "\n".join(lines) + "\n"
 
+    def orientation(self):
+        """Short section: why the orientation gate decided as it did."""
+        event = next((e for e in self.record["events"]
+                      if e["code"] in ("bar_orientation_resolved",
+                                       "bar_orientation_uncertain")), None)
+        lines = ["## Bar orientation", ""]
+        if event is None:
+            lines.extend(["Bar orientation evidence is unavailable; see the stage outcomes.", ""])
+            return lines
+        resolved = event["code"] == "bar_orientation_resolved"
+        decision = (f"resolved **{prose(event['orientation'])}**" if resolved
+                    else "**uncertain**")
+        lines.append(f"- Decision: {decision}; preference {literal(event['preference'])}, "
+                     f"source {literal(event['source'])}, reason {literal(event['reason'])}.")
+        lines.append(
+            f"- Evidence scores: vertical {literal(event['vertical_score'])}, "
+            f"horizontal {literal(event['horizontal_score'])}; thresholds: bar confidence at or above "
+            f"{literal(event['min_bar_confidence'])}, winning score at or above "
+            f"{literal(event['min_orientation_score'])}, share at or above "
+            f"{literal(event['min_orientation_share'])}.")
+        suppressed = event.get("suppressed_ids") or []
+        shown = ", ".join(literal(identifier) for identifier in suppressed) or "none"
+        effective = event.get("effective_detections")
+        counts = (f"raw {literal(event.get('raw_detections'))}, effective {literal(effective)}"
+                  if resolved and effective is not None
+                  else f"raw {literal(event.get('raw_detections'))}, "
+                       "effective none (orientation unresolved)")
+        lines.append(f"- Detections: {counts}; suppressed IDs: {shown}.")
+        raw_frame = self.link("detections.json", "detections.json")
+        if resolved:
+            effective_frame = self.link("effective_detections.json", "effective_detections.json")
+            lines.append(f"- Frames: raw {raw_frame}; effective {effective_frame}.")
+        else:
+            lines.append(f"- Frames: raw {raw_frame}; "
+                         "effective: unavailable (orientation unresolved).")
+        lines.append("")
+        return lines
+
     def attempt(self, attempt):
         lines = ["#### Attempt " + literal(attempt["attempt_id"]), "",
                  "Submission: " + literal(attempt["recognition_submission"]) + "; selection: " + literal(attempt["selection"]) + ".", "",
@@ -344,17 +400,23 @@ def build_bundle(record, assets, log_text):
         files["ocr_trace.json"] = json_bytes(record["ocr_trace"])
     for name, value in record["outputs"].items():
         # Match the existing standalone contract downloads, including their envelope.
-        payload = {"schema_version": SCHEMA_VERSION, **value} if name in ("ocr", "detections") else value
+        payload = ({"schema_version": SCHEMA_VERSION, **value}
+                   if name in ("ocr", "detections", "effective_detections") else value)
         files[f"{name}.json"] = json_bytes(payload)
     files["analysis.log"] = log_text.encode("utf-8")
     files["report.txt"] = legacy_report(record).encode("utf-8")
     available = set(files) | {"manifest.json", "report.md"}
     artifacts = [{"path": path, "availability": "available"} for path in sorted(available)]
-    for path, stage in (("ocr.json", "ocr"), ("detections.json", "detection"), ("ocr_trace.json", "ocr")):
+    for path, stage in (("ocr.json", "ocr"), ("detections.json", "detection"),
+                        ("ocr_trace.json", "ocr"),
+                        ("effective_detections.json", "orientation_resolution")):
         if path not in available:
             status = record["stages"][stage]
+            reason = status.get("reason") or f"No output recorded; {stage} stage: {status['outcome']}"
+            if path == "effective_detections.json" and status.get("outcome") == "succeeded":
+                reason = "Bar orientation was not resolved; no effective frame was recorded"
             artifacts.append({"path": path, "availability": "unavailable",
-                              "reason": status.get("reason") or f"No output recorded; {stage} stage: {status['outcome']}"})
+                              "reason": reason})
     unavailable = []
     if not record.get("ocr_source_crops"):
         unavailable.append({"kind": "source_crops", "reason": "No source crops recorded; see detection and OCR stage outcomes"})

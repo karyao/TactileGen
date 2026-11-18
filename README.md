@@ -6,7 +6,7 @@ OCR, chart reconstruction, and braille layouts checked against BANA rules.
 Generated graphics still need review before embossing.
 
 ```text
-Chart image → YOLO detections → OCR → chart data → tactile SVG
+Chart image → YOLO detections → orientation gate → OCR → chart data → tactile SVG
 ```
 
 ## Run the app
@@ -27,6 +27,11 @@ its text and values, and generate tactile SVGs.
   RapidOCR or Tesseract in the **OCR engine** dropdown. Tesseract requires its
   executable and language packs installed; start with `--ocr tesseract` to select
   it by default. **Tesseract language** applies only to Tesseract.
+- **Bar orientation:** leave **Auto** selected, or choose **Vertical** or
+  **Horizontal** and analyze again if the direction is unclear. The result shows
+  the selected direction, automatic/manual source, and suppressed detection count.
+  Changing this preference clears prior review and generated outputs; **Clear**
+  restores Auto. A manual choice requires usable detections in that direction.
 - **Detection size:** choose **640**, **960**, or **1280** under **Advanced settings**,
   or start with `--imgsz 960`. The default is 640; the maximum is 1280. Larger
   sizes may help with small elements but use more memory and take longer.
@@ -72,6 +77,12 @@ python -m src.tactile.pipeline --image chart.png --ocr rapidocr \
   --output output/tactile/chart.svg
 ```
 
+The pipeline picks the bar direction automatically. When the detector's
+evidence is ambiguous, rerun with `--bar-orientation vertical` or
+`--bar-orientation horizontal` to choose it explicitly. The gate's score and
+share thresholds are heuristics, not calibrated probabilities: they enforce a
+consistent direction, not detection correctness.
+
 To try the layout without detection or OCR dependencies:
 
 ```bash
@@ -93,5 +104,7 @@ stages, not the accuracy or tactile readability of the final graphic.
 - [Analysis diagnostics](docs/analysis_diagnostics.md) — reports and troubleshooting.
 - [Stage contracts](docs/contracts.md) and [Gradio structure](docs/gradio_structure.md)
   — developer documentation.
+- [Orientation resolver tests](tests/test_bar_orientation.py) — resolver checks
+  and the real mixed-detection regression fixture.
 - [Real-chart dataset](docs/real_chart_data.md) — ChartDete-PMC downloads, class
   differences, and licensing.

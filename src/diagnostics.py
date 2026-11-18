@@ -21,8 +21,8 @@ import weakref
 
 LOGGER = logging.getLogger("src.gradio_app")
 STAGES = (
-    "validation", "detection", "ocr", "legend_matching", "reconstruction",
-    "presentation", "result_preparation",
+    "validation", "detection", "orientation_resolution", "ocr",
+    "legend_matching", "reconstruction", "presentation", "result_preparation",
 )
 
 
@@ -106,6 +106,7 @@ class AnalysisDiagnostics:
                               "ended_at": None, "duration_seconds": None,
                               "reason": None} for name in STAGES},
             "counts": {"detections": None, "text_regions": None,
+                       "effective_detections": None,
                        "ocr_returned_regions": None, "ocr_readable": None,
                        "ocr_empty": None},
             "warnings": [], "exceptions": [], "spec_flags": [],

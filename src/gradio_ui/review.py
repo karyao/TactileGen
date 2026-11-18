@@ -36,6 +36,8 @@ class ReviewModel:
     spec: VerticalBarSpec
     bindings: tuple[ReviewFieldBinding, ...]
     draft_values: tuple[str, ...]
+    run_id: str | None = None
+    review_revision: int = 0
 
 
 @dataclass(frozen=True)

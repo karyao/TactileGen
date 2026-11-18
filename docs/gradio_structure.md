@@ -33,8 +33,11 @@ Read these three functions in order to understand **Analyze chart**:
 2. `callbacks.create_callbacks()` creates `analyze_event()`, which calls the
    analysis code, prepares downloads, and decides what the page should display.
 3. `analysis.analyze_image()` validates the upload, detects chart elements,
-   recognizes text, matches legends, reconstructs values, and renders an overlay.
-   Its `AnalysisResult` holds both successful results and warnings.
+   resolves the bar orientation with the shared resolver, recognizes text,
+   matches legends, reconstructs values, and renders an overlay. The
+   `orientation_resolution` diagnostics stage records why a direction was
+   selected or why downstream stages were skipped. Its `AnalysisResult` holds
+   both successful results and warnings.
 
 For **Generate tactile graphic**, follow `generate_event()` into
 `review.generate_review_submission()`. The review model keeps a draft of label
