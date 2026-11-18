@@ -104,8 +104,6 @@ RULES = {rule.id: rule for rule in (
          "A bar value label is centred on its bar, 1/8 to 1/4 inch above it, or raised on a "
          "lead line of 3/4 inch that touches the bar and ends 1/8 to 1/4 inch from the label. "
          "(Clearance from everything else is label_clearance.)"),
-    Rule("value_label_fit", "not from BANA",
-         "A bar value label is no wider than its bar, unless it is raised on a lead line."),
 )}
 
 
@@ -364,10 +362,6 @@ def _value_labels(layout):
                 yield _violation("value_label_clearance", f"{label.id} is not above {bar.id}",
                                  label.id, bar.id)
             gap = label.bounds.gap(bar.bounds)
-            bar_width = bar.bounds.x2 - bar.bounds.x1
-            if label.width > bar_width + TOLERANCE:
-                yield _violation("value_label_fit", f"{label.id} is {label.width:.1f} mm wide, "
-                                 f"its bar {bar_width:.1f} mm", label.id, bar.id)
         if not LABEL_MIN_GAP - TOLERANCE <= gap <= LABEL_MAX_GAP + TOLERANCE:
             yield _violation("value_label_clearance", f"{label.id} is {gap:.1f} mm from its "
                              f"{'lead line' if raised else 'bar'} (allowed {LABEL_MIN_GAP:.1f}-"

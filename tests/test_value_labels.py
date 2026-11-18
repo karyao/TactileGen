@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from src.contract_io import load_vertical_bar_chart, write_vertical_bar_chart
 from src.contracts import BarSeries, SeriesSpec, VerticalBarChart, VerticalBarSpec, YAxisSpec
@@ -10,6 +11,7 @@ from src.tactile import check_layout, constants, layout_vertical_bar_chart
 from src.tactile.braille import has_numeric_indicator, to_braille
 from src.tactile.completeness import spec_to_chart_with_notes
 from src.tactile.layout import BrailleLabel, layout_vertical_bar_chart_pages
+from src.tactile import layout as vertical_layout
 from src.tactile.value_labels import significant_cap, value_text
 
 CATS = ("2003", "2004", "2005", "2006")
@@ -78,7 +80,7 @@ class SingleSeriesTest(unittest.TestCase):
         layout = layout_vertical_bar_chart(chart([BarSeries(None, (0.31, 0.45, 0.52, 0.68))]))
         self.assertEqual([l.text for l in values(layout)], ["0.3", "0.5", "0.5", "0.7"])
 
-    def test_fewer_decimals_when_a_label_is_wider_than_its_bar(self):
+    def test_decimals_follow_tick_step_when_surrounding_space_is_available(self):
         three = ("a", "b", "c")
         layout = layout_vertical_bar_chart(chart([BarSeries(None, (0.31, 0.34, 0.38))], three))
         self.assertEqual([l.text for l in values(layout)], ["0.3", "0.3", "0.4"])
@@ -128,24 +130,41 @@ class NoRoomTest(unittest.TestCase):
         return layout_vertical_bar_chart(chart(
             [BarSeries(None, (123456.789, 234567.891, 345678.912))], ("a", "b", "c")))
 
-    def test_a_label_wider_than_its_bar_goes_on_a_lead_line(self):
+    def test_a_label_wider_than_its_bar_stays_directly_above_when_clear(self):
         layout = self.long_numbers()
-        raised = [l for l in layout.lines if l.kind == "lead"]
-        self.assertEqual([l.id for l in raised], ["lead-0-2"])
-        self.assertAlmostEqual(raised[0].length, constants.LEAD_LINE_LENGTH)
-        label = values(layout)[0]
-        self.assertEqual((label.id, label.text, label.owner_id), ("value-0-2", "346000", "lead-0-2"))
+        self.assertFalse(any(line.kind == "lead" for line in layout.lines))
+        label, = values(layout)
+        bar = bar_for(layout, label)
+        self.assertEqual((label.id, label.text, label.owner_id),
+                         ("value-0-2", "346000", bar.id))
+        self.assertGreater(label.width, bar.bounds.x2 - bar.bounds.x1)
+        self.assertAlmostEqual((label.bounds.x1 + label.bounds.x2) / 2,
+                               bar.x + bar.width / 2)
+        self.assertGreaterEqual(bar.bounds.y1 - label.bounds.y2, constants.LABEL_MIN_GAP)
+        self.assertLessEqual(bar.bounds.y1 - label.bounds.y2, constants.LABEL_MAX_GAP)
+        self.assertEqual(rules(layout), [])
+
+    def test_actual_crowding_still_uses_lead_lines(self):
+        layout = layout_vertical_bar_chart(chart(
+            [BarSeries(None, tuple(float(10 + i) for i in range(12)))],
+            tuple(chr(97 + i) for i in range(12))))
+        leads = [line for line in layout.lines if line.kind == "lead"]
+        self.assertTrue(leads)
+        self.assertTrue(values(layout))
+        self.assertTrue(any(l.owner_id == lead.id for l in values(layout) for lead in leads))
+        for lead in leads:
+            self.assertAlmostEqual(lead.length, constants.LEAD_LINE_LENGTH)
         self.assertEqual(rules(layout), [])
 
     def test_bars_with_no_room_are_omitted_and_named_in_a_note(self):
         layout = self.long_numbers()
         self.assertEqual([l.id for l in values(layout)], ["value-0-2"])
-        self.assertIn("No value is shown for bars too narrow for it: a, b.", note_text(layout))
+        self.assertIn("No value is shown for bars lacking space: a, b.", note_text(layout))
         self.assertIn(ESTIMATE, note_text(layout))
 
     def test_a_chart_with_no_room_for_labels_keeps_its_old_layout(self):
-        many = chart([BarSeries(None, tuple(float(10 + i) for i in range(12)))],
-                     tuple(str(i) for i in range(12)))
+        many = chart([BarSeries(None, tuple(float(10 + i) for i in range(14)))],
+                     tuple(str(i) for i in range(14)))
         layout = layout_vertical_bar_chart(many)
         self.assertEqual(values(layout), [])
         self.assertIn("bar values are not labelled: no room on the page for them", layout.notes)
@@ -221,19 +240,80 @@ class RuleTest(unittest.TestCase):
         moved, _ = self.moved(x=values(self.layout)[0].x + 2.0)
         self.assertIn("value_label_clearance", self.ids(moved))
 
-    def test_a_label_wider_than_its_bar_without_a_lead_line_breaks_fit(self):
+    def test_wider_labels_still_report_actual_clearance_conflicts(self):
         label = values(self.layout)[0]
         wide = to_braille("123456789012")
-        moved, _ = self.moved(text="123456789012", cells=wide, x=label.x - 20)
-        self.assertIn("value_label_fit", self.ids(moved))
+        moved, _ = self.moved(text="123456789012", cells=wide,
+                              x=label.x + label.width / 2 - vertical_layout.label_width(len(wide)) / 2)
+        self.assertIn("label_clearance", self.ids(moved))
+        self.assertNotIn("value_label_fit", self.ids(moved))
 
-    def test_the_new_rules_are_registered_with_their_sources(self):
+    def test_value_label_rules_only_enforce_clearance(self):
         from src.tactile import RULES
         self.assertEqual(RULES["value_label_clearance"].section, "§3.4.3.12")
-        self.assertEqual(RULES["value_label_fit"].section, "not from BANA")
+        self.assertNotIn("value_label_fit", RULES)
 
 
 class DividedGraphTest(unittest.TestCase):
+    def test_unequal_rescued_and_omission_notes_keep_shared_geometry(self):
+        source = chart([
+            BarSeries("A", tuple(float(10 + i * 3) for i in range(12)),
+                      rescued=(True,) + (False,) * 11),
+            BarSeries("B", (20.,) * 12)], tuple(f"C{i}" for i in range(12)))
+        pages = vertical_layout._sections(
+            source, "full", list(source.categories), [range(6), range(6, 12)], 43.)
+        graphs = [p for p in pages if p.page_kind == "graph"]
+        self.assertEqual(len(graphs), 2)
+        self.assertEqual(graphs[0].plot, graphs[1].plot)
+        self.assertNotEqual(note_text(graphs[0]), note_text(graphs[1]))
+        self.assertIn("detected bar: C0 (A).", note_text(graphs[0]))
+        for page, omitted in zip(graphs, (
+            {"bar-1-5"}, {f"bar-1-{i}" for i in range(6)}
+        )):
+            labelled = {"bar-" + label.id[len("value-"):] for label in values(page)}
+            eligible = {bar.id for bar in page.bars}
+            if page is graphs[0]:
+                eligible.remove("bar-0-0")
+            self.assertEqual(eligible - labelled, omitted)
+            self.assertEqual(rules(page), [])
+        self.assertIn("lacking space: C5 (B).", note_text(graphs[0]))
+        self.assertIn("lacking space: C6 (B), C7 (B), C8 (B), C9 (B), C10 (B), C11 (B).",
+                      note_text(graphs[1]))
+
+    def test_first_page_title_does_not_change_the_scale(self):
+        source = chart([BarSeries(None, tuple(float(i) for i in range(1, 25)))],
+                       tuple(f"Item {i}" for i in range(1, 25)))
+        pages = layout_vertical_bar_chart_pages(source)
+        self.assertGreater(len(pages), 1)
+        self.assertTrue(any(l.role == "title" for l in pages[0].labels))
+        self.assertIn("divided by category", note_text(pages[0]))
+        for page in pages:
+            self.assertEqual(page.plot.y1, pages[0].plot.y1)
+            self.assertEqual(page.plot.y2, pages[0].plot.y2)
+            self.assertEqual(rules(page), [])
+
+    def test_unavailable_shared_geometry_advances_pagination_search(self):
+        source = chart([
+            BarSeries("A", tuple(float(i) for i in range(1, 13))),
+            BarSeries("B", tuple(float(30 - i) for i in range(1, 13)))],
+            tuple(f"C{i}" for i in range(12)))
+        sections = vertical_layout._sections
+
+        def reject_two_parts(chart, mode, texts, chunks, *args):
+            if len(chunks) == 2:
+                raise ValueError("no shared section geometry fits")
+            return sections(chart, mode, texts, chunks, *args)
+
+        with patch.object(vertical_layout, "_sections", side_effect=reject_two_parts) as build:
+            pages = layout_vertical_bar_chart_pages(source)
+        graphs = [page for page in pages if page.page_kind == "graph"]
+        self.assertTrue(any(len(call.args[3]) == 2 for call in build.call_args_list))
+        self.assertGreater(len(graphs), 2)
+        for page in graphs:
+            self.assertEqual(page.plot.y1, graphs[0].plot.y1)
+            self.assertEqual(page.plot.y2, graphs[0].plot.y2)
+            self.assertEqual(rules(page), [])
+
     def test_split_pages_share_tick_values_and_physical_scale(self):
         # Uneven label headroom used to give these pages identical 0–100
         # ticks but plot heights of 107.8651 mm and 127.1651 mm.
@@ -301,6 +381,69 @@ class DividedGraphTest(unittest.TestCase):
         self.assertGreater(len(pages), 1)
         for page in pages:
             self.assertEqual(rules(page), [])
+
+
+class SharedPlanningTest(unittest.TestCase):
+    def setUp(self):
+        self.source = chart([BarSeries(None, (10., 20., 30., 40.))])
+        self.sections = [(self.source, dict(category_texts=list(CATS)))]
+        self.ordinary = [layout_vertical_bar_chart(self.source, value_labels=False)]
+        self.raised = [replace(self.ordinary[0], notes=("raised candidate",))]
+
+    def test_raised_headroom_requires_fewer_omissions_overall(self):
+        for raised_omissions, expected in ((1, self.raised), (2, self.ordinary),
+                                          (3, self.ordinary)):
+            with self.subTest(raised_omissions=raised_omissions):
+                with patch.object(vertical_layout, "_shared_candidate", side_effect=[
+                    (self.ordinary, 2), (self.raised, raised_omissions)
+                ]) as build:
+                    result = vertical_layout._shared_sections(self.sections, "full", 40., True)
+                self.assertIs(result, expected)
+                self.assertEqual([call.args[-1] for call in build.call_args_list],
+                                 [vertical_layout.VALUE_HEADROOM,
+                                  vertical_layout.VALUE_HEADROOM_RAISED])
+
+    def test_raised_headroom_cannot_shrink_plot_below_minimum(self):
+        page = self.raised[0]
+        short = [replace(page, plot=replace(page.plot, y1=page.plot.y2 - 10))]
+        with patch.object(vertical_layout, "_shared_candidate", side_effect=[
+            (self.ordinary, 2), (short, 0)
+        ]):
+            self.assertIs(vertical_layout._shared_sections(self.sections, "full", 40., True),
+                          self.ordinary)
+
+    def test_invalid_ordinary_candidate_does_not_hide_valid_raised_candidate(self):
+        invalid = [replace(self.ordinary[0], bars=(
+            replace(self.ordinary[0].bars[0], width=0.1),))]
+        with patch.object(vertical_layout, "_shared_candidate", side_effect=[
+            (invalid, 0), (self.raised, 1)
+        ]):
+            self.assertIs(vertical_layout._shared_sections(self.sections, "full", 40., True),
+                          self.raised)
+
+    def test_unavailable_label_candidates_fall_back_to_shared_plain_pages(self):
+        with patch.object(vertical_layout, "_shared_candidate", side_effect=[
+            ValueError("no room"), ValueError("no room"), (self.ordinary, 0)
+        ]) as build:
+            pages = vertical_layout._shared_sections(self.sections, "full", 40., True)
+        self.assertEqual(pages[0].plot, self.ordinary[0].plot)
+        self.assertIn("bar values are not labelled: no room on the page for them", pages[0].notes)
+        self.assertEqual(build.call_args_list[-1].args[-2:], (False, 0.0))
+
+    def test_nonconvergence_rejects_candidate(self):
+        def alternating_result(*args, **kwargs):
+            return self.ordinary[0], (), int(not kwargs["estimate_note"])
+
+        with patch.object(vertical_layout, "_layout_pass", side_effect=alternating_result) as build:
+            with self.assertRaisesRegex(ValueError, "did not converge"):
+                vertical_layout._shared_candidate(self.sections, "full", 40., True,
+                                                   vertical_layout.VALUE_HEADROOM)
+        self.assertEqual(build.call_count, 2 * (4 + 1) + 4)
+
+    def test_locked_geometry_rejects_a_header_that_does_not_fit(self):
+        geometry = vertical_layout._vertical_geometry(self.source, 0., 0., 40.)
+        with self.assertRaisesRegex(ValueError, "header exceeds shared geometry"):
+            vertical_layout._layout_pass(self.source, "full", shared_geometry=geometry)
 
 
 if __name__ == "__main__":

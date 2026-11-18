@@ -425,17 +425,12 @@ def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
         part = f"Part {k} of {n}: {span}."
         return (division, part) if k == 1 and not key_page else (part,)
 
-    def build(heading_y_min):
-        return [_layout(section_chart(r), mode, category_texts=[texts[i] for i in r],
-                        show_title=k == 1 and not key_page, transcriber_notes=notes(k, r),
-                        show_series_key=not key_page,
-                        heading_y_min=heading_y_min, value_max=value_max,
-                        value_labels=value_labels)
-                for k, r in enumerate(chunks, 1)]
-
-    first = build(None)
-    heading_y = max(min(l.y for l in page.labels if l.role == "y_heading") for page in first)
-    pages = [replace(page, section=(k, n)) for k, page in enumerate(build(heading_y), 1)]
+    sections = [(section_chart(r), dict(
+        category_texts=[texts[i] for i in r], show_title=k == 1 and not key_page,
+        transcriber_notes=notes(k, r), show_series_key=not key_page))
+        for k, r in enumerate(chunks, 1)]
+    pages = [replace(page, section=(k, n)) for k, page in enumerate(
+        _shared_sections(sections, mode, value_max, value_labels), 1)]
     return ([_key_page(chart, (division,))] if key_page else []) + pages
 
 
@@ -594,6 +589,96 @@ VALUE_HEADROOM = LABEL_HEIGHT + LABEL_MIN_GAP + BAR_OUTLINE_WIDTH / 2 + 0.02
 VALUE_HEADROOM_RAISED = VALUE_HEADROOM + LEAD_LINE_LENGTH + GRID_WIDTH / 2
 
 
+@dataclass(frozen=True)
+class _VerticalGeometry:
+    heading_y: float
+    plot_top: float
+    axis_y: float
+    step: float
+    intervals: int
+
+
+def _vertical_geometry(chart, heading_y, headroom, maximum):
+    """Choose physical extent and ticks before fitting any bar value labels."""
+    usable = _usable_area()
+    # Reserve category labels and the horizontal heading below the baseline.
+    x_heading = wrap_cells(chart.x_axis_title, CELLS_PER_LINE)
+    axis_y = (usable.y2 - LABEL_HEIGHT - LINE_PITCH * len(x_heading)
+              - LABEL_GAP - AXIS_WIDTH / 2)
+    y_heading = wrap_cells(chart.y_axis_title, Y_HEADING_MAX_CELLS)
+    heading_bottom = heading_y + (len(y_heading) - 1) * LINE_PITCH + LABEL_HEIGHT
+    # Top tick dots 2–5 sit on the grid line below the heading (§6.6.6.6).
+    top_label_y = max(heading_y + LINE_PITCH * len(y_heading),
+                      heading_bottom + Y_HEADING_CLEARANCE)
+    plot_top = top_label_y + DOT_DIAMETER / 2 + DOT_PITCH + headroom
+    max_intervals = min(MAX_GRID_INTERVALS, int((axis_y - plot_top) // GRID_MIN_SPACING))
+    step, intervals = _nice_step(maximum, max_intervals)
+    return _VerticalGeometry(heading_y, plot_top, axis_y, step, intervals)
+
+
+def _shared_candidate(sections, mode, value_max, value_labels, headroom):
+    """Converge page notes together; every render uses one immutable scale."""
+    forced = [frozenset() for _ in sections]
+    estimates = [value_labels and any(s.has_bars for s in chart.series)
+                 for chart, _ in sections]
+    eligible = sum(sum(not flag for flag in (s.rescued or (False,) * len(s.values)))
+                   for chart, _ in sections for s in chart.series if s.has_bars)
+    heading_y = 0.0
+    # Omissions only grow; each new note state may need another measurement
+    # and render. Keep a finite guard rather than returning unfinished notes.
+    for _ in range(2 * (eligible + len(sections)) + 4):
+        headers = [_page_header(chart, mode, **page, value_labels=value_labels,
+                                forced_omit=omit, estimate_note=estimate)[0]
+                   for (chart, page), omit, estimate in zip(sections, forced, estimates)]
+        heading_y = max(heading_y, *headers)
+        geometry = _vertical_geometry(sections[0][0], heading_y, headroom, value_max)
+        results = [_layout_pass(chart, mode, **page, value_labels=value_labels,
+                                forced_omit=omit, estimate_note=estimate,
+                                shared_geometry=geometry)
+                   for (chart, page), omit, estimate in zip(sections, forced, estimates)]
+        next_forced = [old | frozenset(result[1]) for old, result in zip(forced, results)]
+        next_estimates = [result[2] > 0 for result in results]
+        if next_forced == forced and next_estimates == estimates:
+            return [result[0] for result in results], sum(len(ids) for ids in forced)
+        forced, estimates = next_forced, next_estimates
+    raise ValueError("shared section notes did not converge")
+
+
+def _shared_sections(sections, mode, value_max, value_labels):
+    """Select headroom by total label coverage, preserving the shared scale."""
+    from src.tactile.rules import check_layout
+
+    def candidate(enabled, headroom):
+        try:
+            pages, omitted = _shared_candidate(sections, mode, value_max, enabled, headroom)
+        except ValueError:
+            return None
+        if any(v.rule.id != "overview_first" for page in pages for v in check_layout(page)):
+            return None
+        return pages, omitted
+
+    if not value_labels:
+        plain = candidate(False, 0.0)
+        if plain is None:
+            raise ValueError("no shared section geometry fits")
+        return plain[0]
+
+    ordinary = candidate(True, VALUE_HEADROOM)
+    if ordinary is not None and ordinary[1] == 0:
+        return ordinary[0]
+    raised = candidate(True, VALUE_HEADROOM_RAISED)
+    if raised is not None and all(_plot_height(p) >= MIN_PLOT_HEIGHT for p in raised[0]):
+        if ordinary is None or raised[1] < ordinary[1]:
+            return raised[0]
+    if ordinary is not None:
+        return ordinary[0]
+    plain = candidate(False, 0.0)
+    if plain is None:
+        raise ValueError("no shared section geometry fits")
+    return [replace(page, notes=page.notes + (
+        "bar values are not labelled: no room on the page for them",)) for page in plain[0]]
+
+
 def _layout(chart: VerticalBarChart, mode: str, *, value_labels: bool = True,
             **page) -> TactileLayout:
     """One page. Bar value labels change the header (their notes) and so the plot, which
@@ -654,8 +739,39 @@ def _value_notes(chart, rescued, omitted, estimate) -> tuple[str, ...]:
         notes.append("No value is shown for bars whose height was measured without a "
                      f"detected bar: {_bar_names(chart, rescued)}.")
     if omitted:
-        notes.append(f"No value is shown for bars too narrow for it: {_bar_names(chart, omitted)}.")
+        notes.append(f"No value is shown for bars lacking space: "
+                     f"{_bar_names(chart, omitted)}.")
     return tuple(notes)
+
+
+def _page_header(chart, mode, *, category_texts, show_title=True,
+                 transcriber_notes=(), show_series_key=True, value_labels=False,
+                 forced_omit=frozenset(), estimate_note=False):
+    """Build the header once for both space measurement and page rendering."""
+    keyed = mode != "full"
+    has_key = _has_series_key(chart)
+    no_bars = _no_bars_note(chart)
+    if no_bars and show_series_key:
+        transcriber_notes = (*transcriber_notes, no_bars)
+    rescued_ids = frozenset(f"bar-{s}-{j}" for s, series in enumerate(chart.series)
+                            for j, flag in enumerate(series.rescued) if flag)
+    if value_labels:
+        transcriber_notes = (*transcriber_notes,
+                             *_value_notes(chart, rescued_ids, forced_omit, estimate_note))
+
+    usable = _usable_area()
+    labels: list[BrailleLabel] = []
+    samples: list[KeySample] = []
+    notes: list[str] = []
+    y = _header(chart, usable, usable.y1, labels, samples, notes,
+                show_title=show_title, transcriber_notes=transcriber_notes,
+                series_key=show_series_key and has_key)
+    if keyed:
+        y = _category_key(chart.categories, category_texts, usable, y, labels)
+    if (show_series_key and has_key) or keyed:
+        y += LINE_PITCH
+
+    return y, labels, samples, notes, rescued_ids
 
 
 def _layout_pass(chart: VerticalBarChart, mode: str, *,
@@ -668,7 +784,8 @@ def _layout_pass(chart: VerticalBarChart, mode: str, *,
                  value_labels: bool = False,
                  value_headroom: float = 0.0,
                  forced_omit: frozenset = frozenset(),
-                 estimate_note: bool = False):
+                 estimate_note: bool = False,
+                 shared_geometry: _VerticalGeometry | None = None):
     """One page, as ``(layout, ids of bars with no room for a value, labels drawn)``.
     The keyword arguments are used for sections of a split graph:
     keys chosen across the whole graph, notes, the series key moved to a key
@@ -688,51 +805,27 @@ def _layout_pass(chart: VerticalBarChart, mode: str, *,
                          "this chart needs an alphabetic key or several graphics")
     textures = TEXTURES[:n_keyed]
     has_key = _has_series_key(chart)
-    no_bars = _no_bars_note(chart)
-    if no_bars and show_series_key:
-        transcriber_notes = (*transcriber_notes, no_bars)
-    rescued_ids = frozenset(f"bar-{s}-{j}" for s, series in enumerate(chart.series)
-                            for j, flag in enumerate(series.rescued) if flag)
-    if value_labels:
-        transcriber_notes = (*transcriber_notes,
-                             *_value_notes(chart, rescued_ids, forced_omit, estimate_note))
-
     usable = _usable_area()
-    labels: list[BrailleLabel] = []
+    y, labels, samples, notes, rescued_ids = _page_header(
+        chart, mode, category_texts=category_texts, show_title=show_title,
+        transcriber_notes=transcriber_notes, show_series_key=show_series_key,
+        value_labels=value_labels, forced_omit=forced_omit, estimate_note=estimate_note)
     lines: list[Line] = []
-    samples: list[KeySample] = []
-    notes: list[str] = []
-    y = _header(chart, usable, usable.y1, labels, samples, notes,
-                show_title=show_title, transcriber_notes=transcriber_notes,
-                series_key=show_series_key and has_key)
-    if keyed:
-        y = _category_key(chart.categories, category_texts, usable, y, labels)
-    if (show_series_key and has_key) or keyed:
-        y += LINE_PITCH
 
-    # Reserve the bottom: category labels, then the horizontal heading.
     x_heading = wrap_cells(chart.x_axis_title, CELLS_PER_LINE)
-    axis_y = (usable.y2 - LABEL_HEIGHT - LINE_PITCH * len(x_heading)
-              - LABEL_GAP - AXIS_WIDTH / 2)
-
-    # Vertical heading lines (at most 20 cells each, §6.6.6.6); placed below.
     y_heading = wrap_cells(chart.y_axis_title, Y_HEADING_MAX_CELLS)
-    if heading_y_min is not None:
-        y = max(y, heading_y_min)
-    heading_y = y
-    heading_bottom = heading_y + (len(y_heading) - 1) * LINE_PITCH + LABEL_HEIGHT
-    # The top value label starts on the next braille line, and never closer
-    # than Y_HEADING_CLEARANCE below the heading.
-    top_label_y = max(y + LINE_PITCH * len(y_heading), heading_bottom + Y_HEADING_CLEARANCE)
-    # Its dots 2-5 sit on the top grid line (§6.6.6.6).
-    plot_top = top_label_y + DOT_DIAMETER / 2 + DOT_PITCH + value_headroom
-
+    if shared_geometry is None:
+        geometry = _vertical_geometry(
+            chart, max(y, heading_y_min) if heading_y_min is not None else y,
+            value_headroom, max(values) if value_max is None else value_max)
+    else:
+        geometry = shared_geometry
+        if y > geometry.heading_y + 1e-6:
+            raise ValueError("section header exceeds shared geometry")
+    heading_y, plot_top, axis_y = geometry.heading_y, geometry.plot_top, geometry.axis_y
+    step, intervals = geometry.step, geometry.intervals
     plot_height = axis_y - plot_top
-    max_intervals = min(MAX_GRID_INTERVALS, int(plot_height // GRID_MIN_SPACING))
-    step, intervals = _nice_step(max(values) if value_max is None else value_max,
-                                 max_intervals)
     top_value = step * intervals
-    spacing = plot_height / intervals
 
     def value_y(value: float) -> float:
         return axis_y - value / top_value * plot_height

@@ -5,9 +5,9 @@ Text: a value is rounded to the decimals of the y-axis tick step, then to at mos
 a nonzero value is never shown as 0 (it keeps one significant digit instead).
 
 Placement (``plan_value_labels``): centred above the bar at the 1/8 inch label
-clearance (§3.4.3.12). A label wider than its bar, or one that would touch a
-neighbour, is tried with fewer decimals (the same for every label on the page, down
-to the fewest that keep each value nonzero), then raised on a 3/4 inch lead line
+clearance (§3.4.3.12). A label may extend beyond its bar's sides. One without
+enough surrounding clearance is tried with fewer decimals (the same for every
+label on the page, down to the fewest that keep each value nonzero), then raised on a 3/4 inch lead line
 (§3.4.3.12), then omitted. The planner checks real distances to every bar, line,
 label and key sample, so the layout passes ``label_clearance`` by construction.
 Negative values are formatted but not placed: the layout rejects them.
@@ -125,8 +125,6 @@ def _try(bar, text, lift, bars, placed, leads, fixed_labels, fixed_lines, sample
     label = make_label(f"value-{bar.series_index}-{bar.category_index}", text, 0.0,
                        bottom - LABEL_HEIGHT, owner)
     label = _centred(label, centre, make_label)
-    if lift == 0.0 and label.width > bar.bounds.x2 - bar.bounds.x1:
-        return None                                   # wider than its bar
     box = label.bounds
     if not box.inside(usable):
         return None
