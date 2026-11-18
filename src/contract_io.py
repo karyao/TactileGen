@@ -77,7 +77,8 @@ def load_vertical_bar_chart(path: Path) -> VerticalBarChart:
         raise ValueError(f"Expected vbar_categorical chart: {path}")
     try:
         series = tuple(
-            BarSeries(item["name"], tuple(_array(item["values"], "values")))
+            BarSeries(item["name"], tuple(_array(item["values"], "values")),
+                      item.get("has_bars", True))
             for item in _array(data["series"], "series")
         )
         return VerticalBarChart(
@@ -89,8 +90,12 @@ def load_vertical_bar_chart(path: Path) -> VerticalBarChart:
 
 
 def write_vertical_bar_chart(path: Path, chart: VerticalBarChart) -> None:
+    data = asdict(chart)
+    for series in data["series"]:  # written only for a series with no visible bars
+        if series["has_bars"]:
+            del series["has_bars"]
     _write(path, {
         "schema_version": SCHEMA_VERSION,
         "chart_type": "vbar_categorical",
-        **asdict(chart),
+        **data,
     })

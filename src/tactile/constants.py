@@ -35,7 +35,8 @@ LABEL_GAP = LABEL_MIN_GAP
 # Clearance between the vertical heading and the top value label: the 1/8
 # inch label-to-component minimum (§3.4.3.12). §6.6.6.6 needs no blank line
 # after the heading.
-Y_HEADING_CLEARANCE = LABEL_MIN_GAP
+# changed it to 1/4 inch  to get more room between the label and other values
+Y_HEADING_CLEARANCE = 1 / 4 * MM_PER_INCH
 # Gaps between bars in a set and between sets (and before the first set),
 # measured between the bars' raised outer edges.
 # Bars in a set are joined: §6.6.6.7 says bars are "separated or joined in
@@ -51,6 +52,13 @@ GROUP_GAP = LABEL_MIN_GAP
 BAR_MIN_WIDTH = 3 / 8 * MM_PER_INCH     # §6.6.6.7 ("3/8 inch (1 centimeter)")
 BAR_MAX_WIDTH = 1.0 * MM_PER_INCH       # §6.6.6.7
 GRID_MIN_SPACING = 3 / 8 * MM_PER_INCH  # §3.4.3.9, §6.6.1.1
+# Smallest plot (axis to top grid line) worth keeping beside a series key: room for
+# 5 grid intervals at the minimum spacing, i.e. 6 labelled values, so a bar can be
+# read to a fifth of the axis. Not from BANA. A page holds at most ~137 mm of plot
+# (title and headings only); a long key, notes and a category key can take it
+# down to 35 mm (24811: 3 intervals), where small bars fall under the line widths.
+# This only guarantees room for 5 intervals; _nice_step may still use fewer.
+MIN_PLOT_HEIGHT = 5 * GRID_MIN_SPACING
 PRIMARY_LINE_MIN_LENGTH = 1 / 2 * MM_PER_INCH   # §3.4.3.2
 TICK_HALF_LENGTH = 1 / 4 * MM_PER_INCH          # each side of the axis, §6.6.6.5
 

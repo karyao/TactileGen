@@ -85,9 +85,6 @@ NOTE_FLAGS = {
     # a bar reaches the plot edge beyond the last tick on an axis from zero: a lower bound
     "value_clipped_at_axis": ("At least one bar runs past the end of the y axis, so its value "
                               "is a lower bound."),
-    # legend swatches with no detected bars became series measured from pixels
-    "series_from_swatch": ("{n} series had no detected bars and were built from the legend; "
-                           "their values were measured from pixels and are usually near zero."),
     # very short detected bars were re-measured from pixels
     "short_bars_remeasured": "{n} very short bar(s) were re-measured from pixels.",
     # a bar's top edge was re-measured from pixels because the detector box disagreed
@@ -103,6 +100,16 @@ NOTE_FLAGS = {
     "y_ticks_dropped": "{n} y-axis tick label(s) were ignored because they disagreed with the rest.",
     # the title box reaches the image edge, so the title text may be cut off
     "title_touches_right_edge": "The chart title touches the right edge of the image and may be cut off.",
+}
+
+# Why a legend entry no bar matched was not turned into a series (see reconstruct_vbar).
+LEGEND_SKIP_REASONS = {
+    "bars_not_settled": "the bars could not all be matched to legend entries, so it may belong to them",
+    "unreadable_text": "its label text was unreadable",
+    "low_confidence": "its swatch, label or text was not read confidently enough",
+    "outside_legend": "its swatch lies outside the legend box",
+    "duplicate_name": "another series already has this name",
+    "unreadable_swatch": "its swatch colour could not be read",
 }
 
 CUT_OFF_REASON = ("The {what} appears cut off at the image edge. Enter the full title, "
@@ -248,7 +255,9 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
     if not spec.categories:
         blockers.append(f"No category labels were read. {NEXT_STEPS}")
         forceable = False
-    if any(value is None for series in spec.series for value in series.values):
+    # A series with no visible bars has no values by design; that is not a failed read.
+    if any(value is None for series in spec.series if not series.no_visible_bars
+           for value in series.values):
         blockers.append(f"Some bar values could not be read. {NEXT_STEPS}")
         forceable = False
 
@@ -263,6 +272,17 @@ def check_completeness(spec: VerticalBarSpec) -> Completeness:
             continue  # a blocker on a negative axis
         if name in NOTE_FLAGS:
             notes.append(NOTE_FLAGS[name].format(n=count))
+        if name == "legend_entry_skipped":
+            reason, _, shown = count.partition(":")
+            notes.append(f"Legend entry {shown!r} was not added to the key: "
+                         f"{LEGEND_SKIP_REASONS.get(reason, reason)}.")
+        if name == "legend_order_differs":
+            notes.append("The legend order differs from the left-to-right bar order, so series "
+                         "with bars keep the bar order and series with no visible bars follow.")
+    bar_less = [series.name for series in spec.series if series.no_visible_bars]
+    if bar_less:
+        notes.append("No bars are visible for: " + ", ".join(bar_less)
+                     + " (they are listed in the key).")
 
     if blockers:
         return Completeness(CANNOT_BUILD, notes, [], blockers, forceable)
@@ -433,6 +453,9 @@ def spec_to_chart_with_notes(spec: VerticalBarSpec) -> tuple[VerticalBarChart, l
     zeroed = 0
     series_out = []
     for series in spec.series:
+        if series.no_visible_bars:
+            series_out.append(BarSeries(series.name, (), has_bars=False))
+            continue
         values = []
         for value in series.values:
             if axis_from_zero and value < 0:

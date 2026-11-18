@@ -31,10 +31,14 @@ EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 
 
 
 def analyse(image_path: Path, weights: Path):
-    """Run YOLO, OCR and reconstruction. Returns ``(spec, None, frame)`` or ``(None, error, frame)``."""
+    """Run YOLO, OCR, legend matching and reconstruction.
+
+    Returns ``(spec, None, frame)`` or ``(None, error, frame)``.
+    """
     import cv2
 
     from src.detection import load_model, run_detection
+    from src.legend_matcher import match_legend_to_bars
     from src.ocr import run_ocr
     from src.reconstruct import reconstruct_vbar
     from src.tesseract_ocr import TesseractBackend
@@ -45,7 +49,9 @@ def analyse(image_path: Path, weights: Path):
     frame = run_detection(load_model(weights), image_path)
     ocr = run_ocr(image, frame, TesseractBackend(), "eng")
     try:
-        spec = reread_categories(reconstruct_vbar(frame, ocr, image), frame, image)
+        legend_mapping = match_legend_to_bars(image, frame, ocr)
+        spec = reread_categories(
+            reconstruct_vbar(frame, ocr, image, legend_mapping=legend_mapping), frame, image)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:
         return None, error, frame
@@ -135,7 +141,8 @@ def _print_summary(spec: VerticalBarSpec, out) -> None:
               file=out)
     print("Series:", file=out)
     for i, series in enumerate(spec.series):
-        print(f"  {i}: {series.name or '(single series, unnamed)'}", file=out)
+        shown = series.name or '(single series, unnamed)'
+        print(f"  {i}: {shown}" + (" (no visible bars)" if series.no_visible_bars else ""), file=out)
 
 
 def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,

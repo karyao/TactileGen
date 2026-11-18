@@ -313,6 +313,9 @@ def _key_rules(layout):
     if layout.page_kind == "key":
         # A key page has no bars; bars are drawn in series order on every graph page.
         bar_order = list(range(len(layout.series_textures)))
+    else:
+        # A series with no visible bars is keyed but draws none, so compare the others.
+        order = [index for index in order if index in bar_order]
     if samples and order != bar_order:
         yield _violation("key_order", f"key order {order} differs from bar order {bar_order}")
 

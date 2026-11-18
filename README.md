@@ -93,6 +93,10 @@ python3.12 -m src.ocr \
 The OCR JSON stores recognized text and confidence linked by detection ID.
 YOLO's detection JSON remains the sole source of roles and box coordinates.
 
+To measure series-assignment accuracy rather than inspect one image, run the
+oracle and end-to-end benchmark described in
+[`docs/experiments.md`](docs/experiments.md#legend-to-bar-matching-accuracy).
+
 ## Try PP-OCRv6 with RapidOCR
 
 RapidOCR runs the pre-trained PP-OCRv6-small recognition model locally through

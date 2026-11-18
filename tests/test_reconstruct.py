@@ -1,9 +1,19 @@
 """Reconstruction from hand-built detections; no detector or OCR engine runs."""
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
-from src.contracts import Box, ChartInterpretationError, Detection, DetectionFrame
+from src.contracts import (
+    Box,
+    ChartInterpretationError,
+    Detection,
+    DetectionFrame,
+    LegendBarAssignment,
+    LegendEntry,
+    LegendMappingFrame,
+)
 from src.reconstruct import parse_tick_value, reconstruct_vbar
 
 W, H = 600, 400
@@ -273,13 +283,177 @@ def _grouped(colours, legend=True):
 SIMILAR = ((0, 165, 255), (0, 140, 255))
 
 
-def test_legend_swatches_keep_similar_colours_apart():
+def _matched_mapping(chart, identities=((0, 0, "Alpha"), (1, 1, "Beta"))):
+    frame = chart.frame()
+    bars = [item for item in frame.detections if item.role == "vertical_bar"]
+    swatches = [item for item in frame.detections if item.role == "legend_swatch"]
+    labels = [item for item in frame.detections if item.role == "legend_label"]
+    return frame, LegendMappingFrame(frame.source_key, tuple(
+        LegendBarAssignment(
+            bar.id,
+            swatches[identities[index % len(identities)][0]].id,
+            labels[identities[index % len(identities)][1]].id,
+            identities[index % len(identities)][2],
+            0.99,
+            "matched",
+        )
+        for index, bar in enumerate(bars)
+    ))
+
+
+def test_similar_legend_colours_safely_remain_unnamed():
     spec = _grouped(SIMILAR).run()
-    assert [s.name for s in spec.series] == ["Alpha", "Beta"]
+    assert [s.name for s in spec.series] == [None, None]
     assert_values(spec, [100, 150, 40], series=0)
     assert_values(spec, [50, 80, 120], series=1)
     assert "category_count_mismatch" not in spec.flags
+    assert "series_ambiguous" in spec.flags
+
+
+def test_supplied_legend_mapping_names_series_without_rerunning_matcher():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    frame, mapping = _matched_mapping(chart)
+
+    with patch("src.reconstruct.match_legend_to_bars") as matcher:
+        spec = reconstruct_vbar(
+            frame, chart.texts, chart.image, legend_mapping=mapping
+        )
+
+    matcher.assert_not_called()
+    assert [series.name for series in spec.series] == ["Alpha", "Beta"]
     assert "series_ambiguous" not in spec.flags
+
+
+def test_mapping_keeps_nearly_identical_series_colours_separate():
+    chart = _grouped(((30, 40, 200), (34, 44, 203)))
+    frame, mapping = _matched_mapping(chart)
+
+    spec = reconstruct_vbar(
+        frame, chart.texts, chart.image, legend_mapping=mapping
+    )
+
+    assert [series.name for series in spec.series] == ["Alpha", "Beta"]
+    assert_values(spec, [100, 150, 40], series=0)
+    assert_values(spec, [50, 80, 120], series=1)
+    assert "category_count_mismatch" not in spec.flags
+    assert "category_ambiguous" not in spec.flags
+    assert "series_ambiguous" not in spec.flags
+
+
+def test_mapped_close_colours_flow_to_tactile_svg():
+    from src.tactile.completeness import (
+        READY,
+        Overrides,
+        apply_overrides,
+        check_completeness,
+        spec_to_chart,
+    )
+    from src.tactile.layout import layout_vertical_bar_chart_pages
+    from src.tactile.svg import render_svg
+
+    chart = _grouped(((30, 40, 200), (34, 44, 203)))
+    frame, mapping = _matched_mapping(chart)
+    spec = reconstruct_vbar(
+        frame, chart.texts, chart.image, legend_mapping=mapping
+    )
+    spec, _ = apply_overrides(spec, Overrides(
+        title="Sales by group",
+        x_axis_title="Group",
+        y_axis_title="Sales",
+    ))
+
+    assert check_completeness(spec).status == READY
+    pages = layout_vertical_bar_chart_pages(spec_to_chart(spec))
+    assert len(pages) == 1
+    svg = render_svg(pages[0])
+    assert "<svg" in svg and "</svg>" in svg
+
+
+def test_mapping_remains_authoritative_for_low_confidence_swatches():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    chart.detections = [
+        Detection(item.id, item.role, item.box, 0.29)
+        if item.role == "legend_swatch" else item
+        for item in chart.detections
+    ]
+    frame, mapping = _matched_mapping(chart)
+
+    spec = reconstruct_vbar(
+        frame, chart.texts, chart.image, legend_mapping=mapping
+    )
+
+    assert [series.name for series in spec.series] == ["Alpha", "Beta"]
+    assert "series_ambiguous" not in spec.flags
+
+
+def test_incomplete_mapping_keeps_affected_series_unnamed():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    frame = chart.frame()
+    bars = [item for item in frame.detections if item.role == "vertical_bar"]
+    swatches = [item for item in frame.detections if item.role == "legend_swatch"]
+    labels = [item for item in frame.detections if item.role == "legend_label"]
+    assignments = []
+    for index, bar in enumerate(bars):
+        series_index = index % 2
+        if index == 2:
+            assignments.append(LegendBarAssignment(
+                bar.id, swatches[0].id, labels[0].id, None, 0.95, "ambiguous"
+            ))
+        else:
+            assignments.append(LegendBarAssignment(
+                bar.id,
+                swatches[series_index].id,
+                labels[series_index].id,
+                ("Alpha", "Beta")[series_index],
+                0.99,
+                "matched",
+            ))
+
+    spec = reconstruct_vbar(
+        frame,
+        chart.texts,
+        chart.image,
+        legend_mapping=LegendMappingFrame(frame.source_key, tuple(assignments)),
+    )
+
+    assert [series.name for series in spec.series] == ["Alpha", "Beta", None]
+    assert spec.series[0].values == pytest.approx([100, None, 40])
+    assert spec.series[1].values == pytest.approx([50, 80, 120])
+    assert spec.series[2].values == pytest.approx([None, 150, None])
+    assert all(not any(series.value_rescued) for series in spec.series)
+    assert "category_count_mismatch" in spec.flags
+    assert "series_ambiguous" in spec.flags
+
+
+def test_conflicting_identities_preserve_bars_but_suppress_names():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    frame = chart.frame()
+    bars = [item for item in frame.detections if item.role == "vertical_bar"]
+    swatches = [item for item in frame.detections if item.role == "legend_swatch"]
+    labels = [item for item in frame.detections if item.role == "legend_label"]
+    assignments = []
+    for index, bar in enumerate(bars):
+        if index % 2:
+            identity = (swatches[1].id, labels[1].id, "Beta")
+        elif index == 2:
+            identity = (swatches[0].id, labels[1].id, "Other")
+        else:
+            identity = (swatches[0].id, labels[0].id, "Alpha")
+        assignments.append(LegendBarAssignment(
+            bar.id, *identity, 0.99, "matched"
+        ))
+
+    spec = reconstruct_vbar(
+        frame,
+        chart.texts,
+        chart.image,
+        legend_mapping=LegendMappingFrame(frame.source_key, tuple(assignments)),
+    )
+
+    assert [series.name for series in spec.series] == [None, "Beta", None]
+    assert spec.series[0].values == pytest.approx([100, None, 40])
+    assert spec.series[2].values == pytest.approx([None, 150, None])
+    assert "series_ambiguous" in spec.flags
 
 
 def test_similar_colours_without_legend_fall_back_to_one_cluster():
@@ -442,71 +616,6 @@ def test_guard_off_only_flags_empty_text():
     assert "category_unreadable" in off("", 0.0).flags
 
 
-def test_series_with_no_detected_bars_is_built_from_its_legend_swatch():
-    groups = [(100, 50, 4), (150, 60, 2), (40, 120, 6)]
-    chart = grouped_chart((RED, GREEN, BLUE), groups,
-                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
-    spec = chart.run()
-    assert [s.name for s in spec.series] == ["S0", "S1", "S2"]
-    assert_values(spec, [4, 2, 6], series=2)
-    assert spec.series[2].value_rescued == [True, True, True]
-    assert spec.series[2].source_color == "#1e64c8"
-    assert "series_from_swatch:1" in spec.flags and "series_ambiguous" not in spec.flags
-    assert "bars_rescued:3" in spec.flags
-
-
-def test_swatch_series_in_the_middle_keeps_legend_order():
-    groups = [(100, 4, 80), (150, 2, 60), (40, 6, 120)]
-    chart = grouped_chart((RED, GREEN, BLUE), groups,
-                          missing={(0, 1), (1, 1), (2, 1)}, shift=-15.0)
-    spec = chart.run()
-    assert [s.name for s in spec.series] == ["S0", "S1", "S2"]
-    assert_values(spec, [4, 2, 6], series=1)
-    assert_values(spec, [80, 60, 120], series=2)
-
-
-def test_swatch_series_with_nothing_painted_reads_zero_and_flags_it():
-    groups = [(100, 50, 0), (150, 60, 0), (40, 120, 0)]
-    chart = grouped_chart((RED, GREEN, BLUE), groups,
-                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
-    spec = chart.run()
-    assert spec.series[2].name == "S2"
-    assert spec.series[2].values == [0.0, 0.0, 0.0]
-    assert "value_inferred_zero" in spec.flags
-
-
-def test_swatch_series_without_a_placement_stays_ambiguous():
-    # Nothing can be measured when the zero line is below the plot (see the rescue test above),
-    # so the unmatched swatch keeps the old series_ambiguous flag.
-    def y_at(value):
-        return PLOT[3] - 1.5 * (value - 100)
-
-    chart = Chart()
-    chart.add("plot_area", PLOT)
-    for tick in (100, 150, 200):
-        chart.add("y_tick_label", (40, y_at(tick) - 6, 75, y_at(tick) + 6), text=str(tick))
-    for i, value in enumerate((150, 120)):
-        box = (100 + 200 * i, y_at(value), 160 + 200 * i, PLOT[3])
-        chart.add("vertical_bar", box)
-        chart.paint(box, RED)
-        chart.add("x_tick_label", (box[0], 345, box[2], 360), text=f"C{i}")
-    for row, colour in enumerate((RED, GREEN)):
-        y = 362 + 12 * row
-        chart.add("legend_swatch", (100, y, 114, y + 10))
-        chart.paint((100, y, 114, y + 10), colour)
-        chart.add("legend_label", (120, y, 180, y + 10), text=f"S{row}")
-    spec = chart.run()
-    assert len(spec.series) == 1
-    assert "series_ambiguous" in spec.flags
-    assert not any(f.startswith("series_from_swatch") for f in spec.flags)
-
-
-def test_matched_series_do_not_gain_swatch_series():
-    spec = grouped_chart((RED, GREEN), [(100, 50), (150, 60), (40, 120)]).run()
-    assert len(spec.series) == 2
-    assert not any(f.startswith("series_from_swatch") for f in spec.flags)
-
-
 def test_short_detected_bar_is_remeasured_from_pixels():
     chart = base_chart(values=(120, 60, 2))  # the 2-unit bar is 3 px tall
     spec = chart.run()
@@ -637,14 +746,6 @@ def test_short_detected_bars_count_as_detected():
     assert not _missed(spec)
 
 
-def test_swatch_built_series_do_not_count_as_missed():
-    chart = grouped_chart((RED, GREEN, BLUE), [(100, 50, 4), (150, 60, 2), (40, 120, 6)],
-                          missing={(0, 2), (1, 2), (2, 2)}, shift=-15.0)
-    spec = chart.run()
-    assert "series_from_swatch:1" in spec.flags
-    assert not _missed(spec)
-
-
 def test_minus_sign_read_on_a_dropped_tick_label_is_flagged():
     chart = base_chart()
     chart.add("y_tick_label", (40, y_of(75) - 6, 75, y_of(75) + 6), text="-1")  # dropped from the fit
@@ -657,3 +758,147 @@ def test_no_negative_read_flag_without_a_minus_sign():
     assert "y_tick_negative_read" not in base_chart().run().flags
     assert "y_tick_negative_read" not in labelled_chart(("0", "0.5", "1.0", "1.5", "2.0")).run().flags
     assert "y_tick_negative_read" in labelled_chart(("0", "- 50", "100", "150", "200")).run().flags
+
+# --- legend entries whose series has no visible bars ---------------------------------
+
+BAR_BGR = (200, 100, 30)          # the colour base_chart paints its bars
+RED, GREEN = (30, 30, 200), (30, 200, 30)
+
+
+def _legend_chart(entries, values=(120, 60, 180), legend_box=True):
+    """base_chart plus a legend at the right edge. ``entries`` are
+    ``(text, bgr, swatch_conf, ocr_conf)`` rows, listed top to bottom."""
+    chart = base_chart(values)
+    top = 50
+    if legend_box:
+        chart.add("legend", (563, top - 4, 600, top + 25 * len(entries)))
+    for row, (text, colour, swatch_conf, ocr_conf) in enumerate(entries):
+        y = top + 25 * row
+        chart.add("legend_swatch", (566, y, 576, y + 10), conf=swatch_conf)
+        chart.paint((566, y, 576, y + 10), colour)
+        chart.add("legend_label", (578, y, 598, y + 10), text=text, ocr_conf=ocr_conf)
+    return chart
+
+
+def _row(text, colour, swatch_conf=0.9, ocr_conf=0.95):
+    return (text, colour, swatch_conf, ocr_conf)
+
+
+def test_unmatched_legend_entries_become_series_with_no_visible_bars():
+    # Chart 24811 in miniature: three legend entries, bars only for the middle one.
+    spec = _legend_chart([_row("Low", RED), _row("Kenya", BAR_BGR), _row("Vietnam", GREEN)]).run()
+
+    assert [s.name for s in spec.series] == ["Low", "Kenya", "Vietnam"]      # legend order
+    assert [s.no_visible_bars for s in spec.series] == [True, False, True]
+    assert_values(spec, [120, 60, 180], series=1)
+    for series in (spec.series[0], spec.series[2]):
+        assert series.values == [None, None, None]          # nothing measured, and not zero
+        assert series.value_rescued == [] and series.value_confidence == []
+    assert [s.source_color for s in spec.series] == ["#c81e1e", "#1e64c8", "#1ec81e"]
+    assert "series_ambiguous" not in spec.flags and spec.flags == []
+
+
+def test_normal_multi_series_chart_has_no_extra_series():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    spec = chart.run()
+    assert [s.name for s in spec.series] == ["Alpha", "Beta"]
+    assert not any(s.no_visible_bars for s in spec.series)
+    assert not [f for f in spec.flags if f.startswith(("legend_", "series_"))]
+
+
+def test_single_series_without_a_legend_is_unchanged():
+    spec = base_chart().run()
+    assert len(spec.series) == 1 and spec.series[0].name is None
+    assert not spec.series[0].no_visible_bars and spec.flags == []
+
+
+def test_single_matched_entry_adds_nothing():
+    spec = _legend_chart([_row("Kenya", BAR_BGR)]).run()
+    assert [s.name for s in spec.series] == ["Kenya"] and spec.flags == []
+
+
+def _skipped(spec):
+    return [flag for flag in spec.flags if flag.startswith("legend_entry_skipped")]
+
+
+def test_low_confidence_entries_are_reported_and_not_added():
+    for swatch_conf, ocr_conf in ((0.4, 0.95), (0.9, 0.3)):
+        spec = _legend_chart([_row("Kenya", BAR_BGR), _row("Ghost", GREEN, swatch_conf, ocr_conf)]).run()
+        assert [s.name for s in spec.series] == ["Kenya"]
+        assert _skipped(spec) == ["legend_entry_skipped:low_confidence:Ghost"]
+
+
+def test_unreadable_legend_text_is_reported_and_not_added():
+    spec = _legend_chart([_row("Kenya", BAR_BGR), _row("", GREEN)]).run()
+    assert [s.name for s in spec.series] == ["Kenya"]
+    assert len(_skipped(spec)) == 1 and _skipped(spec)[0].startswith("legend_entry_skipped:unreadable_text:")
+
+
+def test_a_repeated_name_is_not_added_twice():
+    spec = _legend_chart([_row("Kenya", BAR_BGR), _row("kenya", GREEN)]).run()
+    assert [s.name for s in spec.series] == ["Kenya"]
+    assert _skipped(spec) == ["legend_entry_skipped:duplicate_name:kenya"]
+
+
+def test_a_swatch_outside_the_legend_box_is_not_added():
+    chart = _legend_chart([_row("Kenya", BAR_BGR), _row("Ghost", GREEN)])
+    legend = next(d for d in chart.detections if d.role == "legend")
+    chart.detections[chart.detections.index(legend)] = type(legend)(
+        legend.id, legend.role, Box(563, 46, 600, 70), legend.confidence)    # covers the first row only
+    spec = chart.run()
+    assert [s.name for s in spec.series] == ["Kenya"]
+    assert _skipped(spec) == ["legend_entry_skipped:outside_legend:Ghost"]
+
+
+def test_no_series_are_added_while_bars_are_not_all_matched():
+    # The bars match no swatch (a colour not in the legend): the grouping is not settled, so
+    # an entry could still own bars that were merely hard to match. Report it, never guess.
+    chart = _legend_chart([_row("Alpha", RED), _row("Beta", GREEN)])
+    spec = chart.run()          # bars are (200, 100, 30): weak match to both swatches
+    assert not any(s.no_visible_bars for s in spec.series)
+    assert sorted(_skipped(spec)) == ["legend_entry_skipped:bars_not_settled:Alpha",
+                                      "legend_entry_skipped:bars_not_settled:Beta"]
+
+
+def _custom_entries(chart, order):
+    """The matcher's assignments for ``chart`` with entries in ``order`` (indices into the legend)."""
+    frame, mapping = _matched_mapping(chart)
+    swatches = [d for d in frame.detections if d.role == "legend_swatch"]
+    labels = [d for d in frame.detections if d.role == "legend_label"]
+    names = ("Alpha", "Beta", "Gamma")
+    entries = tuple(LegendEntry(swatches[i].id, labels[i].id, names[i]) for i in order)
+    return frame, LegendMappingFrame(frame.source_key, mapping.assignments, entries)
+
+
+def _grouped_with_third_entry():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    chart.add("legend_swatch", (200, 365, 214, 379))
+    chart.paint((200, 365, 214, 379), (200, 100, 30))
+    chart.add("legend_label", (220, 365, 280, 379), text="Gamma")
+    return chart
+
+
+def test_bar_less_series_slots_into_the_legend_order():
+    chart = _grouped_with_third_entry()
+    frame, mapping = _custom_entries(chart, order=(0, 2, 1))     # Alpha, Gamma (no bars), Beta
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
+    assert [(s.name, s.no_visible_bars) for s in spec.series] == [
+        ("Alpha", False), ("Gamma", True), ("Beta", False)]
+    assert "legend_order_differs" not in spec.flags
+
+
+def test_bar_order_wins_when_it_disagrees_with_the_legend_order():
+    chart = _grouped_with_third_entry()
+    frame, mapping = _custom_entries(chart, order=(1, 0, 2))     # legend lists Beta before Alpha
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
+    assert [s.name for s in spec.series] == ["Alpha", "Beta", "Gamma"]
+    assert spec.series[2].no_visible_bars and "legend_order_differs" in spec.flags
+
+
+def test_a_hand_built_mapping_without_entries_adds_nothing():
+    chart = _grouped(((30, 40, 200), (60, 180, 60)))
+    frame, mapping = _matched_mapping(chart)
+    assert mapping.entries == ()
+    spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
+    assert [s.name for s in spec.series] == ["Alpha", "Beta"]
+

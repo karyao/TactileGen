@@ -38,6 +38,36 @@ class Pipeline(unittest.TestCase):
         self.assertEqual((code, written), (0, True))
         self.assertIn("0: 2001", out)
 
+    def test_analyse_passes_legend_mapping_to_reconstruction(self):
+        image = mock.sentinel.image
+        frame = mock.sentinel.frame
+        ocr = mock.sentinel.ocr
+        mapping = mock.sentinel.mapping
+        reconstructed = make_spec()
+        backend = mock.sentinel.backend
+
+        with (
+            mock.patch("cv2.imread", return_value=image),
+            mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
+            mock.patch("src.detection.run_detection", return_value=frame),
+            mock.patch("src.ocr.run_ocr", return_value=ocr),
+            mock.patch("src.tesseract_ocr.TesseractBackend", return_value=backend),
+            mock.patch(
+                "src.legend_matcher.match_legend_to_bars", return_value=mapping
+            ) as matcher,
+            mock.patch(
+                "src.reconstruct.reconstruct_vbar", return_value=reconstructed
+            ) as reconstruct,
+            mock.patch.object(pipeline, "cut_off_flags", return_value=[]),
+        ):
+            result = pipeline.analyse(Path("chart.png"), Path("weights.pt"))
+
+        matcher.assert_called_once_with(image, frame, ocr)
+        reconstruct.assert_called_once_with(
+            frame, ocr, image, legend_mapping=mapping
+        )
+        self.assertEqual(result, (reconstructed, None, frame))
+
     def test_unconfirmed_non_tty_warns_and_continues(self):
         code, _, err, written = self.go(make_spec())
         self.assertEqual((code, written), (0, True))
@@ -200,6 +230,26 @@ class Pipeline(unittest.TestCase):
         self.assertIn("WARNING: --force", err)
         self.assertIn("bars_mostly_missed:67", out)
 
+    def test_single_series_key_follows_the_legend(self):
+        def svg(series):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "out.svg"
+                args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+                code = pipeline.run(args, analyse_fn=lambda *_: (make_spec(series=series), None, None),
+                                    input_fn=input, stdin_is_tty=False,
+                                    out=io.StringIO(), err=io.StringIO())
+                self.assertEqual(code, 0)
+                return path.read_text()
+
+        values = [10.0, 20.0, 30.0]
+        named = svg([SeriesSpec("Kenya", "#112233", values)])
+        unnamed = svg([SeriesSpec(None, "#112233", values)])
+        two = svg([SeriesSpec("A", "#112233", values), SeriesSpec("B", "#445566", values)])
+        self.assertIn("key-sample-0", named)
+        self.assertNotIn("key-sample", unnamed)
+        self.assertIn("key-sample-0", two)
+        self.assertIn("key-sample-1", two)
+
     def test_bad_flag_syntax(self):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
         self.assertEqual(code, 1)
@@ -208,3 +258,25 @@ class Pipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_series_with_no_visible_bars_are_keyed_noted_and_do_not_stop_the_build(self):
+        series = [SeriesSpec("Low & middle income", "#aa0000", [None, None, None], no_visible_bars=True),
+                  SeriesSpec("Kenya", "#112233", [10.0, 20.0, 30.0]),
+                  SeriesSpec("Vietnam", "#00aa00", [None, None, None], no_visible_bars=True)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            out, err = io.StringIO(), io.StringIO()
+            code = pipeline.run(args, analyse_fn=lambda *_: (make_spec(series=series), None, None),
+                                input_fn=input, stdin_is_tty=False, out=out, err=err)
+            svg = path.read_text()
+        self.assertEqual(code, 0)
+        shown = out.getvalue()
+        self.assertIn("0: Low & middle income (no visible bars)", shown)
+        self.assertIn("1: Kenya\n", shown)
+        self.assertIn("2: Vietnam (no visible bars)", shown)
+        self.assertIn("Note: No bars are visible for: Low & middle income, Vietnam", shown)
+        for sample in ("key-sample-0", "key-sample-1", "key-sample-2"):
+            self.assertIn(sample, svg)
+        self.assertEqual(svg.count('id="bar-'), 3)           # Kenya's three bars only
+

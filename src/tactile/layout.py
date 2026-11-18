@@ -47,6 +47,7 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     LINES_PER_PAGE,
     MAX_AREA_TEXTURES,
     MAX_GRID_INTERVALS,
+    MIN_PLOT_HEIGHT,
     PAGE_HEIGHT,
     PAGE_WIDTH,
     TEXTURES,
@@ -279,24 +280,28 @@ X_LABEL_MODES = ("full", "abbreviation", "number")
 
 
 def layout_vertical_bar_chart(chart: VerticalBarChart, *,
-                              x_labels: str = "auto") -> TactileLayout:
+                              x_labels: str = "auto",
+                              key_on_page: bool = False) -> TactileLayout:
     """Build a one-page tactile layout for ``chart``.
 
     The layout never silently drops content: if the chart breaks a BANA
     limit (for example bars narrower than 3/8 inch), the page is still
     produced and the rule checker reports the problem. ``x_labels`` is
     ``"auto"`` (follow the overflow order) or one mode from ``X_LABEL_MODES``.
+    ``key_on_page`` leaves the title, notes and series key off the page, for a
+    graph page that follows a key page.
     """
+    extra = {"show_title": False, "show_series_key": False} if key_on_page else {}
     if x_labels != "auto":
         if x_labels not in X_LABEL_MODES:
             raise ValueError(f"x_labels must be 'auto' or one of {X_LABEL_MODES}")
-        return _layout(chart, x_labels)
+        return _layout(chart, x_labels, **extra)
 
     built: TactileLayout | None = None
     tried: list[str] = []
     for mode in X_LABEL_MODES:
         try:
-            layout = _layout(chart, mode)
+            layout = _layout(chart, mode, **extra)
         except ValueError as exc:
             tried.append(f"{mode}: {exc}")
             continue
@@ -314,6 +319,9 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
                                     x_labels: str = "auto") -> list[TactileLayout]:
     """One page when it passes every rule; otherwise sections (BANA §3.9).
 
+    A series key that would leave the plot under ``MIN_PLOT_HEIGHT`` goes on a
+    key page before a single graph page instead.
+
     The categories are divided into the fewest consecutive sections whose
     pages each pass every rule except ``overview_first``, trying the x-label
     modes in overflow order for each section count. Every section uses the
@@ -327,6 +335,16 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
     from src.tactile.rules import check_layout   # rules imports this module
 
     single = layout_vertical_bar_chart(chart, x_labels=x_labels)
+    if _has_series_key(chart) and _plot_height(single) < MIN_PLOT_HEIGHT:
+        # The key, notes and title leave too little plot: move them to a key
+        # page before the graph page (§6.6.6.4), as for a divided graph.
+        graph = layout_vertical_bar_chart(chart, x_labels=x_labels, key_on_page=True)
+        if _plot_height(graph) > _plot_height(single) and not check_layout(graph):
+            if _plot_height(graph) < MIN_PLOT_HEIGHT:
+                graph = replace(graph, needs_review=graph.needs_review + (
+                    f"the plot is {_plot_height(graph):.0f} mm high even with the key on its "
+                    f"own page (minimum {MIN_PLOT_HEIGHT:.0f} mm)",))
+            return [_key_page(chart, ()), graph]
     if not check_layout(single):
         return [single]
     modes = X_LABEL_MODES if x_labels == "auto" else (x_labels,)
@@ -343,6 +361,22 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
             if all(v.rule.id == "overview_first" for page in pages for v in check_layout(page)):
                 return pages
     return [single]
+
+
+def _plot_height(layout: TactileLayout) -> float:
+    return layout.plot.y2 - layout.plot.y1
+
+
+def _no_bars_note(chart: VerticalBarChart) -> str | None:
+    """Transcriber's note naming legend entries with no visible bars (not "zero")."""
+    names = [series.name for series in chart.series if not series.has_bars]
+    return f"No bars are visible for: {', '.join(names)}." if names else None
+
+
+def _has_series_key(chart: VerticalBarChart) -> bool:
+    """Several series always need a key; a single series only when the source
+    chart had a legend naming it."""
+    return len(chart.series) > 1 or chart.series[0].name is not None
 
 
 def _split(count: int, parts: int) -> list[range]:
@@ -365,14 +399,15 @@ def _sections(chart: VerticalBarChart, mode: str, texts: list[str],
         return VerticalBarChart(
             chart.source_key, chart.title, chart.x_axis_title, chart.y_axis_title,
             tuple(names[i] for i in r),
-            tuple(BarSeries(s.name, tuple(s.values[i] for i in r)) for s in chart.series))
+            tuple(BarSeries(s.name, tuple(s.values[i] for i in r) if s.has_bars else (),
+                            s.has_bars) for s in chart.series))
 
     division = (f"This graph is divided by category into {n} parts with the same "
                 "scale on each part.")
-    # With several series the key goes on its own page before the graph pages
+    # With a series key it goes on its own page before the graph pages
     # (§6.6.6.4), together with the title and the division note, so that the
     # graph pages keep their height for the plot.
-    key_page = len(chart.series) > 1
+    key_page = _has_series_key(chart)
 
     def notes(k: int, r: range) -> tuple[str, ...]:
         span = names[r[0]] if len(r) == 1 else f"{names[r[0]]} to {names[r[-1]]}"
@@ -514,8 +549,10 @@ def _key_page(chart: VerticalBarChart, transcriber_notes: tuple[str, ...]) -> Ta
     labels: list[BrailleLabel] = []
     samples: list[KeySample] = []
     notes: list[str] = []
+    no_bars = _no_bars_note(chart)
     y = _header(chart, usable, usable.y1, labels, samples, notes, show_title=True,
-                transcriber_notes=transcriber_notes, series_key=len(chart.series) > 1)
+                transcriber_notes=(*transcriber_notes, no_bars) if no_bars else transcriber_notes,
+                series_key=_has_series_key(chart))
     if y > usable.y2:
         raise ValueError("the key page does not fit on one page")
     return TactileLayout(
@@ -543,11 +580,17 @@ def _layout(chart: VerticalBarChart, mode: str, *,
     values = [v for series in chart.series for v in series.values]
     if any(v < 0 for v in values):
         raise ValueError("negative bar values are not supported yet")
-    n_series, n_cat = len(chart.series), len(chart.categories)
-    if n_series > MAX_AREA_TEXTURES:
+    # Every series is keyed and has a texture; only series with bars take bar slots.
+    n_keyed, n_cat = len(chart.series), len(chart.categories)
+    n_series = sum(series.has_bars for series in chart.series)
+    if n_keyed > MAX_AREA_TEXTURES:
         raise ValueError(f"BANA §3.2.2 allows at most {MAX_AREA_TEXTURES} area textures; "
                          "this chart needs an alphabetic key or several graphics")
-    textures = TEXTURES[:n_series]
+    textures = TEXTURES[:n_keyed]
+    has_key = _has_series_key(chart)
+    no_bars = _no_bars_note(chart)
+    if no_bars and show_series_key:
+        transcriber_notes = (*transcriber_notes, no_bars)
 
     usable = _usable_area()
     labels: list[BrailleLabel] = []
@@ -556,7 +599,7 @@ def _layout(chart: VerticalBarChart, mode: str, *,
     notes: list[str] = []
     y = _header(chart, usable, usable.y1, labels, samples, notes,
                 show_title=show_title, transcriber_notes=transcriber_notes,
-                series_key=show_series_key and n_series > 1)
+                series_key=show_series_key and has_key)
     if keyed:
         # Keyed labels in the order they appear, left to right (§5.7.3).
         for j, (symbol, name) in enumerate(zip(category_texts, chart.categories)):
@@ -565,7 +608,7 @@ def _layout(chart: VerticalBarChart, mode: str, *,
                                      text, usable.x1 + (cell - 1) * CELL_PITCH, y,
                                      category_index=j))
                 y += LINE_PITCH
-    if (show_series_key and n_series > 1) or keyed:
+    if (show_series_key and has_key) or keyed:
         y += LINE_PITCH
 
     # Reserve the bottom: category labels, then the horizontal heading.
@@ -638,11 +681,12 @@ def _layout(chart: VerticalBarChart, mode: str, *,
     first_category_x = None
     for j, name in enumerate(chart.categories):
         group_x = plot_left + GROUP_GAP + j * (group_width + GROUP_GAP)
-        for s, series in enumerate(chart.series):
+        for slot, (s, series) in enumerate(
+                (s, series) for s, series in enumerate(chart.series) if series.has_bars):
             value = float(series.values[j])
             top = value_y(value)
             bar_x = (group_x + BAR_OUTLINE_WIDTH / 2
-                     + s * (bar_width + BAR_OUTLINE_WIDTH + BAR_GAP))
+                     + slot * (bar_width + BAR_OUTLINE_WIDTH + BAR_GAP))
             bars.append(Bar(f"bar-{s}-{j}", bar_x, top, bar_width,
                             axis_y - AXIS_WIDTH / 2 - top, textures[s], s, j, value))
         text = category_texts[j]
@@ -676,5 +720,5 @@ def _layout(chart: VerticalBarChart, mode: str, *,
         lines=tuple(lines), bars=tuple(bars), labels=tuple(labels),
         key_samples=tuple(samples), category_count=n_cat,
         series_textures=textures, x_label_mode=mode, notes=tuple(notes),
-        series_key_elsewhere=not show_series_key and n_series > 1,
+        series_key_elsewhere=not show_series_key and has_key,
     )

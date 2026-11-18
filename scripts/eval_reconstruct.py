@@ -42,7 +42,7 @@ def _match_series(spec, models):
         color = _hex_rgb(model["colors"]) if isinstance(model.get("colors"), str) else None
         best = None
         for k, series in enumerate(spec.series):
-            if k in used or color is None or series.source_color is None:
+            if k in used or color is None or series.source_color is None or series.no_visible_bars:
                 continue
             d = math.dist(color, _hex_rgb(series.source_color))
             if d <= 2 * COLOR_DISTANCE and (best is None or d < best[0]):
@@ -199,7 +199,8 @@ def diagnose_chart(frame, record, spec):
         "gt_bars": len(truth), "gt_labels": len(record["models"][0]["x"]),
         "bars": {name: len(stages[name]) for name in STAGES},
         "x_labels": {"raw": len(x_raw), "filtered": len(x_kept)},
-        "series_bar_counts": [sum(v is not None for v in s.values) for s in spec.series],
+        "series_bar_counts": [sum(v is not None for v in s.values) for s in spec.series
+                              if not s.no_visible_bars],
         "spurious_bars": spurious, "lost": lost,
         "truth_near_zero": sum(b["near_zero"] for b in truth),
         "truth_adjacent": sum(b["adjacent"] for b in truth),

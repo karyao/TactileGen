@@ -18,12 +18,15 @@ from src.contracts import (
     ChartInterpretationError,
     Detection,
     DetectionFrame,
+    LegendMappingFrame,
     OCRFrame,
     RecognizedText,
     SeriesSpec,
     VerticalBarSpec,
     YAxisSpec,
+    join_legend_assignments,
 )
+from src.legend_matcher import match_legend_to_bars
 
 MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
@@ -34,6 +37,9 @@ BAR_EDGE_TOLERANCE_PX = 5     # a pixel-measured top edge this far from the box 
 SHORT_BAR_MIN_PX = 6          # detected bars shorter than this are re-measured from pixels
 SHORT_BAR_PLOT_FRACTION = 0.03  # ... or shorter than this share of the plot height
 RESCUE_CONFIDENCE = 0.2
+# A legend entry no bar matched becomes a series with no visible bars only when its
+# swatch box, label box and OCR text are all read at least this confidently (GUESS).
+LEGEND_ENTRY_MIN_CONFIDENCE = 0.5
 RESCUE_STRIP_FRACTION = 0.5   # central share of the bar width that is probed
 RESCUE_ROW_FRACTION = 0.6     # share of strip pixels that must match for a row to count
 _LUMA = np.array([0.299, 0.587, 0.114])
@@ -70,6 +76,17 @@ def _text_table(ocr_texts) -> dict[str, tuple[str, float]]:
             text, confidence = value
             table[key] = (text.strip(), float(confidence))
     return table
+
+
+def _legend_ocr_frame(
+    frame: DetectionFrame, texts: Mapping[str, tuple[str, float]]
+) -> OCRFrame:
+    """Adapt legacy reconstruction OCR input for the legend matcher."""
+    return OCRFrame(frame.source_key, tuple(
+        RecognizedText(detection.id, *texts[detection.id])
+        for detection in frame.detections
+        if detection.role == "legend_label" and detection.id in texts
+    ))
 
 
 def _centre(detection: Detection) -> tuple[float, float]:
@@ -315,33 +332,6 @@ def _rescue_value(rgb: np.ndarray, centre_x: float, width: float, baseline: floa
     return -slope * up if up >= down else slope * down
 
 
-# --- legend --------------------------------------------------------------------
-
-def _legend_ranks(swatches: list[Detection], swatch_ids: list[int]) -> dict[int, int]:
-    """Reading order (rows top to bottom, then left to right) of the given legend swatches."""
-    height = statistics.median(swatches[i].box.y2 - swatches[i].box.y1 for i in swatch_ids)
-    order = sorted(swatch_ids, key=lambda i: (round(_centre(swatches[i])[1] / max(height, 1.0)),
-                                              _centre(swatches[i])[0]))
-    return {index: rank for rank, index in enumerate(order)}
-
-
-def _pair_legend(swatches: list[Detection], labels: list[Detection]):
-    """Pair each swatch with its nearest label (one-to-one, same-row preferred)."""
-    costs = []
-    for s, swatch in enumerate(swatches):
-        sx, sy = swatch.box.x2, _centre(swatch)[1]
-        for l, label in enumerate(labels):
-            lx, ly = label.box.x1, _centre(label)[1]
-            costs.append((math.hypot(lx - sx, 3 * (ly - sy)), s, l))
-    pairs, used_s, used_l = {}, set(), set()
-    for _, s, l in sorted(costs):
-        if s not in used_s and l not in used_l:
-            pairs[s] = l
-            used_s.add(s)
-            used_l.add(l)
-    return pairs
-
-
 # --- main ----------------------------------------------------------------------
 
 def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: str):
@@ -354,17 +344,87 @@ def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: s
     return text, detection
 
 
+def _bar_less_series(pending, entries, frame, texts, rgb, legend, taken_names, n_categories):
+    """Series with no visible bars for legend entries no bar matched.
+
+    Returns ``(added, skipped)``: ``added`` is ``(legend position, SeriesSpec)`` pairs and
+    ``skipped`` has one ``legend_entry_skipped:<reason>:<text>`` flag per entry that failed a
+    guard: the text was unreadable, the swatch, label or text confidence was below
+    ``LEGEND_ENTRY_MIN_CONFIDENCE``, the swatch lay outside the legend box, the name repeated
+    another series, or the swatch colour could not be sampled.
+    """
+    by_id = {detection.id: detection for detection in frame.detections}
+    position = {(entry.swatch_id, entry.label_id): index for index, entry in enumerate(entries)}
+    names = {name.casefold() for name in taken_names if name}
+    added, skipped = [], []
+    for entry in pending:
+        swatch, label = by_id[entry.swatch_id], by_id[entry.label_id]
+        text, text_confidence = texts.get(entry.label_id, ("", 0.0))
+        colour = None if not text else _sample_rgb(rgb, swatch)
+        if not text:
+            reason = "unreadable_text"
+        elif min(swatch.confidence, label.confidence, text_confidence) < LEGEND_ENTRY_MIN_CONFIDENCE:
+            reason = "low_confidence"
+        elif legend is not None and not _inside(_centre(swatch), legend, 4, 4):
+            reason = "outside_legend"
+        elif text.casefold() in names:
+            reason = "duplicate_name"
+        elif colour is None:
+            reason = "unreadable_swatch"
+        else:
+            reason = None
+        if reason is not None:
+            skipped.append(f"legend_entry_skipped:{reason}:{text or entry.label_id}")
+            continue
+        names.add(text.casefold())
+        added.append((position[(entry.swatch_id, entry.label_id)],
+                      SeriesSpec(text, _hex(colour), [None] * n_categories, no_visible_bars=True)))
+    return added, skipped
+
+
+def _in_legend_order(series, identities, entries, added):
+    """Merge bar-less series into ``series`` so the key follows the legend order.
+
+    Series with bars keep their left-to-right bar order. When that order matches their legend
+    order, every series is returned in legend order. When it does not, the bar order is kept
+    and the bar-less series follow in legend order; the second result is then True.
+    """
+    position = {(entry.swatch_id, entry.label_id): index for index, entry in enumerate(entries)}
+    visible = [position.get(identity[:2]) if identity else None for identity in identities]
+    if all(p is not None for p in visible) and visible == sorted(visible):
+        merged = sorted([*zip(visible, series), *added], key=lambda item: item[0])
+        return [item for _, item in merged], False
+    return [*series, *(item for _, item in sorted(added, key=lambda pair: pair[0]))], True
+
+
 def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      min_confidence: float = MIN_CONFIDENCE,
                      rescue_bars: bool = True,
-                     category_guard: bool = True) -> VerticalBarSpec:
+                     category_guard: bool = True, *,
+                     legend_mapping: LegendMappingFrame | None = None
+                     ) -> VerticalBarSpec:
     """Turn detections plus OCR into a ``VerticalBarSpec``.
+
+    ``legend_mapping`` supplies validated series names from the shared matcher.
+    When omitted, the mapping is computed from ``frame``, ``ocr_texts``, and
+    ``image`` so legacy callers use the same matching implementation.
 
     Raises ``ChartInterpretationError`` when there are no bars, no x tick
     labels, or fewer than two consistent y ticks. Everything else unresolved is
     reported through ``flags``.
     """
     texts = _text_table(ocr_texts)
+    if legend_mapping is None:
+        legend_ocr = (
+            ocr_texts
+            if isinstance(ocr_texts, OCRFrame)
+            else _legend_ocr_frame(frame, texts)
+        )
+        legend_mapping = match_legend_to_bars(image, frame, legend_ocr)
+    assignment_by_bar = {
+        bar.id: assignment
+        for bar, assignment in join_legend_assignments(frame, legend_mapping)
+    }
     roles = _group_roles(frame, min_confidence)
     flags: list[str] = []
     confidence: dict[str, float] = {}
@@ -483,53 +543,100 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     bar_label = [min(range(len(label_x)), key=lambda k: abs(label_x[k] - _centre(bar)[0]))
                  for bar in bars]
 
-    # series by colour
+    # Matched legend identities are authoritative series groups. Colour is
+    # only a fallback for bars whose semantic assignment was unresolved.
     rgb = _to_rgb(image)
     bar_colors = [_sample_rgb(rgb, bar) for bar in bars]
 
     swatches = [d for d in roles.get("legend_swatch", [])
                 if legend is None or _inside(_centre(d), legend, 4, 4)]
-    legend_labels = [d for d in roles.get("legend_label", [])
-                     if legend is None or _inside(_centre(d), legend, 4, 4)]
     swatch_colors = [_sample_rgb(rgb, d) for d in swatches]
-    can_rescue = rescue_bars and baseline_inside
+    seeds, _ = _legend_seeds(swatch_colors)
+
+    def group_bars(skip: set[int]):
+        matched_groups: dict[tuple[str, str, str], list[int]] = {}
+        identities_by_swatch: dict[str, set[tuple[str, str]]] = {}
+        unresolved = []
+        for index, bar in enumerate(bars):
+            if index in skip:
+                continue
+            assignment = assignment_by_bar.get(bar.id)
+            if (
+                assignment is None
+                or assignment.status != "matched"
+                or assignment.swatch_id is None
+                or assignment.label_id is None
+                or assignment.series_name is None
+            ):
+                unresolved.append(index)
+                continue
+            identity = (
+                assignment.swatch_id,
+                assignment.label_id,
+                assignment.series_name,
+            )
+            matched_groups.setdefault(identity, []).append(index)
+            identities_by_swatch.setdefault(assignment.swatch_id, set()).add(
+                (assignment.label_id, assignment.series_name)
+            )
+
+        conflicting_swatches = {
+            swatch_id
+            for swatch_id, identities in identities_by_swatch.items()
+            if len(identities) > 1
+        }
+        grouped: list[tuple[list[int], str | None, tuple[str, str, str] | None]] = [
+            (members, None if identity[0] in conflicting_swatches else identity[2], identity)
+            for identity, members in matched_groups.items()
+        ]
+        if unresolved:
+            fallback_clusters, _ = _cluster_colors(
+                [bar_colors[index] for index in unresolved], seeds
+            )
+            grouped.extend(
+                ([unresolved[local_index] for local_index in members], None, None)
+                for members in fallback_clusters
+            )
+        return matched_groups, unresolved, conflicting_swatches, grouped
+
     # Very short boxes carry mostly outline and antialiasing pixels, so their
     # colour is unreliable and their height is a few pixels of box noise: leave
-    # them out of colour clustering and let the rescue re-measure their slots.
+    # them out of grouping and let the rescue re-measure their slots.
     plot_height = plot.box.y2 - plot.box.y1 if plot is not None else 0.0
     short_limit = max(SHORT_BAR_MIN_PX, SHORT_BAR_PLOT_FRACTION * plot_height)
-    active = [k for k, bar in enumerate(bars)
-              if not can_rescue or bar.box.y2 - bar.box.y1 >= short_limit] or list(range(len(bars)))
-    short_bars = len(bars) - len(active)
-    swatch_name = {s: (texts.get(legend_labels[l].id, ("", 0.0))[0] or None)
-                   for s, l in _pair_legend(swatches, legend_labels).items()}
-    seeds, swatch_of_seed = _legend_seeds(swatch_colors)
-    clusters, seed_of_cluster = _cluster_colors([bar_colors[k] for k in active], seeds)
-    clusters = [[active[i] for i in members] for members in clusters]
+    short = {k for k, bar in enumerate(bars) if bar.box.y2 - bar.box.y1 < short_limit}
+    if not (rescue_bars and baseline_inside) or len(short) == len(bars):
+        short = set()
+    matched_groups, unresolved, conflicting_swatches, grouped = group_bars(short)
+    # Rescue is safe when group membership is settled. With a mixture of
+    # semantic and fallback groups (or conflicting semantic identities), the
+    # same pixels could otherwise be inferred into more than one series.
+    grouping_is_settled = not (
+        (matched_groups and unresolved) or conflicting_swatches
+    )
+    can_rescue = rescue_bars and baseline_inside and grouping_is_settled
+    if short and not can_rescue:
+        short = set()   # nothing will re-measure them, so keep them in their groups
+        matched_groups, unresolved, conflicting_swatches, grouped = group_bars(short)
+        grouping_is_settled = not (
+            (matched_groups and unresolved) or conflicting_swatches
+        )
+        can_rescue = rescue_bars and baseline_inside and grouping_is_settled
+    short_bars = len(short)
+    grouped.sort(key=lambda item: min(item[0]))
+    clusters = [members for members, _, _ in grouped]
+    cluster_names = [name for _, name, _ in grouped]
+    cluster_identities = [identity for _, _, identity in grouped]
     cluster_centre = [
         tuple(statistics.median(bar_colors[k][ch] for k in members) for ch in range(3))
         if bar_colors[members[0]] is not None else None
         for members in clusters
     ]
-    # one-to-one nearest-colour match between clusters and legend swatches
-    matches: dict[int, int] = {c: swatch_of_seed[seed] for c, seed in enumerate(seed_of_cluster)
-                               if seed is not None}
-    candidates = sorted(
-        (_distance(cluster_centre[c], swatch_colors[s]), c, s)
-        for c in range(len(clusters)) for s in range(len(swatches))
-        if cluster_centre[c] is not None and swatch_colors[s] is not None
-        and c not in matches and s not in swatch_of_seed)
-    for distance, c, s in candidates:
-        if distance > COLOR_DISTANCE:
-            break
-        if c not in matches and s not in matches.values():
-            matches[c] = s
-
-    unmatched_seeds = [i for i, sw in enumerate(swatch_of_seed) if sw not in matches.values()]
-    ambiguous_series = False
-    if swatches and len(matches) < len(clusters):
-        ambiguous_series = True
-    if not swatches and len(clusters) > 1:
+    has_detected_swatches = any(
+        detection.role == "legend_swatch" for detection in frame.detections
+    )
+    ambiguous_series = bool(conflicting_swatches)
+    if unresolved and (has_detected_swatches or len(clusters) > 1):
         ambiguous_series = True
     if any(bar_colors[members[0]] is None for members in clusters):
         ambiguous_series = True
@@ -555,7 +662,6 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                     edges_corrected += 1
     series = []
     detected_slots = 0
-    offsets_by_cluster: dict[int, float] = {}
     count_mismatch = category_ambiguous = False
     rescued_total = rescued_zero = 0
     for c, members in enumerate(clusters):
@@ -582,7 +688,6 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             # Groups sit at a fixed offset from the tick that depends on the
             # series count, so measure it from this series' detected bars.
             offset = statistics.median(_centre(bars[k])[0] - label_x[j] for j, k in kept.items())
-            offsets_by_cluster[c] = offset
             for j in range(len(categories)):
                 if row[j] is not None:
                     continue
@@ -594,43 +699,10 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
         rescued_total += n_rescued
         if len(members) + n_rescued != len(categories):
             count_mismatch = True
-        name = swatch_name.get(matches[c]) if c in matches else None
+        name = cluster_names[c]
         series.append(SeriesSpec(
             name, _hex(None if centre is None else tuple(int(v) for v in centre)), row,
             value_rescued=rescued, value_confidence=value_conf))
-    # Legend swatches with no bars of their colour are series the detector missed
-    # entirely (usually values too small to see): measure them from pixels.
-    added = []
-    if unmatched_seeds:
-        ranks = _legend_ranks(swatches, swatch_of_seed)
-        refs = sorted((ranks[matches[c]], offsets_by_cluster[c]) for c in offsets_by_cluster
-                      if matches.get(c) in ranks)
-        pitches = [(o2 - o1) / (r2 - r1) for (r1, o1), (r2, o2) in itertools.combinations(refs, 2)
-                   if r2 != r1]
-        pitch = statistics.median(pitches) if pitches else bar_width
-        for i in unmatched_seeds:
-            colour = swatch_colors[swatch_of_seed[i]]
-            if not (can_rescue and refs and colour is not None):
-                ambiguous_series = True
-                continue
-            rank = ranks[swatch_of_seed[i]]
-            ref_rank, ref_offset = min(refs, key=lambda r: abs(r[0] - rank))
-            offset = ref_offset + (rank - ref_rank) * pitch
-            row = [_rescue_value(rgb, label_x[j] + offset, bar_width, baseline, a, colour)
-                   for j in range(len(categories))]
-            rescued_total += len(row)
-            rescued_zero += sum(v == 0.0 for v in row)
-            added.append((rank, SeriesSpec(
-                swatch_name.get(swatch_of_seed[i]), _hex(colour), row,
-                value_rescued=[True] * len(row), value_confidence=[RESCUE_CONFIDENCE] * len(row))))
-    if added:
-        if len(matches) == len(clusters):   # every series has a legend rank: keep legend order
-            ranked = sorted([(ranks[matches[c]], s) for c, s in enumerate(series)] + added,
-                            key=lambda pair: pair[0])
-            series = [s for _, s in ranked]
-        else:
-            series += [s for _, s in added]
-        flags.append(f"series_from_swatch:{len(added)}")
     # Share of category x series slots (for series with at least one detected
     # bar) that had a detected bar; very short bars were detected, just re-measured.
     slots = len(categories) * len(clusters)
@@ -653,6 +725,31 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     if swatches:
         pair_conf = [d.confidence for d in swatches]
         confidence["series"] = round(statistics.mean(pair_conf), 4)
+
+    # Legend entries that no bar matched are series with no visible bars. They are
+    # added only when every bar in the chart was matched to an entry, so an entry
+    # whose bars were merely hard to match can never become a phantom series.
+    used_swatches = {identity[0] for identity in matched_groups}
+    used_labels = {identity[1] for identity in matched_groups}
+    pending = [entry for entry in legend_mapping.entries
+               if entry.swatch_id not in used_swatches and entry.label_id not in used_labels]
+    if pending:
+        settled = (bool(matched_groups) and not unresolved
+                   and not conflicting_swatches and not ambiguous_series)
+        added: list[tuple[int, SeriesSpec]] = []
+        if settled:
+            added, skipped = _bar_less_series(
+                pending, legend_mapping.entries, frame, texts, rgb, legend,
+                [s.name for s in series], len(categories))
+        else:
+            skipped = [f"legend_entry_skipped:bars_not_settled:{entry.name or entry.label_id}"
+                       for entry in pending]
+        flags.extend(skipped)
+        if added:
+            series, reordered = _in_legend_order(
+                series, cluster_identities, legend_mapping.entries, added)
+            if reordered:
+                flags.append("legend_order_differs")
 
     # titles
     title, title_box = _title("chart_title", roles, texts, flags, confidence,
