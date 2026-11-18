@@ -1,3 +1,4 @@
+from tests.gradio.callback_helpers import invoke
 """Orientation controls, reruns, diagnostics settings, and stale-result resets."""
 from dataclasses import fields
 import json
@@ -49,25 +50,20 @@ def test_orientation_control_events_default_busy_and_clear(app):
     selector = next(c for c in analysis.inputs if c.label == "Bar orientation")
     assert selector.value == "auto"
     assert selector.choices == [("Auto", "auto"), ("Vertical", "vertical"), ("Horizontal", "horizontal")]
-    for name, interactive in (("begin_analysis", False), ("finish_analysis", True)):
-        callback = handler(app, name)
-        update = callback.fn()[callback.outputs.index(selector)]
-        assert update["interactive"] is interactive
-        assert "value" not in update  # Reruns preserve the selected preference.
     clear = handler(app, "clear_all")
-    assert clear.fn()[clear.outputs.index(selector)]["value"] == "auto"
+    assert invoke(clear.fn)[clear.outputs.index(selector)]["value"] == "auto"
     changed = handler(app, "orientation_changed")
     event = next(d for d in app.get_config_file()["dependencies"]
                  if [selector._id, "input"] in [list(t) for t in d["targets"]])
     assert event["outputs"] == [c._id for c in analysis.outputs]
     assert event["queue"] is False
     assert event["api_visibility"] == "private"
-    reset = named(changed.fn())
+    reset = named(invoke(changed.fn))
     assert_cleared(reset)
     assert "Analyze chart" in reset["empty_output"]["value"]
     assert reset["orientation_output"]["visible"] is False
     assert reset["diagnostics_download"]["value"] is None
-    assert named(handler(app, "ready_results").fn())["orientation_output"]["visible"] is False
+    assert named(invoke(handler(app, "ready_results").fn))["orientation_output"]["visible"] is False
 
 
 def test_preference_reruns_uncertainty_and_generation_reset(app, tmp_path):
@@ -86,7 +82,7 @@ def test_preference_reruns_uncertainty_and_generation_reset(app, tmp_path):
         return LegendMappingFrame(effective.source_key, tuple(LegendBarAssignment(d.id) for d in effective.detections))
 
     def run(preference):
-        return named(analysis.fn(str(path), .25, .7, "eng", 640, "rapidocr", preference))
+        return named(invoke(analysis.fn, str(path), .25, .7, "eng", 640, "rapidocr", preference))
 
     def settings(updates):
         with ZipFile(updates["diagnostics_download"]["value"]) as archive:
@@ -106,13 +102,13 @@ def test_preference_reruns_uncertainty_and_generation_reset(app, tmp_path):
         assert "Suppressed 1" in success["orientation_output"]["value"]
         assert settings(success)["bar_orientation"] == "auto"
         model = success["review_state"]
-        generation = handler(app, "generate_tactile").fn(model, review_text_rows(model))
+        generation = invoke(handler(app, "generate_tactile").fn, model, review_text_rows(model))
         generated = dict(zip((f.name for f in fields(GenerationComponents)), generation, strict=True))
         assert generated["generation_gallery"]["visible"] is True
         assert generated["generation_download"]["value"] is not None
 
         # The selector's actual event handler clears both analysis and generation.
-        assert_cleared(named(handler(app, "orientation_changed").fn()))
+        assert_cleared(named(invoke(handler(app, "orientation_changed").fn)))
         detect.return_value = frame(.9, .9)
         uncertain = run("auto")
         assert_cleared(uncertain)

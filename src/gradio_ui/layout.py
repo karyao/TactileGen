@@ -14,6 +14,7 @@ from src.detection import (
     validate_imgsz,
 )
 from src.diagnostics import configure_analysis_logging
+from src.gradio_ui.run_tracking import RunTracker, guarded_blocks
 from src.gradio_ui.callbacks import create_callbacks
 from src.gradio_ui.components import Controls, AnalysisComponents, GenerationComponents
 from src.gradio_ui.dependencies import import_gradio
@@ -40,7 +41,8 @@ def build_app(
     atexit.register(artifacts.cleanup)
     artifact_root = Path(artifacts.name)
 
-    with gr.Blocks(
+    tracker = RunTracker()
+    with guarded_blocks(gr, tracker)(
         title="TactileGen — Prepare charts for tactile reading",
         analytics_enabled=False,
         fill_width=False,
@@ -72,31 +74,25 @@ def build_app(
             generation_error_output=results.generation_error_output,
         )
         callbacks = create_callbacks(
-            gr=gr, model=model, backends=backends, device=device,
+            tracker=tracker, gr=gr, model=model, backends=backends, device=device,
             initial_ocr_engine=ocr_engine,
             initial_imgsz=initial_imgsz, artifact_root=artifact_root,
             controls=controls, results=results, generation=generation,
         )
         controls.image_input.change(
             callbacks.ready_results,
-            outputs=results.components(),
+            outputs=[*results.components(), *controls.components()],
             queue=False,
             api_visibility="private",
         )
         controls.bar_orientation.input(
             callbacks.orientation_changed,
-            outputs=results.components(),
+            outputs=[*results.components(), *controls.components()],
             queue=False,
             api_visibility="private",
         )
-        start = controls.analyze_button.click(
-            callbacks.begin_analysis,
-            outputs=[*controls.components(), *results.components()],
-            queue=False,
-            trigger_mode="once",
-            api_visibility="private",
-        )
-        analysis = start.then(
+        demo.unload(callbacks.unload)
+        controls.analyze_button.click(
             callbacks.analyze_event,
             inputs=[
                 controls.image_input,
@@ -107,19 +103,13 @@ def build_app(
                 controls.ocr_engine,
                 controls.bar_orientation,
             ],
-            outputs=results.components(),
+            outputs=[*results.components(), *controls.components()],
             show_progress="full",
             show_progress_on=results.annotated_output,
             concurrency_limit=1,
             concurrency_id="tactilegen-inference",
+            trigger_mode="once",
             api_name="analyze",
-            api_description="Detect and annotate chart elements in one uploaded image.",
-            api_visibility="private",
-        )
-        analysis.then(
-            callbacks.finish_analysis,
-            outputs=controls.components(),
-            queue=False,
             api_visibility="private",
         )
         results.review_fields.input(

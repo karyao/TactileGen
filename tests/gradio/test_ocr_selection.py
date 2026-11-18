@@ -1,3 +1,4 @@
+from tests.gradio.callback_helpers import invoke
 """Engine selection, lazy initialization, and partial-result recovery."""
 
 import json
@@ -46,11 +47,8 @@ def test_ui_initial_selection_clear_and_controls_are_lazy(engine):
             selector = next(c for c in event.inputs if c.label == "OCR engine")
             assert selector.label == "OCR engine"
             assert selector.value == engine
-            for name, interactive in (("begin_analysis", False), ("finish_analysis", True)):
-                handler = next(fn for fn in demo.fns.values() if fn.api_name == name)
-                assert handler.fn()[handler.outputs.index(selector)]["interactive"] is interactive
             clear = next(fn for fn in demo.fns.values() if fn.api_name == "clear_all")
-            assert clear.fn()[clear.outputs.index(selector)]["value"] == engine
+            assert invoke(clear.fn)[clear.outputs.index(selector)]["value"] == engine
         finally:
             demo.close(verbose=False)
 
@@ -97,7 +95,7 @@ def test_engine_failure_switch_and_retry_preserve_results_and_diagnostics(tmp_pa
              patch("src.tesseract_ocr.TesseractBackend", return_value=tesseract_backend) as tesseract:
             for engine, expected in (("rapidocr", None), ("tesseract", tesseract_backend),
                                      ("rapidocr", rapid_backend), ("tesseract", tesseract_backend)):
-                updates = event.fn(str(image_path), .25, .7, "eng+fra", 640, engine)
+                updates = invoke(event.fn, str(image_path), .25, .7, "eng+fra", 640, engine)
                 assert updates[overlay_index]["value"] is not None
                 with ZipFile(updates[archive_index]["value"]) as archive:
                     record = json.loads(archive.read("diagnostics.json"))

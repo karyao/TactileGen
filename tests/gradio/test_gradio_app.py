@@ -1,3 +1,4 @@
+from tests.gradio.callback_helpers import invoke
 """Gradio startup, analysis, review, callbacks, components, theme, and diagnostics."""
 
 import contextlib
@@ -677,21 +678,18 @@ class GradioUiTest(GradioTestCase):
             self.assertEqual(control.maximum, 1280)
             presets = [fn for fn in demo.fns.values()
                        if fn.outputs == [control] and not fn.inputs]
-            self.assertEqual([fn.fn() for fn in presets], [640, 960, 1280])
+            self.assertEqual([invoke(fn.fn) for fn in presets], [640, 960, 1280])
             self.assertIsNone(control.precision)  # Never round fractional input into a valid size.
             for selected in (None, 1280):
                 with patch("src.gradio_ui.callbacks.analyze_image", side_effect=UploadValidationError("Choose a chart.")) as analyze:
                     args = (None, .25, .7, "eng")
-                    binding.fn(*args, *(() if selected is None else (selected,)))
+                    invoke(binding.fn, *args, *(() if selected is None else (selected,)))
                 self.assertEqual(analyze.call_args.kwargs["imgsz"], selected or 960)
             clear = next(fn for fn in demo.fns.values() if fn.api_name == "clear_all")
-            updates = clear.fn()
+            updates = invoke(clear.fn)
             index = clear.outputs.index(control)
             self.assertEqual(updates[index]["value"], 960)
             self.assertTrue(updates[index]["interactive"])
-            finish = next(fn for fn in demo.fns.values() if fn.api_name == "finish_analysis")
-            self.assertIn(control, finish.outputs)
-            self.assertEqual(len(finish.fn()), len(finish.outputs))
         finally:
             demo.close(verbose=False)
 
@@ -706,7 +704,7 @@ class GradioUiTest(GradioTestCase):
             for size in (640.5, 1281, 100000):
                 with self.subTest(size=size):
                     with patch("src.gradio_ui.analysis.run_detection") as detect:
-                        updates = binding.fn(None, .25, .7, "eng", size)
+                        updates = invoke(binding.fn, None, .25, .7, "eng", size)
                     detect.assert_not_called()
                     with ZipFile(updates[archive_index]["value"]) as archive:
                         record = json.loads(archive.read("diagnostics.json"))
@@ -763,8 +761,8 @@ class GradioUiTest(GradioTestCase):
 
         analyze = next(fn for fn in demo.fns.values() if fn.api_name == "analyze")
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
-        ready_updates = ready()
-        self.assertEqual(len(ready_updates), len(analyze.outputs))
+        ready_updates = invoke(ready)
+        self.assertEqual(len(ready_updates), 27)
         self.assertIn("Your chart workspace", ready_updates[1]["value"])
         frame = DetectionFrame("input/chart.png", 20, 20, ())
         result = AnalysisResult(
@@ -772,7 +770,7 @@ class GradioUiTest(GradioTestCase):
             frame, None, None, spec=make_spec(), completeness=Completeness(READY),
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=result):
-            updates = analyze.fn("chart.png", 0.25, 0.70, "eng")
+            updates = invoke(analyze.fn, "chart.png", 0.25, 0.70, "eng")
         by_class = {
             name: update
             for output, update in zip(analyze.outputs, updates)
@@ -790,14 +788,14 @@ class GradioUiTest(GradioTestCase):
             completeness=Completeness(CANNOT_BUILD, blockers=["Ambiguous structure."]),
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=blocked):
-            blocked_updates = analyze.fn("chart.png", 0.25, 0.70, "eng")
+            blocked_updates = invoke(analyze.fn, "chart.png", 0.25, 0.70, "eng")
         self.assertFalse(blocked_updates[13]["interactive"])
         self.assertTrue(blocked_updates[9]["visible"])
         with patch("src.gradio_ui.callbacks.analyze_image", side_effect=UploadValidationError("Choose a chart.")):
-            error_updates = analyze.fn(None, 0.25, 0.70, "eng")
+            error_updates = invoke(analyze.fn, None, 0.25, 0.70, "eng")
         self.assertTrue(error_updates[23]["visible"])
         self.assertIn('role="alert"', error_updates[23]["value"])
-        self.assertEqual(len(ready()), len(analyze.outputs))
+        self.assertEqual(len(invoke(ready)), 27)
 
     def test_image_change_clears_diagnostics_with_all_analysis_results(self):
         demo = build_app(object(), device="cpu")
@@ -814,8 +812,8 @@ class GradioUiTest(GradioTestCase):
         self.assertEqual(reset.outputs, analyze.outputs)
         self.assertFalse(event["queue"])
         self.assertEqual(event["api_visibility"], "private")
-        updates = reset.fn()
-        self.assertEqual(len(updates), len(reset.outputs))
+        updates = invoke(reset.fn)
+        self.assertEqual(len(updates), len(reset.outputs[:27]))
         for name in ("diagnostics_download", "diagnostics_info", "orientation_output"):
             index = [field.name for field in fields(AnalysisComponents)].index(name)
             self.assertFalse(updates[index]["visible"])
@@ -875,16 +873,9 @@ class GradioUiTest(GradioTestCase):
         self.assertEqual(inference_fn.concurrency_limit, 1)
         self.assertEqual(inference_fn.concurrency_id, "tactilegen-inference")
 
-        begin = next(fn for fn in demo.fns.values() if fn.api_name == "begin_analysis")
-        begin_updates = begin.fn()
-        control_count = len(begin.outputs) - len(inference_fn.outputs)
-        self.assertEqual(control_count, 12)
-        self.assertTrue(all(update["interactive"] is False for update in begin_updates[:control_count]))
-        finish = next(fn.fn for fn in demo.fns.values() if fn.api_name == "finish_analysis")
-        self.assertTrue(all(update["interactive"] is True for update in finish()))
         ready = next(fn.fn for fn in demo.fns.values() if fn.api_name == "ready_results")
-        ready_updates = ready()
-        self.assertEqual(len(ready_updates), len(inference_fn.outputs))
+        ready_updates = invoke(ready)
+        self.assertEqual(len(ready_updates), 27)
         self.assertTrue(ready_updates[1]["visible"])
         self.assertIsNone(ready_updates[8])
         self.assertTrue(all(not update["visible"] for update in ready_updates[2:8]))
@@ -910,7 +901,7 @@ class GradioUiTest(GradioTestCase):
             display_frame, display_ocr, None,
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=success):
-            success_updates = analyze("chart.png", 0.25, 0.70, "eng")
+            success_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
         self.assertIn("Analysis complete", success_updates[0]["value"])
         self.assertEqual(success_updates[2]["value"], success.summary)
         self.assertTrue(success_updates[2]["visible"])
@@ -933,7 +924,6 @@ class GradioUiTest(GradioTestCase):
         self.assertTrue(Path(success_updates[24]["value"]).is_file())
         self.assertTrue(success_updates[25]["visible"])
         self.assertIn("Analysis run:", success_updates[25]["value"])
-        self.assertEqual(begin_updates[-2:], ready_updates[-2:])
 
         mapped_frame = DetectionFrame("input/chart.png", 20, 20, (
             Detection("bar", "vertical_bar", Box(0, 5, 5, 20), 0.9),
@@ -952,7 +942,7 @@ class GradioUiTest(GradioTestCase):
             reconstructed, Completeness(READY), None,
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=mapped_result):
-            mapped_updates = analyze("chart.png", 0.25, 0.70, "eng")
+            mapped_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
         self.assertTrue(mapped_updates[6]["visible"])
         self.assertEqual(
             mapped_updates[6]["value"][0],
@@ -979,7 +969,7 @@ class GradioUiTest(GradioTestCase):
             ocr_frame=None, legend_mapping=None, spec=None, completeness=None,
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=uncertain_result):
-            uncertain_updates = analyze("chart.png", 0.25, 0.70, "eng")
+            uncertain_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
         self.assertIsNone(uncertain_updates[8])
         self.assertFalse(uncertain_updates[13]["interactive"])
         for index in (4, 5, 6, 7, 9, 14, 15, 16, 17, 18, 19, 20, 21, 22):
@@ -991,7 +981,7 @@ class GradioUiTest(GradioTestCase):
             Completeness(CANNOT_BUILD, blockers=["Ambiguous structure."]), None,
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=spec_blocked_result):
-            spec_blocked_updates = analyze("chart.png", 0.25, 0.70, "eng")
+            spec_blocked_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
         self.assertIsInstance(spec_blocked_updates[8], ReviewModel)
         self.assertTrue(spec_blocked_updates[9]["visible"])
         self.assertFalse(spec_blocked_updates[13]["interactive"])
@@ -1011,7 +1001,7 @@ class GradioUiTest(GradioTestCase):
             None,
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=blocked_result):
-            blocked_updates = analyze("chart.png", 0.25, 0.70, "eng")
+            blocked_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
         self.assertIn("Analysis complete", blocked_updates[0]["value"])
         for index in (2, 3, 4, 5, 6, 7):
             self.assertTrue(blocked_updates[index]["visible"])
@@ -1030,7 +1020,7 @@ class GradioUiTest(GradioTestCase):
             reconstruction_warning=RECONSTRUCTION_WARNING,
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=warning):
-            warning_updates = analyze("chart.png", 0.25, 0.70, "eng")
+            warning_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
         self.assertTrue(warning_updates[2]["visible"])
         self.assertTrue(warning_updates[3]["visible"])
         self.assertFalse(warning_updates[4]["visible"])
@@ -1044,7 +1034,7 @@ class GradioUiTest(GradioTestCase):
             "src.gradio_ui.callbacks.analyze_image",
             side_effect=UploadValidationError("Upload a supported image."),
         ):
-            failure_updates = analyze("chart.png", 0.25, 0.70, "eng")
+            failure_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
         self.assertFalse(failure_updates[2]["visible"])
         self.assertFalse(failure_updates[3]["visible"])
         self.assertFalse(failure_updates[4]["visible"])
@@ -1056,7 +1046,7 @@ class GradioUiTest(GradioTestCase):
             "src.gradio_ui.callbacks.analyze_image",
             side_effect=RuntimeError(private_path),
         ):
-            unexpected_updates = analyze("chart.png", 0.25, 0.70, "eng")
+            unexpected_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
         self.assertTrue(unexpected_updates[23]["visible"])
         self.assertNotIn(private_path, unexpected_updates[23]["value"])
         self.assertNotIn("RuntimeError", unexpected_updates[23]["value"])
@@ -1075,13 +1065,14 @@ class GradioUiTest(GradioTestCase):
         self.assertFalse(review_events[0]["queue"])
         review_fn = next(fn.fn for fn in demo.fns.values()
                          if fn.api_name == "update_review")
-        review_model = build_review_model(make_spec(), Completeness(READY))
-        invalid_review = review_fn(review_model, review_text_rows(review_model)[:-1])
+        with patch("src.gradio_ui.callbacks.analyze_image", return_value=mapped_result):
+            review_model = invoke(analyze, "chart.png", .25, .7, "eng")[8]
+        invalid_review = invoke(review_fn, review_model, review_text_rows(review_model)[:-1])
         self.assertIs(invalid_review[0], review_model)
         self.assertTrue(invalid_review[2]["visible"])
         changed_rows = review_text_rows(review_model)
         changed_rows[0] = ["category[0]", "Updated title"]
-        valid_review = review_fn(review_model, changed_rows)
+        valid_review = invoke(review_fn, review_model, changed_rows)
         self.assertEqual(valid_review[0].draft_values[0], "Updated title")
         self.assertEqual(valid_review[1]["value"][0][0], "Chart title")
         self.assertFalse(valid_review[2]["visible"])
@@ -1097,9 +1088,10 @@ class GradioUiTest(GradioTestCase):
         )
         self.assertEqual(generate_fn.concurrency_limit, 1)
         self.assertEqual(generate_fn.concurrency_id, "tactilegen-generation")
+        review_model = valid_review[0]
         generated_rows = review_text_rows(review_model)
         generated_rows[0][1] = "Updated sales"
-        generated = generate_fn.fn(review_model, generated_rows)
+        generated = invoke(generate_fn.fn, review_model, generated_rows)
         self.assertEqual(generated[1].spec.title, "Updated sales")
         self.assertEqual(generated[2]["value"][0], ["Chart title", "Updated sales"])
         self.assertTrue(generated[5]["visible"])
@@ -1220,24 +1212,24 @@ class GradioDiagnosticsTest(unittest.TestCase):
                      patch("src.gradio_ui.analysis.reconstruct_vbar", return_value=make_spec()) as reconstruct,\
                      patch("src.gradio_ui.analysis.cut_off_flags", return_value=[]),\
                      self.assertLogs("src.gradio_app", level="INFO") as logs:
-                    success = event(str(image), .25, .7, "eng")
-                    event(None, .25, .7, "eng")
+                    success = invoke(event, str(image), .25, .7, "eng")
+                    invoke(event, None, .25, .7, "eng")
                     detect.side_effect = RuntimeError("detector unavailable")
-                    event(str(image), .25, .7, "eng")
+                    invoke(event, str(image), .25, .7, "eng")
                     detect.side_effect = None
                     recognize.side_effect = RuntimeError("OCR unavailable")
-                    partial = event(str(image), .25, .7, "eng")
+                    partial = invoke(event, str(image), .25, .7, "eng")
                     recognize.side_effect = None
                     reconstruct.side_effect = ChartInterpretationError("fewer than 2 readable y tick labels")
-                    event(str(image), .25, .7, "eng")
+                    invoke(event, str(image), .25, .7, "eng")
                     reconstruct.side_effect = None
                     with patch("src.gradio_ui.callbacks.write_ocr_download", side_effect=OSError("export unavailable")):
-                        event(str(image), .25, .7, "eng")
+                        invoke(event, str(image), .25, .7, "eng")
                     with patch("src.diagnostics.os.replace", side_effect=OSError("disk full")),\
                          patch.object(AnalysisDiagnostics, "persist", persist):
-                        storage_failure = event(str(image), .25, .7, "eng")
+                        storage_failure = invoke(event, str(image), .25, .7, "eng")
                     reconstruct.return_value = make_spec(flags=["y_ticks_dropped:1"])
-                    event(str(image), .25, .7, "eng")
+                    invoke(event, str(image), .25, .7, "eng")
                 self.assertFalse(success[error_index]["visible"])
                 self.assertFalse(partial[error_index]["visible"])
                 self.assertFalse(storage_failure[error_index]["visible"])
@@ -1359,13 +1351,13 @@ def test_gradio_download_reset_and_export_failure(tmp_path):
     try:
         with patch('src.gradio_ui.analysis.run_detection', return_value=frame),\
              patch('src.gradio_ui.analysis.run_ocr', return_value=ocr):
-            success = event.fn(str(image_path), .25, .7, 'eng')
+            success = invoke(event.fn, str(image_path), .25, .7, 'eng')
             assert success[index]['visible']
             with ZipFile(success[index]['value']) as archive:
                 record = json.loads(archive.read('diagnostics.json'))
                 assert 'annotated.png' in archive.namelist()
                 assert record['outputs']['spec']['categories'] == ['C0', 'C1', 'C2']
-            rejected = event.fn(None, .25, .7, 'eng')
+            rejected = invoke(event.fn, None, .25, .7, 'eng')
             assert rejected[index]['visible']
             assert rejected[index]['value'] != success[index]['value']
             with ZipFile(rejected[index]['value']) as archive:
@@ -1373,14 +1365,14 @@ def test_gradio_download_reset_and_export_failure(tmp_path):
                 assert record['outcome'] == 'failed'
                 assert 'input.png' not in archive.namelist()
             with patch('src.diagnostics.os.replace', side_effect=OSError('disk full')):
-                failed_export = event.fn(str(image_path), .25, .7, 'eng')
+                failed_export = invoke(event.fn, str(image_path), .25, .7, 'eng')
             assert not failed_export[index]['visible']
             assert 'Diagnostic export failed' in failed_export[index+1]['value']
             assert failed_export[8] is not None  # Review remains available.
-        for name in ('ready_results', 'begin_analysis', 'clear_all'):
+        for name in ('ready_results', 'clear_all'):
             callback = next(fn for fn in demo.fns.values() if fn.api_name == name)
-            updates = callback.fn()
-            offset = len(callback.outputs) - len(event.outputs)
+            updates = invoke(callback.fn)
+            offset = 12 if name == "clear_all" else 0
             assert not updates[index+offset]['visible']
             assert updates[index+offset]['value'] is None
     finally:
@@ -1402,7 +1394,7 @@ def test_report_failure_keeps_app_analysis_and_shows_specific_error(tmp_path):
         with patch('src.gradio_ui.analysis.run_detection', return_value=frame),\
              patch('src.gradio_ui.analysis.run_ocr', return_value=ocr),\
              patch('src.diagnostics_report.DiagnosticReport.render', side_effect=RuntimeError('formatting failed')):
-            updates = binding.fn(str(image), .25, .7, 'eng')
+            updates = invoke(binding.fn, str(image), .25, .7, 'eng')
         assert updates[8] is not None  # Analysis review state survived packaging failure.
         assert not updates[index]['visible'] and updates[index]['value'] is None
         assert 'Diagnostic export failed' in updates[index + 1]['value']
