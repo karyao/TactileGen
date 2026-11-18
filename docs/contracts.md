@@ -9,6 +9,13 @@ pass these objects in memory. `src/contract_io.py` reads and writes JSON for
 small fixtures or optional inspection; the pipeline does not need a JSON file
 between every stage.
 
+Use `parse_bar_chart(data)` from `src.contract_io` to validate an already-decoded
+schema-version-1 JSON object in memory. It returns `VerticalBarChart` for
+`vbar_categorical` or `HorizontalBarChart` for `hbar_categorical`, preserving
+category order and printed axis titles. It raises `ValueError` for invalid
+contracts, including unknown fields, without modifying the input. The file
+loader `load_bar_chart(path)` delegates to the same parser.
+
 ## Handoffs
 
 | Result | Producer | Consumer | Contents |

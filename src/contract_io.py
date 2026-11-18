@@ -83,28 +83,53 @@ def load_vertical_bar_chart(path: Path) -> VerticalBarChart:
 
 
 def load_bar_chart(path: Path) -> VerticalBarChart | HorizontalBarChart:
-    """A ``vbar_categorical`` or ``hbar_categorical`` chart file.
+    """Load a schema-version-1 categorical bar chart file."""
+    return parse_bar_chart(_read(path))
+
+
+def _fields(data: Any, required: set[str], optional: set[str], name: str) -> None:
+    if not isinstance(data, dict):
+        raise ValueError(f"{name} must be a JSON object")
+    missing = required - data.keys()
+    if missing:
+        raise ValueError(f"{name} missing required fields: {', '.join(sorted(missing))}")
+    unknown = data.keys() - required - optional
+    if unknown:
+        raise ValueError(f"{name} has unknown fields: {', '.join(sorted(map(str, unknown)))}")
+
+
+def parse_bar_chart(data: dict[str, Any]) -> VerticalBarChart | HorizontalBarChart:
+    """Validate an already-decoded schema-version-1 chart without file I/O.
 
     For ``hbar_categorical`` the categories run top to bottom and the titles
     keep their printed axes (``x_axis_title`` is the value heading).
+    Raises ``ValueError`` for invalid contracts; does not modify ``data``.
     """
-    data = _read(path)
-    chart_type = _CHART_TYPES.get(data.get("chart_type"))
-    if chart_type is None:
-        raise ValueError(f"Expected vbar_categorical or hbar_categorical chart: {path}")
-    try:
-        series = tuple(
-            BarSeries(item["name"], tuple(_array(item["values"], "values")),
-                      item.get("has_bars", True), tuple(item.get("rescued", ())))
-            for item in _array(data["series"], "series")
-        )
-        return chart_type(
-            data["source_key"], data["title"], data["x_axis_title"],
-            data["y_axis_title"], tuple(_array(data["categories"], "categories")), series,
-            omit_legend=data.get("omit_legend", False),
-        )
-    except (KeyError, TypeError) as exc:
-        raise ValueError(f"Invalid bar chart: {path}") from exc
+    _fields(data, {
+        "schema_version", "chart_type", "source_key", "title", "x_axis_title",
+        "y_axis_title", "categories", "series",
+    }, {"omit_legend"}, "chart")
+    if type(data["schema_version"]) is not int or data["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(f"Expected chart contract schema_version {SCHEMA_VERSION}")
+    kind = data["chart_type"]
+    if not isinstance(kind, str) or kind not in _CHART_TYPES:
+        raise ValueError("Expected vbar_categorical or hbar_categorical chart")
+    series = []
+    for index, item in enumerate(_array(data["series"], "series")):
+        name = f"series[{index}]"
+        _fields(item, {"name", "values"}, {"has_bars", "rescued"}, name)
+        has_bars = item.get("has_bars", True)
+        if not isinstance(has_bars, bool):
+            raise ValueError(f"{name}.has_bars must be a boolean")
+        series.append(BarSeries(
+            item["name"], tuple(_array(item["values"], f"{name}.values")),
+            has_bars, tuple(_array(item.get("rescued", []), f"{name}.rescued")),
+        ))
+    return _CHART_TYPES[kind](
+        data["source_key"], data["title"], data["x_axis_title"],
+        data["y_axis_title"], tuple(_array(data["categories"], "categories")), tuple(series),
+        omit_legend=data.get("omit_legend", False),
+    )
 
 
 def write_vertical_bar_chart(path: Path, chart: VerticalBarChart) -> None:
