@@ -39,7 +39,7 @@ from src.reconstruction.legend_matcher import match_legend_to_bars
 from src.ocr import run_ocr
 from src.presentation import render_detection_overlay, summarize_detections
 from src.reconstruction.vertical import reconstruct_vbar
-from src.reconstruction.horizontal.horizontal import (
+from src.reconstruction.horizontal import (
     match_legend_to_hbars,
     reconstruct_hbar,
 )

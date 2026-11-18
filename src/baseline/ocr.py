@@ -35,7 +35,8 @@ from src.detection import (
     detection_frame,
     load_model,
 )
-from src.ocr import OCRBackend, _read_image, run_ocr
+from src.ocr import OCRBackend, run_ocr
+from src.ocr.pipeline import _read_image
 
 
 DEFAULT_ANNOTATIONS = Path("data/annotations_test.json")

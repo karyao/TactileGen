@@ -275,8 +275,3 @@ def main(argv: Sequence[str] | None = None) -> None:
     }))
 
 
-if __name__ == "__main__":
-    # Keep protocol/result class identity stable when the adapter imports
-    # ``src.ocr`` while this file is executing under its ``-m`` name.
-    sys.modules.setdefault("src.ocr", sys.modules[__name__])
-    main()

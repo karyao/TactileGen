@@ -83,7 +83,7 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     from src.reconstruction.legend_matcher import match_legend_to_bars
     from src.ocr import run_ocr
     from src.reconstruction.vertical import reconstruct_vbar
-    from src.reconstruction.horizontal.horizontal import reconstruct_hbar
+    from src.reconstruction.horizontal import reconstruct_hbar
 
     image = cv2.imread(str(image_path))
     if image is None:

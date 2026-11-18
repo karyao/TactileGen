@@ -22,7 +22,7 @@ from src.contracts import (
 )
 from src.diagnostics.tracking import AnalysisDiagnostics
 from src.reconstruction.vertical import _calibrate, _text_table, parse_tick_value, reconstruct_vbar
-from src.reconstruction.horizontal.horizontal import bar_orientation, reconstruct_hbar, transpose_frame
+from src.reconstruction.horizontal import bar_orientation, reconstruct_hbar, transpose_frame
 from src.tactile.completeness import READY, check_completeness, cut_off_flags, spec_to_chart
 
 from tests.test_completeness import make_spec

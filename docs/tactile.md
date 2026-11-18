@@ -83,7 +83,7 @@ whole graph first; none is generated, so part 1 reports `overview_first`.
 
 ## Horizontal bars
 
-`src/reconstruct_hbar.py` and `src/tactile/layout_hbar.py` handle charts whose
+`src/reconstruction/horizontal.py` and `src/tactile/layout_hbar.py` handle charts whose
 bars run left to right.
 
 - **Which way the bars run.** The shared resolver `resolve_bar_orientation`

@@ -43,7 +43,8 @@ from src.contracts import (
     join_text_regions,
 )
 from src.diagnostics.tracking import AnalysisDiagnostics
-from src.ocr import OCRBackendResult, _run_command, parse_args, run_ocr
+from src.ocr import OCRBackendResult, run_ocr
+from src.ocr.pipeline import _run_command, parse_args
 from src.ocr.crop import _title_strip_bounds, crop_text_bounds, crop_text_region
 from src.ocr.trace import adapter_evidence, snapshot
 from src.ocr.rapidocr import RapidOCRBackend, _load_rapidocr
