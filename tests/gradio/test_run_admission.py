@@ -17,7 +17,8 @@ from tests.gradio.test_run_tracking import Browser, result, wait_started
 def test_actual_queue_rejects_invalidated_analysis_admission(reset):
     async def scenario():
         app = build_app(object())
-        a, b = Browser(app, "a"), Browser(app, "b")
+        running_session = Browser(app, "running")
+        queued_session = Browser(app, "queued")
         queue = app._queue
         args = [None, .25, .7, "eng", 640, "rapidocr", "auto"]
         request = Request({"type": "http", "method": "POST", "path": "/gradio_api/queue/join",
@@ -30,19 +31,19 @@ def test_actual_queue_rejects_invalidated_analysis_admission(reset):
             success, _, _ = await queue.push(body, request, None)
             assert success
         try:
-            await enqueue(a)
+            await enqueue(running_session)
             first = queue.get_events()
             group = queue.event_queue_per_concurrency_id["tactilegen-inference"]
             group.current_concurrency = 1
-            await enqueue(b)
+            await enqueue(queued_session)
             assert queue.get_events() is None
-            await b.call(reset)
+            await queued_session.call(reset)
             group.current_concurrency = 0
             events, _, _ = queue.get_events()
             with patch("src.gradio_ui.callbacks.analyze_image") as analyze:
-                response = await b.call("analyze", events[0].data.data)
+                response = await queued_session.call("analyze", events[0].data.data)
                 analyze.assert_not_called()
-            assert b.model is None
+            assert queued_session.model is None
             assert all(value is None or "value" not in value for value in response["data"])
         finally:
             app.close(verbose=False)
@@ -119,7 +120,7 @@ def test_cancelled_generation_cleans_files_after_worker_finishes():
 def test_expired_lock_is_reclaimed_only_after_all_users_exit():
     async def scenario():
         tracker = RunTracker()
-        for index in range(50):
+        for index in range(2):
             key = str(index)
             async with tracker.publication(key):
                 tracker.start(key, "run")

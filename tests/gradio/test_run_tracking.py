@@ -17,7 +17,7 @@ from src.tactile.completeness import Completeness, READY
 from tests.gradio.test_gradio_app import make_spec
 
 
-def result(title="Original"):
+def make_analysis_result(title="Original"):
     return AnalysisResult("summary", np.zeros((80, 100, 3), dtype=np.uint8), 0,
                           DetectionFrame("input/chart.png", 100, 80, ()), None, None,
                           spec=make_spec(title=title), completeness=Completeness(READY))
@@ -28,10 +28,10 @@ class Browser:
         self.app, self.key = app, key
         self.state = SessionState(app)
         self.request = gr.Request(session_hash=key)
-        component = self.fn("analyze").inputs[0]
+        component = self.find_callback("analyze").inputs[0]
         component.preprocess = lambda value: "chart.png"
 
-    def fn(self, name):
+    def find_callback(self, name):
         return next(f for f in self.app.fns.values() if f.api_name == name)
 
     async def call(self, name, inputs=(), iterator=None):
@@ -46,7 +46,7 @@ class Browser:
             inputs.append(token)
         if name in ("generate_tactile", "update_review", "admit_generation") and isinstance(inputs[1], list):
             inputs[1] = {"data": inputs[1], "headers": ["Field", "Text"]}
-        return await self.app.process_api(self.fn(name), inputs, state=self.state,
+        return await self.app.process_api(self.find_callback(name), inputs, state=self.state,
                                          request=self.request, session_hash=self.key, iterator=iterator)
 
     async def analyze(self):
@@ -58,7 +58,7 @@ class Browser:
 
     @property
     def model(self):
-        return self.state[self.fn("generate_tactile").inputs[0]._id]
+        return self.state[self.find_callback("generate_tactile").inputs[0]._id]
 
 
 async def wait_started(event):
@@ -85,7 +85,7 @@ def test_late_generation_cannot_restore_state(invalidation, failure):
             return submission
 
         try:
-            with patch("src.gradio_ui.callbacks.analyze_image", return_value=result()):
+            with patch("src.gradio_ui.callbacks.analyze_image", return_value=make_analysis_result()):
                 initial = await browser.analyze()
                 # Initial and completion yields disable and enable controls without changing their values.
                 assert initial["data"][-2]["interactive"] is True
@@ -98,12 +98,12 @@ def test_late_generation_cannot_restore_state(invalidation, failure):
                         await browser.call("update_review", [None, rows])
                         expected = browser.model
                     elif invalidation == "new_analysis":
-                        with patch("src.gradio_ui.callbacks.analyze_image", return_value=result("New analysis")):
+                        with patch("src.gradio_ui.callbacks.analyze_image", return_value=make_analysis_result("New analysis")):
                             await browser.analyze()
                         expected = browser.model
                     elif invalidation == "unload":
                         unload = next(f for f in app.fns.values() if f.fn and f.fn.__name__ == "unload")
-                        await unload.fn(browser.request)
+                        await unload.find_callback(browser.request)
                         expected = browser.model
                     else:
                         await browser.call(invalidation)
@@ -111,8 +111,17 @@ def test_late_generation_cannot_restore_state(invalidation, failure):
                     release.set()
                     completed = await task
                     assert browser.model == expected
-                    assert all(item is None or (isinstance(item, dict) and item.get("__type__") == "update" and "value" not in item) for item in completed["data"]), completed["data"]
-                    assert all(not path.exists() for path in produced)
+
+                    for update in completed["data"]:
+                        if update is None:
+                            continue
+
+                        assert isinstance(update, dict), update
+                        assert update.get("__type__") == "update", update
+                        assert "value" not in update, update
+
+                    for path in produced:
+                        assert not path.exists(), f"Stale output still exists: {path}"
         finally:
             release.set()
             app.close(verbose=False)
@@ -127,13 +136,13 @@ def test_stale_analysis_and_independent_sessions():
         def blocked(*args, **kwargs):
             entered.set()
             assert release.wait(5)
-            return result("Old")
+            return make_analysis_result("Old")
         try:
             with patch("src.gradio_ui.callbacks.analyze_image", side_effect=blocked):
                 task = asyncio.create_task(one.analyze())
                 await wait_started(entered)
                 await one.call("clear_all")
-                with patch("src.gradio_ui.callbacks.analyze_image", return_value=result("Other session")):
+                with patch("src.gradio_ui.callbacks.analyze_image", return_value=make_analysis_result("Other session")):
                     await two.analyze()
                 release.set()
                 completed = await task
@@ -166,7 +175,7 @@ def test_missing_session_fails_closed():
         try:
             callback = next(f for f in app.fns.values() if f.api_name == "orientation_changed")
             with pytest.raises(ValueError, match="session"):
-                await callback.fn(gr.Request())
+                await callback.find_callback(gr.Request())
         finally:
             app.close(verbose=False)
     asyncio.run(scenario())
@@ -188,7 +197,7 @@ def test_reset_waits_for_postprocessing_and_remains_final():
                 await release.wait()
             return await original(*args, **kwargs)
         try:
-            with patch("src.gradio_ui.callbacks.analyze_image", return_value=result()):
+            with patch("src.gradio_ui.callbacks.analyze_image", return_value=make_analysis_result()):
                 await browser.analyze()
             with patch.object(processing, "async_move_files_to_cache", side_effect=blocked):
                 generated = asyncio.create_task(browser.call("generate_tactile", [None, review_text_rows(browser.model)]))
@@ -221,7 +230,7 @@ def test_preparation_failure_cleans_unpublished_json(stage):
             created.append(path)
             return path
         try:
-            candidate = result()
+            candidate = make_analysis_result()
             if stage == "ocr_export":
                 candidate = replace(candidate, ocr_frame=OCRFrame("input/chart.png", ()), legend_mapping=object())
             with patch.object(callbacks, "analyze_image", return_value=candidate):
