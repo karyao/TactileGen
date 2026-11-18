@@ -31,17 +31,6 @@ def _padding_for_detection(detection: Detection) -> int:
     )
 
 
-def _crop_with_padding(image: np.ndarray, detection: Detection) -> np.ndarray:
-    height, width = image.shape[:2]
-    box = detection.box
-    padding = _padding_for_detection(detection)
-    left = max(0, math.floor(box.x1) - padding)
-    top = max(0, math.floor(box.y1) - padding)
-    right = min(width, math.ceil(box.x2) + padding)
-    bottom = min(height, math.ceil(box.y2) + padding)
-    return image[top:bottom, left:right].copy()
-
-
 def _title_strip_bounds(
     detection: Detection, neighbors: Sequence[Detection], width: int
 ) -> tuple[int, int]:
@@ -72,18 +61,30 @@ def _title_strip_bounds(
     return min(left, math.floor(box.x1)), max(right, math.ceil(box.x2))
 
 
-def _title_strip(
-    image: np.ndarray, detection: Detection, neighbors: Sequence[Detection]
-) -> np.ndarray:
+def crop_text_bounds(
+    image: np.ndarray, detection: Detection, neighbors: Sequence[Detection] = (),
+) -> tuple[int, int, int, int]:
+    """Authoritative source bounds; right and bottom are exclusive."""
     height, width = image.shape[:2]
     box = detection.box
-    padding = max(
-        _MIN_PADDING, min(_MAX_PADDING, math.ceil(0.1 * (box.y2 - box.y1)))
+    title = _TITLE_FULL_WIDTH_STRIP and detection.role == _TITLE_ROLE
+    padding = (
+        max(_MIN_PADDING, min(_MAX_PADDING, math.ceil(0.1 * (box.y2 - box.y1))))
+        if title else _padding_for_detection(detection)
     )
     top = max(0, math.floor(box.y1) - padding)
     bottom = min(height, math.ceil(box.y2) + padding)
-    left, right = _title_strip_bounds(detection, neighbors, width)
-    return image[top:bottom, left:right].copy()
+    if title:
+        left, right = _title_strip_bounds(detection, neighbors, width)
+    else:
+        left = max(0, math.floor(box.x1) - padding)
+        right = min(width, math.ceil(box.x2) + padding)
+    return left, top, right, bottom
+
+
+def crop_policy(detection: Detection) -> str:
+    return ("neighbor_aware_title_strip" if _TITLE_FULL_WIDTH_STRIP
+            and detection.role == _TITLE_ROLE else "padded_detection")
 
 
 def crop_text_region(
@@ -97,6 +98,5 @@ def crop_text_region(
     PlotQA's clipped title boxes. Every other role uses its padded detection box.
     The returned array is always an independent copy of the source pixels.
     """
-    if _TITLE_FULL_WIDTH_STRIP and detection.role == _TITLE_ROLE:
-        return _title_strip(image, detection, neighbors)
-    return _crop_with_padding(image, detection)
+    left, top, right, bottom = crop_text_bounds(image, detection, neighbors)
+    return image[top:bottom, left:right].copy()

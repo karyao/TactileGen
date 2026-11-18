@@ -1,16 +1,27 @@
-"""Tactile layout, braille, BANA rule checks and SVG output."""
+"""Tactile layout, braille, rules, SVG, generation, and pipeline."""
 
+from contextlib import redirect_stdout
+from dataclasses import replace
 import io
+from pathlib import Path
 import tempfile
 import unittest
-from contextlib import redirect_stdout
-import xml.etree.ElementTree as ElementTree
-from dataclasses import replace
-from pathlib import Path
+from unittest import mock
 from unittest.mock import patch
+from xml.etree import ElementTree
+import xml.etree.ElementTree as ElementTree
+from zipfile import ZipFile
 
-from src.contract_io import load_vertical_bar_chart
-from src.contracts import BarSeries, VerticalBarChart
+from src.contract_io import load_bar_chart, load_vertical_bar_chart, write_bar_chart
+from src.contracts import (
+    BarSeries,
+    ChartInterpretationError,
+    HorizontalBarChart,
+    SeriesSpec,
+    VerticalBarChart,
+    VerticalBarSpec,
+    YAxisSpec,
+)
 from src.tactile import (
     RULES,
     Violation,
@@ -18,10 +29,21 @@ from src.tactile import (
     constants,
     layout_vertical_bar_chart,
     layout_vertical_bar_chart_pages,
+    pipeline,
     render_svg,
 )
-from src.tactile.__main__ import main
-from src.tactile.braille import NUMERIC_INDICATOR, TN_CLOSE, TN_OPEN, to_braille, to_unicode
+from src.tactile.__main__ import main, main as tactile_main
+from src.tactile.braille import (
+    BLANK,
+    GUIDE_DOT,
+    NUMERIC_INDICATOR,
+    TN_CLOSE,
+    TN_OPEN,
+    to_braille,
+    to_unicode,
+)
+from src.tactile.constants import BAR_MIN_WIDTH, DOT_DIAMETER, DOT_PITCH, GUIDE_DOTS_MIN
+from src.tactile.generation import GenerationError, cleanup_generation, generate_tactile_artifacts
 from src.tactile.keys import abbreviation_keys, is_valid_abbreviation_key, numeric_keys
 from src.tactile.layout import (
     BAR_MAX_WIDTH,
@@ -31,6 +53,12 @@ from src.tactile.layout import (
     LABEL_MIN_GAP,
     Line,
 )
+from src.tactile.layout_hbar import layout_horizontal_bar_chart, layout_horizontal_bar_chart_pages
+from src.tactile.rules import RULES, Violation, check_layout
+from src.tactile.svg import render_svg
+
+
+# Tactile
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "tactile"
@@ -647,6 +675,768 @@ class SvgTest(unittest.TestCase):
             main(["--chart", str(FIXTURES / "crowded.json"), "--output", str(parts)])
             written = sorted(p.name for p in Path(tmp).glob("parts-*.svg"))
             self.assertEqual(written, ["parts-1.svg", "parts-2.svg", "parts-3.svg"])  # key page + 2 parts
+
+
+class NoVisibleBarsTest(unittest.TestCase):
+    """Legend entries with no visible bars are keyed, noted, and draw no bars."""
+
+    def chart(self, n_categories=4):
+        categories = tuple(str(2000 + j) for j in range(n_categories))
+        return VerticalBarChart(
+            "demo/legend.png", "Net energy imports", "Years", "Imports",
+            categories,
+            (BarSeries("Low & middle income", (), has_bars=False),
+             BarSeries("Kenya", tuple(13.0 + j for j in range(n_categories))),
+             BarSeries("Vietnam", (), has_bars=False)))
+
+    def note_text(self, layout):
+        return " ".join(label.text for label in layout.labels if label.role == "note")
+
+    def test_every_legend_entry_has_a_key_sample_and_braille_name_in_order(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        samples = sorted(layout.key_samples, key=lambda s: s.y)
+        self.assertEqual([s.series_index for s in samples], [0, 1, 2])
+        series_keys = [l for l in layout.labels if l.role == "key" and str(l.owner_id).startswith("key-sample")]
+        self.assertEqual([l.text for l in series_keys], ["Low & middle income", "Kenya", "Vietnam"])
+        self.assertEqual(len(set(layout.series_textures)), 3)
+        braille = [to_unicode(label.cells) for label in layout.labels if label.id == "key-0"]
+        self.assertEqual(braille, [to_unicode(to_braille("Low & middle income"))])
+
+    def test_only_series_with_bars_draw_bars_and_take_bar_slots(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        self.assertEqual({bar.series_index for bar in layout.bars}, {1})
+        self.assertEqual(len(layout.bars), 4)
+        solo = VerticalBarChart("demo/solo.png", "Net energy imports", "Years", "Imports",
+                                self.chart().categories, (self.chart().series[1],))
+        self.assertAlmostEqual(layout.bars[0].width, layout_vertical_bar_chart(solo).bars[0].width)
+        self.assertEqual(layout.bars[1].texture, layout.series_textures[1])
+
+    def test_the_transcribers_note_names_the_entries_without_saying_zero(self):
+        layout = layout_vertical_bar_chart(self.chart())
+        note = self.note_text(layout)
+        self.assertEqual(note, "No bars are visible for: Low & middle income, Vietnam.")
+        self.assertNotIn("zero", note.lower())
+        note_labels = [l for l in layout.labels if l.role == "note"]
+        self.assertEqual(to_unicode(note_labels[0].cells)[:1], to_unicode(TN_OPEN)[:1])
+        first_key_y = min(l.y for l in layout.labels if str(l.owner_id).startswith("key-sample"))
+        self.assertTrue(all(l.y < first_key_y for l in note_labels))      # notes come before the key
+
+    def test_the_layout_passes_every_rule(self):
+        violations = [v for v in check_layout(layout_vertical_bar_chart(self.chart()))
+                      if v.rule.id != "overview_first"]
+        self.assertEqual(violations, [])
+
+    def test_a_chart_with_bars_for_every_series_is_laid_out_as_before(self):
+        plain = VerticalBarChart("demo/p.png", "T", "X", "Y", ("a", "b", "c"),
+                                 (BarSeries("A", (1.0, 2.0, 3.0)), BarSeries("B", (3.0, 2.0, 1.0))))
+        layout = layout_vertical_bar_chart(plain)
+        self.assertEqual(len(layout.bars), 6)
+        self.assertNotIn("note", {l.role for l in layout.labels})
+        self.assertEqual(layout, layout_vertical_bar_chart(replace(
+            plain, series=tuple(replace(s, has_bars=True) for s in plain.series))))
+
+    def test_a_single_unnamed_series_still_gets_no_key_and_no_note(self):
+        unnamed = VerticalBarChart("demo/u.png", "T", "X", "Y", ("a", "b"), (BarSeries(None, (1.0, 2.0)),))
+        layout = layout_vertical_bar_chart(unnamed)
+        self.assertEqual(layout.key_samples, ())
+        self.assertNotIn("note", {l.role for l in layout.labels})
+        self.assertFalse([l for l in layout.labels if str(l.owner_id).startswith("key-sample")])
+
+    def test_a_divided_graph_puts_the_note_and_every_key_on_the_key_page(self):
+        pages = layout_vertical_bar_chart_pages(self.chart(n_categories=30))
+        self.assertGreater(len(pages), 2)
+        key_page = pages[0]
+        self.assertEqual(key_page.page_kind, "key")
+        self.assertIn("No bars are visible for: Low & middle income, Vietnam.", self.note_text(key_page))
+        self.assertEqual(len(key_page.key_samples), 3)
+        for page in pages[1:]:
+            self.assertNotIn("No bars are visible", self.note_text(page))
+            self.assertEqual(page.key_samples, ())
+            self.assertEqual({bar.series_index for bar in page.bars}, {1})
+        for page in pages:
+            self.assertEqual([v for v in check_layout(page) if v.rule.id != "overview_first"], [])
+
+    def test_more_than_five_legend_entries_are_still_refused(self):
+        series = tuple(BarSeries(f"s{k}", (), has_bars=False) for k in range(5)) + (
+            BarSeries("with bars", (1.0, 2.0)),)
+        with self.assertRaises(ValueError):
+            layout_vertical_bar_chart(VerticalBarChart("demo/m.png", "T", "X", "Y", ("a", "b"), series))
+
+
+# Tactile hbar
+
+FIXTURE = Path(__file__).parent / "fixtures" / "tactile" / "rainfall_hbar.json"
+RAIN = HorizontalBarChart(
+    "demo/1.png", "Rainfall by city", "Rainfall (mm)", "City",
+    ("Vancouver", "Calgary", "Toronto", "Halifax"),
+    (BarSeries(None, (1150.0, 420.0, 830.0, 1450.0)),))
+BOOKS = HorizontalBarChart(
+    "demo/2.png", "Books read by grade", "Books", "Grade",
+    ("Grade 3", "Grade 4", "Grade 5"),
+    (BarSeries("Fiction", (12.0, 18.0, 9.0)), BarSeries("Non-fiction", (5.0, 7.0, 11.0))))
+LONG = HorizontalBarChart(
+    "demo/3.png", "Exports", "Value (billion USD)", "Country",
+    ("Central African Republic", "Bosnia and Herzegovina", "Chad"),
+    (BarSeries(None, (2.1, 5.4, 1.2)),))
+
+
+def horizontal_rule_ids(layout):
+    return [v.rule.id for v in check_layout(layout)]
+
+
+def by_role(layout, role):
+    return [l for l in layout.labels if l.role == role]
+
+
+class HorizontalLayoutTest(unittest.TestCase):
+    def test_sample_charts_pass_every_rule(self):
+        for chart in (RAIN, BOOKS, LONG):
+            with self.subTest(chart.title):
+                layout = layout_horizontal_bar_chart(chart)
+                self.assertEqual(layout.orientation, "horizontal")
+                self.assertEqual(layout.x_label_mode, "full")
+                self.assertEqual(horizontal_rule_ids(layout), [])
+                self.assertEqual(layout.needs_review, ())
+
+    def test_bars_run_right_from_the_axis_in_proportion(self):
+        layout = layout_horizontal_bar_chart(RAIN)
+        axis = layout.by_id("axis-y")
+        # Values are measured from the centre of the axis line, where 0 is.
+        lengths = {b.category_index: b.x + b.width - axis.x1 for b in layout.bars}
+        for bar in layout.bars:
+            self.assertGreater(bar.x, axis.x1)
+            self.assertGreaterEqual(bar.height, BAR_MIN_WIDTH)
+        self.assertAlmostEqual(lengths[3] / lengths[1], 1450 / 420, places=6)
+        # Categories keep their printed order, top to bottom.
+        tops = [min(b.y for b in layout.bars if b.category_index == j) for j in range(4)]
+        self.assertEqual(tops, sorted(tops))
+
+    def test_labels_are_left_aligned_with_guide_dots_and_centred_on_their_bars(self):
+        layout = layout_horizontal_bar_chart(RAIN)
+        labels = by_role(layout, "category")
+        self.assertEqual(len({l.x for l in labels}), 1)
+        axis = layout.by_id("axis-y")
+        for label in labels:
+            dots = 0
+            while label.cells[-1 - dots] == GUIDE_DOT:
+                dots += 1
+            self.assertGreaterEqual(dots, GUIDE_DOTS_MIN)
+            self.assertEqual(label.cells[-1 - dots], BLANK)
+            self.assertLess(label.bounds.x2, axis.x1)
+            bar = next(b for b in layout.bars if b.category_index == label.category_index)
+            self.assertAlmostEqual(label.bounds.y1 + label.bounds.y2, 2 * bar.y + bar.height,
+                                   places=6)
+
+    def test_runovers_are_left_justified_and_only_the_last_line_has_guide_dots(self):
+        layout = layout_horizontal_bar_chart(LONG)
+        lines = [l for l in by_role(layout, "category") if l.category_index == 0]
+        self.assertGreater(len(lines), 1)
+        self.assertEqual(len({l.x for l in lines}), 1)
+        self.assertNotIn(GUIDE_DOT, lines[0].cells)
+        self.assertEqual(lines[-1].cells[-1], GUIDE_DOT)
+        self.assertEqual([l.owner_id for l in lines], [None] * (len(lines) - 1) + ["axis-y"])
+
+    def test_values_sit_on_grid_lines_with_dots_456_of_the_first_cell(self):
+        layout = layout_horizontal_bar_chart(RAIN)
+        columns = sorted(l.x1 for l in layout.lines
+                         if l.kind in ("grid", "axis") and l.x1 == l.x2)
+        values = by_role(layout, "x_value")
+        self.assertEqual([v.text for v in values], ["0", "500", "1000", "1500"])
+        offset = DOT_DIAMETER / 2 + DOT_PITCH
+        for value, column in zip(values, columns):
+            self.assertAlmostEqual(value.x + offset, column, places=6)
+            self.assertGreater(value.y, layout.plot.y2)
+
+    def test_headings_follow_bana_placement(self):
+        layout = layout_horizontal_bar_chart(RAIN)
+        values = by_role(layout, "x_value")
+        x_heading = by_role(layout, "x_heading")[0]
+        self.assertAlmostEqual(x_heading.x, min(v.x for v in values))
+        self.assertGreater(x_heading.y, values[0].y)
+        y_heading = by_role(layout, "y_heading")[0]
+        self.assertAlmostEqual(y_heading.x, by_role(layout, "category")[0].x)
+        self.assertLess(y_heading.bounds.y2, layout.plot.y1)
+
+    def test_key_lists_series_top_to_bottom(self):
+        layout = layout_horizontal_bar_chart(BOOKS)
+        self.assertEqual([s.series_index for s in layout.key_samples], [0, 1])
+        first_set = sorted((b for b in layout.bars if b.category_index == 0), key=lambda b: b.y)
+        self.assertEqual([b.series_index for b in first_set], [0, 1])
+
+    def test_many_long_categories_switch_to_keys(self):
+        names = tuple(f"Very long region name number {k}" for k in range(7))
+        chart = HorizontalBarChart("demo/4.png", "Regions", "Value", "Region", names,
+                                   (BarSeries(None, tuple(float(k + 1) for k in range(7))),))
+        layout = layout_horizontal_bar_chart(chart)
+        self.assertNotEqual(layout.x_label_mode, "full")
+        self.assertEqual(horizontal_rule_ids(layout), [])
+        self.assertEqual(len([l for l in layout.labels if l.role == "key"
+                              and l.category_index is not None and l.id.count("-") == 2]), 7)
+
+    def test_pages_and_svg(self):
+        pages = layout_horizontal_bar_chart_pages(BOOKS)
+        self.assertEqual(len(pages), 1)
+        svg = render_svg(pages[0], show_print=True)
+        self.assertIn("bar-1-2", svg)
+        self.assertIn("Grade 5", svg)
+
+
+class ChartFileTest(unittest.TestCase):
+    def test_fixture_loads_as_a_horizontal_chart_and_round_trips(self):
+        chart = load_bar_chart(FIXTURE)
+        self.assertIsInstance(chart, HorizontalBarChart)
+        self.assertEqual(chart.categories[0], "Vancouver")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "chart.json"
+            write_bar_chart(path, chart)
+            self.assertEqual(load_bar_chart(path), chart)
+        with self.assertRaises(ValueError):
+            load_vertical_bar_chart(FIXTURE)
+
+    def test_cli_renders_the_fixture_and_passes_strict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "rain.svg"
+            with redirect_stdout(io.StringIO()) as printed:
+                code = tactile_main(["--chart", str(FIXTURE), "--output", str(out), "--strict"])
+            self.assertEqual(code, 0)
+            self.assertIn("x-value-0", out.read_text())
+        self.assertIn("all passed", printed.getvalue())
+
+
+class DirectionRulesTest(unittest.TestCase):
+    def test_missing_guide_dots_are_reported(self):
+        layout = layout_horizontal_bar_chart(RAIN)
+        label = layout.by_id("category-0")
+        bare = replace(label, cells=label.cells[:-3])
+        broken = replace(layout, labels=tuple(bare if l is label else l for l in layout.labels))
+        self.assertIn("guide_dots", horizontal_rule_ids(broken))
+
+    def test_value_off_its_grid_line_is_reported(self):
+        layout = layout_horizontal_bar_chart(RAIN)
+        label = layout.by_id("x-value-1")
+        moved = replace(label, x=label.x + 2)
+        broken = replace(layout, labels=tuple(moved if l is label else l for l in layout.labels))
+        self.assertIn("value_alignment", horizontal_rule_ids(broken))
+
+    def test_thin_horizontal_bars_are_reported_by_their_thickness(self):
+        layout = layout_horizontal_bar_chart(RAIN)
+        thin = tuple(replace(b, height=5.0) for b in layout.bars)
+        self.assertIn("bar_width", horizontal_rule_ids(replace(layout, bars=thin)))
+        # Long bars are fine: length is not limited for horizontal bars.
+        self.assertNotIn("bar_width", horizontal_rule_ids(layout))
+
+
+# Tactile generation
+
+def make_spec(**changes):
+    fields = dict(
+        source_key="input/chart.png",
+        title="Sales",
+        x_axis_title="Year",
+        y_axis_title="Revenue",
+        y_axis=YAxisSpec(0, 100, [0, 50, 100]),
+        categories=["2001", "2002", "2003"],
+        series=[SeriesSpec(None, "#112233", [10.0, 20.0, 30.0])],
+        bars_adjacent=False,
+        flags=[],
+        confidence={},
+    )
+    fields.update(changes)
+    return VerticalBarSpec(**fields)
+
+
+def divided_spec():
+    categories = [f"Category number {index}" for index in range(12)]
+    return make_spec(
+        categories=categories,
+        series=[
+            SeriesSpec("Alpha", "#112233", [float(i + 1) for i in range(12)]),
+            SeriesSpec("Beta", "#445566", [float(i + 2) for i in range(12)]),
+            SeriesSpec("Gamma", "#778899", [float(i + 3) for i in range(12)]),
+        ],
+    )
+
+
+class GenerationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def test_single_page_artifacts_and_zip(self):
+        result = generate_tactile_artifacts(make_spec(), self.root)
+
+        self.assertEqual(len(result.pages), 1)
+        page = result.pages[0]
+        self.assertEqual(
+            (page.page_number, page.page_count, page.page_kind, page.section, page.caption),
+            (1, 1, "graph", None, "Tactile graphic"),
+        )
+        self.assertEqual(page.review_svg.name, "chart-review.svg")
+        self.assertEqual(page.clean_svg.name, "chart.svg")
+        self.assertIn("PRINT LABELS FOR REVIEW ONLY", page.review_svg.read_text())
+        self.assertNotIn('id="print"', page.clean_svg.read_text())
+        self.assertNotIn('id="violations"', page.clean_svg.read_text())
+        with ZipFile(result.zip_path) as archive:
+            self.assertEqual(archive.namelist(), ["chart.svg"])
+            self.assertEqual(archive.read("chart.svg"), page.clean_svg.read_bytes())
+
+    def test_horizontal_spec_uses_the_horizontal_layout(self):
+        result = generate_tactile_artifacts(make_spec(orientation="horizontal"), self.root)
+
+        self.assertEqual(len(result.pages), 1)
+        self.assertEqual(result.pages[0].violations, ())
+        svg = result.pages[0].clean_svg.read_text()
+        # Horizontal values sit under the axis as x values, not y values.
+        self.assertIn('id="x-value-0"', svg)
+        self.assertNotIn('id="y-value-0"', svg)
+
+    def test_multi_page_metadata_order_and_overview_finding(self):
+        result = generate_tactile_artifacts(divided_spec(), self.root)
+
+        self.assertGreater(len(result.pages), 2)
+        self.assertEqual(result.pages[0].page_kind, "key")
+        self.assertEqual(result.pages[0].caption, f"Page 1 of {len(result.pages)} — key")
+        graph_pages = [page for page in result.pages if page.page_kind == "graph"]
+        self.assertEqual(
+            [page.section for page in graph_pages],
+            [(i, len(graph_pages)) for i in range(1, len(graph_pages) + 1)],
+        )
+        self.assertIn("overview_first", {v.rule.id for v in graph_pages[0].violations})
+        self.assertEqual(
+            graph_pages[0].caption,
+            f"Page 2 of {len(result.pages)} — part 1 of {len(graph_pages)}",
+        )
+        with ZipFile(result.zip_path) as archive:
+            self.assertEqual(archive.namelist(), [p.clean_svg.name for p in result.pages])
+            self.assertFalse(any("review" in name for name in archive.namelist()))
+
+    def test_review_overlay_only_boxes_addressable_violations(self):
+        addressable = Violation(RULES["bar_width"], "too narrow", ("bar-0-0",))
+        with mock.patch("src.tactile.generation.check_layout", return_value=[addressable]):
+            result = generate_tactile_artifacts(make_spec(), self.root)
+        review = result.pages[0].review_svg.read_text()
+        self.assertIn('id="violations"', review)
+        self.assertIn("too narrow", review)
+        self.assertNotIn('id="violations"', result.pages[0].clean_svg.read_text())
+
+        report_only = Violation(RULES["overview_first"], "overview needed", ())
+        with mock.patch("src.tactile.generation.check_layout", return_value=[report_only]):
+            result = generate_tactile_artifacts(make_spec(), self.root)
+        svg = ElementTree.fromstring(result.pages[0].review_svg.read_text().split("\n", 1)[1])
+        ns = {"svg": "http://www.w3.org/2000/svg"}
+        group = svg.find(".//svg:g[@id='violations']", ns)
+        self.assertIsNotNone(group)
+        self.assertEqual(list(group), [])
+
+    def test_global_notes_are_separate_from_page_review_information(self):
+        spec = make_spec(
+            flags=["y_ticks_not_arithmetic"],
+            series=[SeriesSpec(None, "#112233", [-0.1, 20.0, 30.0])],
+        )
+        result = generate_tactile_artifacts(spec, self.root)
+        joined = " ".join(result.notes)
+        self.assertIn("not evenly spaced", joined)
+        self.assertIn("Values below the axis minimum were set to 0", joined)
+        self.assertIsInstance(result.pages[0].notes, tuple)
+        self.assertIsInstance(result.pages[0].needs_review, tuple)
+
+    def test_non_ready_and_invalid_root_are_validation_errors(self):
+        before = set(self.root.iterdir())
+        with self.assertRaises(GenerationError) as raised:
+            generate_tactile_artifacts(make_spec(title=None), self.root)
+        self.assertEqual(raised.exception.stage, "validation")
+        self.assertEqual(set(self.root.iterdir()), before)
+
+        with self.assertRaises(GenerationError) as raised:
+            generate_tactile_artifacts(make_spec(), self.root / "missing")
+        self.assertEqual(raised.exception.stage, "validation")
+
+    def test_real_layout_failure_removes_job_directory(self):
+        spec = make_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]),
+                         series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
+        with self.assertRaises(GenerationError) as raised:
+            generate_tactile_artifacts(spec, self.root)
+        self.assertEqual(raised.exception.stage, "layout")
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_render_write_and_zip_failures_remove_partial_job(self):
+        cases = (
+            ("render", mock.patch("src.tactile.generation.render_svg", side_effect=ValueError("x"))),
+            ("write", mock.patch("pathlib.Path.write_text", side_effect=OSError("x"))),
+            ("zip", mock.patch("src.tactile.generation.ZipFile", side_effect=OSError("x"))),
+        )
+        for expected_stage, patcher in cases:
+            with self.subTest(expected_stage), patcher:
+                with self.assertRaises(GenerationError) as raised:
+                    generate_tactile_artifacts(make_spec(), self.root)
+                self.assertEqual(raised.exception.stage, expected_stage)
+                self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_later_page_write_failure_and_cleanup_failure_keep_primary_error(self):
+        with mock.patch(
+            "pathlib.Path.write_text",
+            side_effect=[None, None, OSError("second page failed")],
+        ):
+            with self.assertRaises(GenerationError) as raised:
+                generate_tactile_artifacts(divided_spec(), self.root)
+        self.assertEqual(raised.exception.stage, "write")
+        self.assertIsInstance(raised.exception.__cause__, OSError)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+        with (
+            mock.patch("src.tactile.generation.render_svg", side_effect=ValueError("render")),
+            mock.patch(
+                "src.tactile.generation._remove_job_dir",
+                side_effect=OSError("cleanup"),
+            ),
+        ):
+            with self.assertRaises(GenerationError) as raised:
+                generate_tactile_artifacts(make_spec(), self.root)
+        self.assertEqual(raised.exception.stage, "render")
+        self.assertIsInstance(raised.exception.__cause__, ValueError)
+        self.assertIsInstance(raised.exception.cleanup_error, OSError)
+
+    def test_names_are_sanitized_limited_and_isolated(self):
+        names = {
+            "input/a name.png": "a_name.svg",
+            "input/ééé.png": "chart.svg",
+            "input/---.png": "chart.svg",
+            f"input/{'a' * 300}.png": f"{'a' * 120}.svg",
+        }
+        for source_key, expected in names.items():
+            with self.subTest(source_key):
+                result = generate_tactile_artifacts(make_spec(source_key=source_key), self.root)
+                self.assertEqual(result.pages[0].clean_svg.name, expected)
+
+        first = generate_tactile_artifacts(make_spec(), self.root)
+        second = generate_tactile_artifacts(make_spec(), self.root)
+        self.assertNotEqual(first.output_dir, second.output_dir)
+        self.assertTrue(first.pages[0].clean_svg.exists())
+        self.assertTrue(second.pages[0].clean_svg.exists())
+
+    def test_cleanup_is_idempotent_and_preserves_siblings(self):
+        first = generate_tactile_artifacts(make_spec(), self.root)
+        second = generate_tactile_artifacts(make_spec(), self.root)
+        first.pages[0].review_svg.unlink()
+        cleanup_generation(first, self.root)
+        cleanup_generation(first, self.root)
+        self.assertFalse(first.output_dir.exists())
+        self.assertTrue(second.output_dir.exists())
+
+        invalid = replace(second, output_dir=self.root / "not-a-generation")
+        with self.assertRaises(ValueError):
+            cleanup_generation(invalid, self.root)
+        self.assertTrue(second.output_dir.exists())
+
+
+# Tactile pipeline
+
+def pipeline_spec(**changes):
+    fields = dict(
+        source_key="input/a.png", title="Sales", x_axis_title="Year", y_axis_title="Revenue",
+        y_axis=YAxisSpec(0, 100, [0, 50, 100]), categories=["2001", "2002", "2003"],
+        series=[SeriesSpec(None, "#112233", [10.0, 20.0, 30.0])],
+        bars_adjacent=False, flags=[], confidence={})
+    fields.update(changes)
+    return VerticalBarSpec(**fields)
+
+
+class Pipeline(unittest.TestCase):
+    def go(self, spec=None, error=None, argv=(), tty=False, answers=()):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(out_path), *argv])
+            replies = iter(answers)
+            out, err = io.StringIO(), io.StringIO()
+            code = pipeline.run(
+                args, analyse_fn=lambda *_: (spec, error, None),
+                input_fn=lambda prompt: next(replies), stdin_is_tty=tty, out=out, err=err)
+            return code, out.getvalue(), err.getvalue(), out_path.exists()
+
+    def test_ready_chart_writes_svg(self):
+        code, out, err, written = self.go(pipeline_spec(), argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("0: 2001", out)
+
+    def test_analyse_passes_legend_mapping_to_reconstruction(self):
+        image = mock.sentinel.image
+        frame = mock.sentinel.frame
+        ocr = mock.sentinel.ocr
+        mapping = mock.sentinel.mapping
+        reconstructed = pipeline_spec()
+        backend = mock.sentinel.backend
+
+        with (
+            mock.patch("cv2.imread", return_value=image),
+            mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
+            mock.patch("src.detection.run_detection", return_value=frame),
+            mock.patch("src.ocr.run_ocr", return_value=ocr),
+            mock.patch("src.tesseract_ocr.TesseractBackend", return_value=backend),
+            mock.patch(
+                "src.legend_matcher.match_legend_to_bars", return_value=mapping
+            ) as matcher,
+            mock.patch(
+                "src.reconstruct.reconstruct_vbar", return_value=reconstructed
+            ) as reconstruct,
+            mock.patch.object(pipeline, "cut_off_flags", return_value=[]),
+            mock.patch("src.reconstruct_hbar.bar_orientation", return_value="vertical"),
+        ):
+            result = pipeline.analyse(Path("chart.png"), Path("weights.pt"))
+
+        matcher.assert_called_once_with(image, frame, ocr)
+        reconstruct.assert_called_once_with(
+            frame, ocr, image, legend_mapping=mapping
+        )
+        self.assertEqual(result, (reconstructed, None, frame))
+
+    def test_unconfirmed_non_tty_warns_and_continues(self):
+        code, _, err, written = self.go(pipeline_spec())
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("not confirmed", err)
+
+    def test_tty_decline_writes_nothing(self):
+        code, _, _, written = self.go(pipeline_spec(), tty=True, answers=["n"])
+        self.assertEqual((code, written), (4, False))
+
+    def test_missing_text_non_tty_exits_2_with_flags(self):
+        code, out, _, written = self.go(
+            pipeline_spec(title=None, flags=["title_missing"]), argv=["--yes"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--title", out)
+
+    def test_flags_supply_missing_text(self):
+        code, out, _, written = self.go(
+            pipeline_spec(title=None, flags=["title_missing"]), argv=["--yes", "--title", "T"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("Supplied by user: chart title supplied by user", out)
+
+    def test_tty_prompts_and_skip_stops(self):
+        spec = pipeline_spec(title=None, x_axis_title=None,
+                         flags=["title_missing", "x_axis_title_missing"])
+        code, out, _, written = self.go(spec, tty=True, answers=["My title", ""])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("Still missing: x_axis_title", out)
+
+    def test_tty_prompt_answers_build(self):
+        code, out, _, written = self.go(
+            pipeline_spec(title=None, flags=["title_missing"]), tty=True, answers=["My title", "y"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("Supplied by user: chart title", out)
+
+    def test_cannot_build_and_force(self):
+        spec = pipeline_spec(flags=["category_ambiguous"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (3, False))
+        self.assertIn("--force", out)
+        code, _, err, written = self.go(spec, argv=["--yes", "--force"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("WARNING: --force", err)
+
+    def test_force_never_skips_non_ambiguity_flags(self):
+        code, _, _, written = self.go(pipeline_spec(flags=["baseline_outside_plot"]),
+                                      argv=["--yes", "--force"])
+        self.assertEqual((code, written), (3, False))
+
+    def test_interpretation_error_exits_3(self):
+        code, out, _, _ = self.go(error=ChartInterpretationError("no x tick labels detected"))
+        self.assertEqual(code, 3)
+        self.assertIn("No x tick labels", out)
+
+    def test_unencodable_name_exits_2_and_flag_fixes_it(self):
+        spec = pipeline_spec(series=[SeriesSpec("Chile", "#112233", [1.0, 2.0, 3.0]),
+                                 SeriesSpec("E] Salvador", "#445566", [3.0, 2.0, 1.0])])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--series 1=NAME", out)
+        code, _, _, written = self.go(spec, argv=["--yes", "--series", "1=El Salvador"])
+        self.assertEqual((code, written), (0, True))
+
+    def test_tty_answer_that_cannot_be_encoded_stops(self):
+        code, out, _, written = self.go(
+            pipeline_spec(title=None, flags=["title_missing"]), tty=True, answers=["Bad]"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--title", out)
+
+    def many(self):
+        n = 30
+        return pipeline_spec(categories=[f"Category number {i}" for i in range(n)],
+                         series=[SeriesSpec(None, "#112233", [float(i + 1) for i in range(n)])])
+
+    def test_overview_page_is_reported_for_a_transcriber_and_never_fails_strict(self):
+        code, out, err, _ = self.go(self.many(), argv=["--yes", "--strict"])
+        self.assertEqual(code, 0)  # divided into several files, so no single out.svg
+        self.assertEqual(out.count("Needs a transcriber: overview page (BANA 3.9.1) not generated"), 1)
+        self.assertNotIn("overview_first", out)
+
+    def test_strict_exits_1_on_a_real_violation_default_exits_0(self):
+        found = [Violation(RULES["bar_width"], "too narrow", ("bar-0-0",))]
+        with mock.patch.object(pipeline, "check_layout", return_value=found):
+            code, _, err, written = self.go(pipeline_spec(), argv=["--yes", "--strict"])
+            self.assertEqual((code, written), (1, True))
+            self.assertIn("--strict: 1 BANA violation", err)
+            code, out, _, _ = self.go(pipeline_spec(), argv=["--yes"])
+            self.assertEqual(code, 0)
+            self.assertIn("too narrow", out)
+
+    def test_negative_values_are_zeroed_on_an_axis_from_zero_but_rejected_on_a_negative_axis(self):
+        zero_axis = pipeline_spec(series=[SeriesSpec(None, "#112233", [-0.6, 20.0, 30.0])])
+        code, out, _, written = self.go(zero_axis, argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("Values below the axis minimum were set to 0", out)
+        negative_axis = pipeline_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]),
+                                  series=[SeriesSpec(None, "#112233", [-10.0, 20.0, 30.0])])
+        code, _, err, written = self.go(negative_axis, argv=["--yes"])
+        self.assertEqual((code, written), (1, False))
+        self.assertIn("negative bar values are not supported", err)
+
+    def test_clipped_bar_builds_with_a_note_unless_the_axis_is_negative(self):
+        code, out, _, written = self.go(pipeline_spec(flags=["value_clipped_at_axis"]), argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("lower bound", out)
+        spec = pipeline_spec(y_axis=YAxisSpec(-50, 50, [-50, 0, 50]), flags=["value_clipped_at_axis"])
+        for extra in ([], ["--force"]):
+            code, _, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+
+    def test_lost_minus_signs_keep_a_clipped_chart_blocked_even_with_force(self):
+        spec = pipeline_spec(flags=["value_clipped_at_axis", "y_tick_negative_read", "y_ticks_dropped:2"])
+        for extra in ([], ["--force"]):
+            code, out, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+            self.assertIn("runs past the end of the y axis", out)
+
+    def test_bars_mostly_missed_blocks_until_forced(self):
+        spec = pipeline_spec(flags=["bars_mostly_missed:67"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (3, False))
+        self.assertIn("67% of bars were not detected and would be drawn as 0", out)
+        self.assertIn("Re-run with --force to build anyway.", out)
+        code, out, err, written = self.go(spec, argv=["--yes", "--force"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("WARNING: --force", err)
+        self.assertIn("bars_mostly_missed:67", out)
+
+    def test_suspicious_category_asks_and_flag_fixes_it(self):
+        spec = pipeline_spec(categories=["Germany", "i", "Greece"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--category 1=TEXT", out)
+        code, out, _, written = self.go(spec, argv=["--yes", "--category", "1=Hungary"])
+        self.assertEqual((code, written), (0, True))
+
+    def test_cut_off_title_asks_and_confirming_it_builds(self):
+        spec = pipeline_spec(flags=["title_cut_off"])
+        code, out, _, written = self.go(spec, argv=["--yes"])
+        self.assertEqual((code, written), (2, False))
+        self.assertIn("--title", out)
+        self.assertIn("cut off at the image edge", out)
+        code, out, _, written = self.go(spec, argv=["--yes", "--title", "Sales"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("chart title supplied by user", out)
+
+    def test_tty_confirming_a_cut_off_y_title(self):
+        spec = pipeline_spec(flags=["y_axis_title_cut_off"])
+        code, _, _, written = self.go(spec, tty=True, answers=["Revenue", "y"])
+        self.assertEqual((code, written), (0, True))
+
+    def test_uneven_y_ticks_build_with_a_note(self):
+        code, out, _, written = self.go(pipeline_spec(flags=["y_ticks_not_arithmetic"]), argv=["--yes"])
+        self.assertEqual((code, written), (0, True))
+        self.assertIn("not evenly spaced", out)
+
+    def test_leading_zero_tick_exits_3_even_with_force(self):
+        spec = pipeline_spec(flags=["y_tick_leading_zero"])
+        for extra in ([], ["--force"]):
+            code, out, _, written = self.go(spec, argv=["--yes", *extra])
+            self.assertEqual((code, written), (3, False))
+            self.assertIn("decimal point may have been lost", out)
+
+    def test_single_series_key_follows_the_legend(self):
+        def svg(series):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "out.svg"
+                args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+                code = pipeline.run(args, analyse_fn=lambda *_: (pipeline_spec(series=series), None, None),
+                                    input_fn=input, stdin_is_tty=False,
+                                    out=io.StringIO(), err=io.StringIO())
+                self.assertEqual(code, 0)
+                return path.read_text()
+
+        values = [10.0, 20.0, 30.0]
+        named = svg([SeriesSpec("Kenya", "#112233", values)])
+        unnamed = svg([SeriesSpec(None, "#112233", values)])
+        two = svg([SeriesSpec("A", "#112233", values), SeriesSpec("B", "#445566", values)])
+        self.assertIn("key-sample-0", named)
+        self.assertNotIn("key-sample", unnamed)
+        self.assertIn("key-sample-0", two)
+        self.assertIn("key-sample-1", two)
+
+    def test_analyse_sends_horizontal_charts_to_the_horizontal_reconstruction(self):
+        image, frame, ocr = mock.sentinel.image, mock.sentinel.frame, mock.sentinel.ocr
+        reconstructed = pipeline_spec(orientation="horizontal")
+        with (
+            mock.patch("cv2.imread", return_value=image),
+            mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
+            mock.patch("src.detection.run_detection", return_value=frame),
+            mock.patch("src.ocr.run_ocr", return_value=ocr),
+            mock.patch("src.tesseract_ocr.TesseractBackend"),
+            mock.patch("src.legend_matcher.match_legend_to_bars") as vertical_matcher,
+            mock.patch("src.reconstruct_hbar.bar_orientation", return_value="horizontal"),
+            mock.patch("src.reconstruct_hbar.reconstruct_hbar",
+                       return_value=reconstructed) as reconstruct,
+            mock.patch.object(pipeline, "cut_off_flags", return_value=[]),
+        ):
+            result = pipeline.analyse(Path("chart.png"), Path("weights.pt"))
+        reconstruct.assert_called_once_with(frame, ocr, image)
+        vertical_matcher.assert_not_called()
+        self.assertEqual(result, (reconstructed, None, frame))
+
+    def test_horizontal_spec_gets_the_horizontal_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            out = io.StringIO()
+            code = pipeline.run(
+                args, analyse_fn=lambda *_: (pipeline_spec(orientation="horizontal"), None, None),
+                input_fn=input, stdin_is_tty=False, out=out, err=io.StringIO())
+            svg = path.read_text()
+        self.assertEqual(code, 0)
+        self.assertIn("x-value-0", svg)
+        self.assertNotIn("y-value-0", svg)
+        self.assertIn("all passed", out.getvalue())
+
+    def test_ocr_engine_defaults_to_tesseract(self):
+        args = pipeline.parse_args(["--image", "a.png", "--output", "o.svg"])
+        self.assertEqual(args.ocr, "tesseract")
+        args = pipeline.parse_args(["--image", "a.png", "--output", "o.svg", "--ocr", "rapidocr"])
+        self.assertEqual(args.ocr, "rapidocr")
+
+    def test_bad_flag_syntax(self):
+        code, _, err, _ = self.go(pipeline_spec(), argv=["--category", "oops"])
+        self.assertEqual(code, 1)
+        self.assertIn("INDEX=TEXT", err)
+
+    def test_series_with_no_visible_bars_are_keyed_noted_and_do_not_stop_the_build(self):
+        series = [SeriesSpec("Low & middle income", "#aa0000", [None, None, None], no_visible_bars=True),
+                  SeriesSpec("Kenya", "#112233", [10.0, 20.0, 30.0]),
+                  SeriesSpec("Vietnam", "#00aa00", [None, None, None], no_visible_bars=True)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            out, err = io.StringIO(), io.StringIO()
+            code = pipeline.run(args, analyse_fn=lambda *_: (pipeline_spec(series=series), None, None),
+                                input_fn=input, stdin_is_tty=False, out=out, err=err)
+            svg = path.read_text()
+        self.assertEqual(code, 0)
+        shown = out.getvalue()
+        self.assertIn("0: Low & middle income (no visible bars)", shown)
+        self.assertIn("1: Kenya\n", shown)
+        self.assertIn("2: Vietnam (no visible bars)", shown)
+        self.assertIn("Note: No bars are visible for: Low & middle income, Vietnam", shown)
+        for sample in ("key-sample-0", "key-sample-1", "key-sample-2"):
+            self.assertIn(sample, svg)
+        self.assertEqual(svg.count('id="bar-'), 3)           # Kenya's three bars only
 
 
 if __name__ == "__main__":

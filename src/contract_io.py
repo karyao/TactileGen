@@ -12,6 +12,7 @@ from src.contracts import (
     Box,
     Detection,
     DetectionFrame,
+    HorizontalBarChart,
     OCRFrame,
     RecognizedText,
     VerticalBarChart,
@@ -71,31 +72,52 @@ def write_ocr_frame(path: Path, frame: OCRFrame) -> None:
     _write(path, {"schema_version": SCHEMA_VERSION, **asdict(frame)})
 
 
+_CHART_TYPES = {"vbar_categorical": VerticalBarChart, "hbar_categorical": HorizontalBarChart}
+
+
 def load_vertical_bar_chart(path: Path) -> VerticalBarChart:
-    data = _read(path)
-    if data.get("chart_type") != "vbar_categorical":
+    chart = load_bar_chart(path)
+    if not isinstance(chart, VerticalBarChart):
         raise ValueError(f"Expected vbar_categorical chart: {path}")
+    return chart
+
+
+def load_bar_chart(path: Path) -> VerticalBarChart | HorizontalBarChart:
+    """A ``vbar_categorical`` or ``hbar_categorical`` chart file.
+
+    For ``hbar_categorical`` the categories run top to bottom and the titles
+    keep their printed axes (``x_axis_title`` is the value heading).
+    """
+    data = _read(path)
+    chart_type = _CHART_TYPES.get(data.get("chart_type"))
+    if chart_type is None:
+        raise ValueError(f"Expected vbar_categorical or hbar_categorical chart: {path}")
     try:
         series = tuple(
             BarSeries(item["name"], tuple(_array(item["values"], "values")),
                       item.get("has_bars", True))
             for item in _array(data["series"], "series")
         )
-        return VerticalBarChart(
+        return chart_type(
             data["source_key"], data["title"], data["x_axis_title"],
             data["y_axis_title"], tuple(_array(data["categories"], "categories")), series,
         )
     except (KeyError, TypeError) as exc:
-        raise ValueError(f"Invalid vertical-bar chart: {path}") from exc
+        raise ValueError(f"Invalid bar chart: {path}") from exc
 
 
 def write_vertical_bar_chart(path: Path, chart: VerticalBarChart) -> None:
+    write_bar_chart(path, chart)
+
+
+def write_bar_chart(path: Path, chart: VerticalBarChart | HorizontalBarChart) -> None:
+    chart_type = next(name for name, kind in _CHART_TYPES.items() if type(chart) is kind)
     data = asdict(chart)
     for series in data["series"]:  # written only for a series with no visible bars
         if series["has_bars"]:
             del series["has_bars"]
     _write(path, {
         "schema_version": SCHEMA_VERSION,
-        "chart_type": "vbar_categorical",
+        "chart_type": chart_type,
         **data,
     })
