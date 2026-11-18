@@ -229,7 +229,7 @@ class GradioAnalysisTest(GradioTestCase):
 
             args = reconstruct.call_args.args
             self.assertEqual(args[:2], (frame, ocr))
-            self.assertEqual(reconstruct.call_args.kwargs, {"legend_mapping": mapping})
+            self.assertEqual(reconstruct.call_args.kwargs, {"legend_mapping": mapping, "rejected_bars": ()})
             edge_flags.assert_called_once_with(frame, args[2])
             self.assertEqual(result.spec.flags, ["title_cut_off"])
             self.assertEqual(result.completeness.status, NEEDS_INPUT)
@@ -265,7 +265,7 @@ class GradioAnalysisTest(GradioTestCase):
                 self.assertEqual(horizontal_match.call_args.kwargs["bar_role"], "horizontal_bar")
                 vertical.assert_not_called()
                 self.assertEqual(horizontal_match.call_args.args[1:], (frame, ocr))
-                self.assertEqual(horizontal.call_args.kwargs, {"legend_mapping": mapping})
+                self.assertEqual(horizontal.call_args.kwargs, {"legend_mapping": mapping, "rejected_bars": ()})
                 self.assertEqual(result.spec.orientation, "horizontal")
                 self.assertIsNone(result.legend_warning)
                 self.assertIsNone(result.reconstruction_warning)

@@ -110,15 +110,14 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
             return None, ChartInterpretationError(NO_BARS_MATCHED_LEGEND), colour_filter.frame
         frame = colour_filter.frame
         legend_mapping = colour_filter.mapping
-        rejected = tuple(item.detection for item in colour_filter.rejected)
-        rejected_options = {"rejected_bars": rejected} if rejected else {}
+        rejected_bars = tuple(item.detection for item in colour_filter.rejected)
         if resolution.orientation == "horizontal":
             spec = reconstruct_hbar(frame, ocr, image, legend_mapping=legend_mapping,
-                                    **rejected_options)
+                                    rejected_bars=rejected_bars)
         else:
             spec = reread_categories(
                 reconstruct_vbar(frame, ocr, image, legend_mapping=legend_mapping,
-                                 **rejected_options),
+                                 rejected_bars=rejected_bars),
                 frame, image)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:

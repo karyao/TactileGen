@@ -1225,7 +1225,7 @@ class Pipeline(unittest.TestCase):
         ocr_call.assert_called_once_with(image, effective, backend, "eng")
         matcher.assert_called_once_with(image, effective, ocr, bar_role="vertical_bar")
         reconstruct.assert_called_once_with(
-            effective, ocr, image, legend_mapping=mapping
+            effective, ocr, image, legend_mapping=mapping, rejected_bars=()
         )
         cut_off.assert_called_once_with(effective, image)
         self.assertEqual(result, (reconstructed, None, effective))
@@ -1435,7 +1435,9 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([d.role for d in effective.detections], ["horizontal_bar"] * 3)
         ocr_call.assert_called_once_with(image, effective, mock.sentinel.backend, "eng")
         reconstruct.assert_called_once_with(effective, ocr, image,
-                                            legend_mapping=passthrough_filter(image, effective, ocr, bar_role="horizontal_bar").mapping)
+                                            legend_mapping=passthrough_filter(
+                                                image, effective, ocr, bar_role="horizontal_bar").mapping,
+                                            rejected_bars=())
         horizontal_filter.assert_called_once_with(image, effective, ocr, bar_role="horizontal_bar")
         cut_off.assert_called_once_with(effective, image)
         self.assertEqual(result, (reconstructed, None, effective))
@@ -1537,7 +1539,7 @@ class Pipeline(unittest.TestCase):
         effective = matcher.call_args.args[1]
         self.assertEqual([d.role for d in effective.detections], ["vertical_bar"])
         reconstruct.assert_called_once_with(effective, ocr, image,
-                                            legend_mapping=mapping)
+                                            legend_mapping=mapping, rejected_bars=())
         h_reconstruct.assert_not_called()
         self.assertEqual(result, (reconstructed, None, effective))
         self.assertEqual(len(raw.detections), 4)  # raw detections untouched

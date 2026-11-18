@@ -325,13 +325,13 @@ def analyze_image(
             try:
                 with stage("reconstruction", blocked_errors=(ChartInterpretationError,)):
                     reconstruct = reconstruct_hbar if horizontal else reconstruct_vbar
-                    rejected = {}
-                    if colour_filter is not None and colour_filter.rejected:
-                        rejected["rejected_bars"] = tuple(
-                            item.detection for item in colour_filter.rejected)
+                    rejected_bars = (
+                        tuple(item.detection for item in colour_filter.rejected)
+                        if colour_filter is not None else ()
+                    )
                     reconstructed = reconstruct(
                         frame, ocr_frame, image, legend_mapping=legend_mapping,
-                        **rejected, **reconstruction_options,
+                        rejected_bars=rejected_bars, **reconstruction_options,
                     )
                     edge_flags = cut_off_flags(frame, image, **diagnostic_options)
                     candidate = replace(
