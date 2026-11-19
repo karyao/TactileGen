@@ -103,7 +103,7 @@ extractor across browser sessions. Missing VLM packages or model access are show
 in the tab; installing Gemma is optional for the detector workflow.
 
 ```bash
-python -m pip install -r requirements-app.txt -r requirements-vlm.txt
+python -m pip install -r requirements-vlm-app.txt
 python -m src.gradio_app --workflow gemma
 ```
 
@@ -133,3 +133,9 @@ Automated tab tests inject inference and exercise real Gradio file publication
 and tactile rendering. A real-model acceptance check remains separate: extract
 one vertical and one horizontal chart, correct a value, inspect the preview and
 reviewed chart, and download the clean ZIP.
+
+For the combined app, install `requirements-vlm-app.txt` in one pip command.
+It selects Gradio 6.17.x, compatible with Transformers 4's Hugging Face Hub <1
+requirement, and resolves TorchVision together with Torch. Restart the running
+server after package installation. The Gemma loader defaults `USE_TF=0` because
+it uses PyTorch and does not need an unrelated TensorFlow installation.

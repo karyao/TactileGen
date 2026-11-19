@@ -48,8 +48,9 @@ def make_processor_fixture(directory):
 @unittest.skipIf(VLM_ABSENT, "Install requirements-vlm.txt to test real processor loading")
 class GemmaProcessorTest(unittest.TestCase):
     def test_extractor_initializes_real_slow_processor(self):
-        import torch
-        from transformers import AutoProcessor, Gemma3Processor, GemmaTokenizer
+        from src.baseline.gemma import _load_dependencies
+        torch, _, AutoProcessor, _ = _load_dependencies()
+        from transformers import Gemma3Processor, GemmaTokenizer
 
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = make_processor_fixture(directory)

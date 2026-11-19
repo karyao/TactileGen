@@ -66,6 +66,9 @@ class GemmaExtractionError(RuntimeError):
 
 def _load_dependencies():
     # Keep imports here: ordinary contract/tactile imports need no VLM packages.
+    import os
+    # This baseline uses PyTorch; do not auto-import an unrelated TensorFlow install.
+    os.environ.setdefault("USE_TF", "0")
     import torch
     from PIL import Image
     from transformers import AutoProcessor, Gemma3ForConditionalGeneration
@@ -100,11 +103,20 @@ def _synchronize(torch, device: str) -> None:
 
 def _loading_message(exc: Exception) -> str:
     # Classify without incorporating arbitrary server messages or credentials.
-    names = {kind.__name__ for kind in type(exc).__mro__}
-    status = getattr(getattr(exc, "response", None), "status_code", None)
-    if status in (401, 403) or names & {"GatedRepoError", "RepositoryNotFoundError"}:
+    chain = []
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    names = {kind.__name__ for error in chain for kind in type(error).__mro__}
+    statuses = {getattr(getattr(error, "response", None), "status_code", None)
+                for error in chain}
+    if statuses & {401, 403} or names & {"GatedRepoError", "RepositoryNotFoundError"}:
         return ("Cannot access the Gemma checkpoint. Accept its Hugging Face model terms "
-                "and authenticate with hf auth login; check the model ID and revision.")
+                "and authenticate or refresh your login with hf auth login; "
+                "check token permissions, model ID, and revision.")
     if _out_of_memory(exc):
         return "Insufficient memory to load Gemma; free memory or choose another device or checkpoint."
     return ("Could not load the Gemma model/processor. Check the model ID, revision, network, "

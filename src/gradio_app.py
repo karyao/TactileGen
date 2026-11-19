@@ -25,7 +25,7 @@ from src.gradio_ui.analysis import (
     decode_upload,
     analyze_image,
 )
-from src.gradio_ui.dependencies import import_gradio as _import_gradio, launch_app
+from src.gradio_ui.dependencies import import_gradio as _import_gradio, supported_optional_kwargs, launch_app
 from src.gradio_ui.formatting import (
     generation_report,
     ready_status,
@@ -148,6 +148,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_file_size=MAX_UPLOAD_BYTES,
         theme=theme,
         css=BOREALIS_CSS,
+        **supported_optional_kwargs(demo.launch, run_history=False),
+        enable_monitoring=False,
     )
 
 

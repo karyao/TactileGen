@@ -17,7 +17,7 @@ from src.diagnostics.tracking import configure_analysis_logging
 from src.gradio_ui.run_tracking import RunTracker, guarded_blocks
 from src.gradio_ui.callbacks import create_callbacks
 from src.gradio_ui.components import Controls, AnalysisComponents, GenerationComponents
-from src.gradio_ui.dependencies import image_component, import_gradio
+from src.gradio_ui.dependencies import import_gradio, supported_optional_kwargs, image_component
 from src.gradio_ui.formatting import ready_status
 from src.gradio_ui.settings import EXAMPLE_IMAGE, DEFAULT_OCR_LANGUAGE, DEFAULT_OCR_ENGINE
 from src.gradio_ui.ocr import OCRBackendResolver
@@ -212,7 +212,7 @@ def _build_controls(gr, initial_imgsz: int, initial_ocr_engine: str) -> Controls
             label="Bar chart image",
             placeholder="Upload a chart image",
             buttons=["fullscreen"],
-            alt_text="Preview of the uploaded chart",
+            **supported_optional_kwargs(gr.Image, alt_text="Preview of the uploaded chart"),
             elem_classes="borealis-upload-image",
         )
         gr.Markdown(
@@ -356,7 +356,7 @@ def _build_results(gr) -> AnalysisComponents:
             interactive=False,
             visible=False,
             buttons=["download", "fullscreen"],
-            alt_text="Uploaded chart with labeled detection boxes",
+            **supported_optional_kwargs(gr.Image, alt_text="Uploaded chart with labeled detection boxes"),
             elem_classes="borealis-result-image",
         )
         orientation_output = gr.Markdown(

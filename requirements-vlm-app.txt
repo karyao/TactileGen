@@ -1,0 +1,7 @@
+# Install together so pip resolves the UI and VLM Hugging Face Hub requirements.
+-r requirements-app.txt
+-r requirements-vlm.txt
+# Newer Gradio releases require Hub >=1, while Transformers 4 requires Hub <1.
+gradio>=6.17.3,<6.18
+# Resolve TorchVision together with Torch (also used by the detector).
+torchvision>=0.21,<1

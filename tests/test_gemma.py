@@ -238,6 +238,19 @@ class GemmaInferenceTest(unittest.TestCase):
         self.assert_safe_failure("device")
         self.model_class.from_pretrained.assert_not_called()
 
+    def test_wrapped_processor_access_failure_is_classified_safely(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                denied = RuntimeError("secret-token")
+                denied.response = SimpleNamespace(status_code=status)
+                wrapped = OSError("secret-token")
+                wrapped.__cause__ = denied
+                self.processor_class.from_pretrained.side_effect = wrapped
+                error = self.assert_safe_failure("loading")
+                self.assertIn("Cannot access", str(error))
+                self.assertIn("hf auth login", str(error))
+                self.model_class.from_pretrained.assert_not_called()
+
     def test_device_probe_errors_are_sanitized(self):
         self.torch.cuda.is_available.side_effect = ValueError("secret-token")
         self.assert_safe_failure("device")

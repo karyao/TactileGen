@@ -40,3 +40,11 @@ def launch_app(demo, **kwargs):
         if name in parameters or accepts_kwargs:
             kwargs[name] = False
     return demo.launch(**kwargs)
+    
+def supported_optional_kwargs(target, **kwargs):
+    """Pass newer presentation options only when the installed Gradio supports them."""
+    from inspect import signature, Parameter
+    parameters = signature(target).parameters
+    if any(p.kind == Parameter.VAR_KEYWORD for p in parameters.values()):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in parameters}
