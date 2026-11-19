@@ -124,18 +124,22 @@ def ground_truth(record: dict) -> dict:
 # --- step 1: run the pipeline and cache what happened ---------------------------
 
 def _select(annotations: Path, types: list[str], limit: int | None, seed: int) -> list[dict]:
+    """``limit`` random charts of each type. Every type is sampled, in a fixed
+    order, before keeping ``types``, so a type gets the same charts whether or
+    not the others are audited too."""
     from src.dataset.prepare_plotqa import iter_annotations
     by_type = defaultdict(list)
     for record in iter_annotations(annotations):
-        if record["type"] in types:
+        if record["type"] in CHART_TYPES:
             by_type[record["type"]].append(record)
     rng = random.Random(seed)
     chosen = []
-    for chart_type in types:
+    for chart_type in CHART_TYPES:
         records = sorted(by_type[chart_type], key=lambda r: r["image_index"])
         if limit is not None and limit < len(records):
             records = sorted(rng.sample(records, limit), key=lambda r: r["image_index"])
-        chosen += records
+        if chart_type in types:
+            chosen += records
     return chosen
 
 

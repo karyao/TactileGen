@@ -66,5 +66,17 @@ class ReasonsAndGroupsTest(unittest.TestCase):
         self.assertEqual(audit.failure_group("none_correct", 0, 0), "")
 
 
+class SelectTest(unittest.TestCase):
+    def test_an_orientation_gets_the_same_charts_alone_or_with_the_other(self):
+        records = [{"type": t, "image_index": i} for i in range(50)
+                   for t in ("vbar_categorical", "hbar_categorical", "line")]
+        from unittest import mock
+        with mock.patch("src.dataset.prepare_plotqa.iter_annotations", return_value=records):
+            both = audit._select(None, ["vbar_categorical", "hbar_categorical"], 10, 0)
+            alone = audit._select(None, ["hbar_categorical"], 10, 0)
+        self.assertEqual(alone, [r for r in both if r["type"] == "hbar_categorical"])
+        self.assertEqual(len(alone), 10)
+
+
 if __name__ == "__main__":
     unittest.main()
