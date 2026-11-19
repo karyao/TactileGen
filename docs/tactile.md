@@ -213,3 +213,18 @@ without labels; a chart with no room for it keeps the layout it had before and t
 Labels may be wider than their bars; placement depends on clearance from surrounding elements and page boundaries.
 Omitted labels are named in a note explaining that space is insufficient.
 Negative values are formatted (`-13`) but not placed: the layout still rejects negative bars.
+
+
+Horizontal charts also enable bar values by default:
+`layout_horizontal_bar_chart(chart, value_labels=True)` and
+`layout_horizontal_bar_chart_pages(chart, value_labels=True)`. Each braille value
+is centred vertically to the right of its bar, with 1/8 inch clearance. The plot
+reserves space on the right for the widest value; the x-axis tick step controls
+precision. The same precision reduction, 3/4 inch lead-line, rescued-value and
+omission-note behavior applies, with lead lines extending right. Vertical grid
+lines are interrupted around value labels to preserve clearance. When labels
+cannot fit without compromising bar thickness or plot width, the original
+unlabelled layout is retained with a no-room note. Set `value_labels=False` on
+either entry point to preserve the original horizontal layout. The pages entry point can move the key and value notes onto a preceding page
+when this allows more values to fit while passing the layout rules. The graph
+itself remains on one page; category sections and negative bars are not supported.

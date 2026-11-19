@@ -864,8 +864,8 @@ class HorizontalLayoutTest(unittest.TestCase):
 
     def test_values_sit_on_grid_lines_with_dots_456_of_the_first_cell(self):
         layout = layout_horizontal_bar_chart(RAIN)
-        columns = sorted(l.x1 for l in layout.lines
-                         if l.kind in ("grid", "axis") and l.x1 == l.x2)
+        columns = sorted({l.x1 for l in layout.lines
+                          if l.kind in ("grid", "axis") and l.x1 == l.x2})
         values = by_role(layout, "x_value")
         self.assertEqual([v.text for v in values], ["0", "500", "1000", "1500"])
         offset = DOT_DIAMETER / 2 + DOT_PITCH

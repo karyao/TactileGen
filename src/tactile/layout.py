@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
-from src.contracts import BarSeries, VerticalBarChart, effective_omit_legend
+from src.contracts import BarSeries, HorizontalBarChart, VerticalBarChart, effective_omit_legend
 from src.tactile.braille import BLANK, TN_CLOSE, TN_OPEN, Cell, to_braille
 from src.tactile.keys import abbreviation_keys, numeric_keys
 from src.tactile.value_labels import plan_value_labels
@@ -739,7 +739,8 @@ def _value_notes(chart, rescued, omitted, estimate) -> tuple[str, ...]:
     if estimate:
         notes.append("Bar values are estimated from the print.")
     if rescued:
-        notes.append("No value is shown for bars whose height was measured without a "
+        dimension = "length" if isinstance(chart, HorizontalBarChart) else "height"
+        notes.append(f"No value is shown for bars whose {dimension} was measured without a "
                      f"detected bar: {_bar_names(chart, rescued)}.")
     if omitted:
         notes.append(f"No value is shown for bars lacking space: "
@@ -945,18 +946,21 @@ def _cut_grid(lines: list[Line], labels) -> list[Line]:
             out.append(line)
             continue
         reach = LABEL_MIN_GAP + line.width / 2 + 0.02
-        cuts = sorted((l.bounds.x1 - reach, l.bounds.x2 + reach) for l in labels
-                      if l.bounds.y1 - reach < line.y1 < l.bounds.y2 + reach)
-        start, pieces = line.x1, []
-        for x1, x2 in cuts:
-            if x1 > start:
-                pieces.append((start, x1))
-            start = max(start, x2)
-        if start < line.x2:
-            pieces.append((start, line.x2))
-        if not cuts:
-            pieces = [(line.x1, line.x2)]
-        for k, (x1, x2) in enumerate(pieces):
-            if x2 - x1 >= LABEL_MIN_GAP:
-                out.append(replace(line, id=line.id if k == 0 else f"{line.id}-{k}", x1=x1, x2=x2))
+        vertical = line.x1 == line.x2
+        cuts = sorted((l.bounds.y1 - reach, l.bounds.y2 + reach) for l in labels
+                      if l.bounds.x1 - reach < line.x1 < l.bounds.x2 + reach) if vertical else sorted(
+                          (l.bounds.x1 - reach, l.bounds.x2 + reach) for l in labels
+                          if l.bounds.y1 - reach < line.y1 < l.bounds.y2 + reach)
+        end = line.y2 if vertical else line.x2
+        start, pieces = line.y1 if vertical else line.x1, []
+        for low, high in cuts:
+            if low > start:
+                pieces.append((start, min(low, end)))
+            start = max(start, high)
+        if start < end:
+            pieces.append((start, end))
+        for k, (low, high) in enumerate(pieces):
+            if high - low >= LABEL_MIN_GAP:
+                coordinates = dict(y1=low, y2=high) if vertical else dict(x1=low, x2=high)
+                out.append(replace(line, id=line.id if k == 0 else f"{line.id}-{k}", **coordinates))
     return out
