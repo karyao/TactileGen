@@ -273,8 +273,9 @@ def _prepare_output_dir(path: Path) -> None:
 
 
 def _save_artifacts(output_dir: Path, metadata: dict[str, Any], raw_response: str | None,
-                    chart: VerticalBarChart | HorizontalBarChart | None = None) -> bool:
-    """Save available output and final metadata; report write failures safely."""
+                    chart: VerticalBarChart | HorizontalBarChart | None = None,
+                    *, finalize: bool = True) -> bool:
+    """Save extraction output; finalize metadata on request or write failure."""
     saved = True
     try:
         if raw_response is not None:
@@ -287,6 +288,8 @@ def _save_artifacts(output_dir: Path, metadata: dict[str, Any], raw_response: st
         metadata = {**metadata, "completion_status": "failed", "error_stage": "output",
                     "error_message": "Could not save extraction artifacts."}
         print("gemma: output: Could not save extraction artifacts.", file=sys.stderr)
+    if saved and not finalize:
+        return True
     try:
         _write_metadata(output_dir, metadata)
     except Exception:
@@ -295,10 +298,50 @@ def _save_artifacts(output_dir: Path, metadata: dict[str, Any], raw_response: st
     return saved
 
 
+def _render_chart(
+    chart: VerticalBarChart | HorizontalBarChart, options: dict[str, Any],
+) -> list[tuple[dict[str, Any], str, str]]:
+    """Prepare all pages in memory, importing rendering only when requested."""
+    from src.tactile.layout import layout_vertical_bar_chart, layout_vertical_bar_chart_pages
+    from src.tactile.layout_hbar import layout_horizontal_bar_chart, layout_horizontal_bar_chart_pages
+    from src.tactile.rules import check_layout, format_report
+    from src.tactile.svg import render_svg
+
+    if isinstance(chart, HorizontalBarChart):
+        layouts = ([layout_horizontal_bar_chart(chart, labels=options["x_labels"])]
+                   if options["one_page"] else
+                   layout_horizontal_bar_chart_pages(chart, labels=options["x_labels"]))
+    else:
+        layouts = ([layout_vertical_bar_chart(chart, x_labels=options["x_labels"])]
+                   if options["one_page"] else
+                   layout_vertical_bar_chart_pages(chart, x_labels=options["x_labels"]))
+    pages = []
+    for number, layout in enumerate(layouts, 1):
+        violations = check_layout(layout)
+        record = {
+            "filename": "chart.svg" if len(layouts) == 1 else f"chart-{number}.svg",
+            "saved": False, "page_number": number, "page_kind": layout.page_kind,
+            "section": layout.section, "notes": list(layout.notes),
+            "needs_review": list(layout.needs_review),
+            "violations": [{"rule_id": v.rule.id, "section": v.rule.section,
+                            "message": v.message, "element_ids": list(v.element_ids)}
+                           for v in violations],
+        }
+        svg = render_svg(layout, show_print=options["show_print"],
+                         violations=violations if options["show_violations"] else None)
+        pages.append((record, svg, format_report(violations)))
+    return pages
+
+
+def _cli_failure(metadata: dict[str, Any], stage: str, message: str) -> None:
+    metadata.update(completion_status="failed", error_stage=stage, error_message=message)
+    print(f"gemma: {stage}: {message}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Extract chart JSON and diagnostics; SVG rendering is not connected yet."""
+    """Extract chart JSON and diagnostics, then render tactile SVG pages."""
     parser = argparse.ArgumentParser(
-        description="Extract a chart with Gemma and save JSON/diagnostics. SVG rendering is not connected yet.")
+        description="Extract a chart with Gemma and save JSON, diagnostics, and tactile SVG pages.")
     parser.add_argument("--image", type=Path, required=True, help="Local chart image")
     parser.add_argument("--output-dir", type=Path, required=True, help="New or empty output directory")
     parser.add_argument("--source-key", help="Namespaced identity (default: vlm/<image filename>)")
@@ -308,7 +351,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dtype", choices=("auto", "float32", "bfloat16", "float16"), default="auto")
     parser.add_argument("--max-new-tokens", type=int, default=4096)
     parser.add_argument("--extract-only", action="store_true",
-                        help="Save extraction artifacts only (also the current default; no SVG rendering yet)")
+                        help="Save extraction artifacts only; renderer options have no effect")
+    parser.add_argument("--show-print", action="store_true", help="Add print text under braille labels")
+    parser.add_argument("--show-violations", action="store_true", help="Mark layout violations in SVGs")
+    parser.add_argument("--x-labels", choices=("auto", "full", "abbreviation", "number"), default="auto")
+    parser.add_argument("--one-page", action="store_true", help="Never divide the graph into sections")
+    parser.add_argument("--strict", action="store_true", help="Fail if any layout rule is violated")
     args = parser.parse_args(argv)
     source_key = args.source_key if args.source_key is not None else f"vlm/{args.image.name}"
     try:
@@ -327,7 +375,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     context = {"image": str(args.image), "source_key": source_key}
-    metadata = {**extractor._metadata(), **context}
+    options = {name: getattr(args, name) for name in
+               ("show_print", "show_violations", "x_labels", "one_page", "strict")}
+    metadata = {**extractor._metadata(), **context,
+                "rendering": {"status": "skipped" if args.extract_only else "pending",
+                              "options": options, "pages": []}}
     try:
         _write_metadata(args.output_dir, metadata)
     except Exception:
@@ -346,10 +398,47 @@ def main(argv: list[str] | None = None) -> int:
         _save_artifacts(args.output_dir, metadata, None)
         print("gemma: inference: Unexpected extraction failure; inspect available run metadata.", file=sys.stderr)
         return 1
-    if not _save_artifacts(args.output_dir, {**metadata, **result.metadata, **context},
-                           result.raw_response, result.chart):
+    metadata.update(result.metadata)
+    metadata.update(context, completion_status="started")
+    if not _save_artifacts(args.output_dir, metadata, result.raw_response, result.chart,
+                           finalize=False):
         return 1
-    print(f"Chart extraction completed. Artifacts saved in {args.output_dir}")
+    if not args.extract_only:
+        try:
+            pages = _render_chart(result.chart, options)
+        except Exception:
+            metadata["rendering"]["status"] = "failed"
+            _cli_failure(metadata, "rendering", "Could not render the extracted chart; inspect chart.json and renderer limitations.")
+            _save_artifacts(args.output_dir, metadata, None)
+            return 1
+        metadata["rendering"]["pages"] = [record for record, _, _ in pages]
+        try:
+            for record, svg, report in pages:
+                path = args.output_dir / record["filename"]
+                _atomic_write(path, lambda pending: pending.write_text(svg, encoding="utf-8"))
+                record["saved"] = True
+                print(f"Wrote {path}")
+                for note in record["notes"]:
+                    print(f"Note: {note}")
+                for reason in record["needs_review"]:
+                    print(f"NEEDS REVIEW: {reason}")
+                print(report)
+        except Exception:
+            metadata["rendering"]["status"] = "failed"
+            _cli_failure(metadata, "output", "Could not save tactile SVG artifacts.")
+            _save_artifacts(args.output_dir, metadata, None)
+            return 1
+        metadata["rendering"]["status"] = "complete"
+        if args.strict and any(record["violations"] for record, _, _ in pages):
+            _cli_failure(metadata, "validation", "Tactile SVGs saved, but layout rules failed in strict mode.")
+    if metadata["completion_status"] != "failed":
+        metadata["completion_status"] = "complete"
+    if not _save_artifacts(args.output_dir, metadata, None):
+        return 1
+    if metadata["completion_status"] == "failed":
+        return 1
+    action = "Chart extraction" if args.extract_only else "Chart extraction and tactile rendering"
+    print(f"{action} completed. Artifacts saved in {args.output_dir}")
     return 0
 
 

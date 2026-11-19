@@ -1,6 +1,7 @@
 """Offline CLI artifact and failure tests; no inference packages are needed."""
 
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from xml.etree import ElementTree
 from unittest.mock import patch
 
 from src.baseline import gemma
@@ -59,14 +61,26 @@ class GemmaCLITest(unittest.TestCase):
                     self.output = self.root / (filename + str(bool(flag)))
                     self.raw = " \n" + (FIXTURES / filename).read_text() + "\r\n\t"
                     self.assertEqual(self.run_cli(flag), 0)
-                    self.assertEqual({p.name for p in self.output.iterdir()},
-                                     {"chart.json", "raw_response.txt", "run_metadata.json"})
+                    expected = {"chart.json", "raw_response.txt", "run_metadata.json"}
+                    if not flag:
+                        expected.add("chart.svg")
+                        ElementTree.parse(self.output / "chart.svg")
+                    self.assertEqual({p.name for p in self.output.iterdir()}, expected)
                     self.assertEqual((self.output / "raw_response.txt").read_bytes(), self.raw.encode())
                     chart = load_bar_chart(self.output / "chart.json")
                     self.assertIs(type(chart), kind)
                     self.assertEqual(chart.source_key, "vlm/chart.png")
                     metadata = self.metadata()
                     self.assertEqual(metadata["completion_status"], "complete")
+                    self.assertEqual(metadata["rendering"]["status"], "skipped" if flag else "complete")
+                    self.assertEqual(metadata["rendering"]["options"], {
+                        "show_print": False, "show_violations": False,
+                        "x_labels": "auto", "one_page": False, "strict": False})
+                    if not flag:
+                        page, = metadata["rendering"]["pages"]
+                        self.assertTrue(page["saved"])
+                        self.assertEqual(page["filename"], "chart.svg")
+                        self.assertEqual(page["violations"], [])
                     self.assertEqual(metadata["image"], str(self.image))
                     self.assertEqual(metadata["source_key"], chart.source_key)
                     self.assertEqual(metadata["resolved_revision"], "commit")
@@ -95,7 +109,7 @@ class GemmaCLITest(unittest.TestCase):
     def test_argument_errors_do_not_touch_output(self):
         for extra in (["--device", "gpu"], ["--dtype", "int4"], ["--max-new-tokens", "0"],
                       ["--max-new-tokens", "no"], ["--source-key", "invalid"],
-                      ["--model-id", ""], ["--revision", " "]):
+                      ["--model-id", ""], ["--revision", " "], ["--x-labels", "invalid"]):
             with self.subTest(extra=extra), self.assertRaises(SystemExit) as caught:
                 self.run_cli(extra)
             self.assertEqual(caught.exception.code, 2)
@@ -148,6 +162,7 @@ class GemmaCLITest(unittest.TestCase):
         self.extract.assert_not_called()
 
     def test_each_extraction_error_saves_available_diagnostics(self):
+        renderer = patch.object(gemma, "_render_chart").start()
         for stage in ("input", "dependencies", "device", "loading", "inference", "parsing"):
             with self.subTest(stage=stage):
                 self.output = self.root / stage
@@ -163,6 +178,7 @@ class GemmaCLITest(unittest.TestCase):
                 self.assertEqual(metadata["source_key"], "vlm/chart.png")
                 self.assertIsNone(metadata["inference_seconds"])
                 self.assertIn(stage, self.stderr.getvalue())
+        renderer.assert_not_called()
 
     def test_real_adapter_rejects_malformed_and_truncated_responses(self):
         def fail_from_adapter(extractor, image, *, source_key=None):
@@ -195,7 +211,9 @@ class GemmaCLITest(unittest.TestCase):
             raise OSError("secret-token")
 
         with patch.object(gemma, "write_bar_chart", side_effect=fail_chart):
-            self.assertEqual(self.run_cli(), 1)
+            with patch.object(gemma, "_render_chart") as renderer:
+                self.assertEqual(self.run_cli(), 1)
+                renderer.assert_not_called()
         self.assertEqual({p.name for p in self.output.iterdir()}, {"raw_response.txt", "run_metadata.json"})
         self.assertEqual(self.metadata()["error_stage"], "output")
         self.assertNotIn("secret-token", self.stderr.getvalue())
@@ -234,6 +252,7 @@ class GemmaCLITest(unittest.TestCase):
         self.assertEqual(write.call_count, 2)
         self.assertEqual(self.metadata()["completion_status"], "started")
         self.assertIsInstance(load_bar_chart(self.output / "chart.json"), VerticalBarChart)
+        self.assertTrue((self.output / "chart.svg").exists())
         self.assertIn("diagnostics are incomplete", self.stderr.getvalue())
         self.assertNotIn("secret-token", self.stderr.getvalue())
 
@@ -249,4 +268,180 @@ class GemmaCLITest(unittest.TestCase):
                                 cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--extract-only", result.stdout)
-        self.assertIn("SVG rendering is not connected", " ".join(result.stdout.split()))
+        self.assertIn("--show-print", result.stdout)
+        self.assertIn("--strict", result.stdout)
+
+    def test_extract_only_import_isolation(self):
+        script = '''
+import sys
+from unittest.mock import patch
+from src.baseline import gemma
+from src.baseline.vlm_response import parse_chart_response
+raw = open("tests/fixtures/vlm/vertical_response.json").read()
+chart = parse_chart_response(raw, image="chart.png").chart
+result = gemma.GemmaExtractionResult(chart, raw, {"completion_status": "complete"})
+with patch.object(gemma.GemmaChartExtractor, "extract_result", return_value=result):
+    assert gemma.main(["--image", "chart.png", "--output-dir", sys.argv[1],
+                       "--extract-only", "--strict", "--show-print"]) == 0
+assert not any(name == "src.tactile" or name.startswith("src.tactile.") for name in sys.modules)
+'''
+        subprocess.run([sys.executable, "-S", "-c", script, str(self.output)],
+                       cwd=Path(__file__).resolve().parents[1], check=True, capture_output=True)
+        self.assertEqual(self.metadata()["rendering"]["status"], "skipped")
+
+    def use_crowded_chart(self):
+        self.raw = (FIXTURES.parent / "tactile" / "crowded.json").read_text()
+
+    def test_multi_page_order_and_review_notes(self):
+        self.use_crowded_chart()
+        self.assertEqual(self.run_cli(), 0)
+        pages = self.metadata()["rendering"]["pages"]
+        self.assertGreater(len(pages), 1)
+        self.assertEqual(pages[0]["page_kind"], "key")
+        self.assertTrue(any(p["notes"] or p["needs_review"] for p in pages))
+        for number, page in enumerate(pages, 1):
+            self.assertEqual(page["page_number"], number)
+            self.assertEqual(page["filename"], f"chart-{number}.svg")
+            self.assertTrue(page["saved"])
+            ElementTree.parse(self.output / page["filename"])
+
+    def test_rule_findings_warn_or_fail_strict_after_saving(self):
+        from src.tactile.rules import RULES, Violation
+        violation = Violation(RULES["bar_width"], "Test width violation", ("bar-1",))
+        for strict in (False, True):
+            with self.subTest(strict=strict):
+                self.output = self.root / f"strict-{strict}"
+                with patch("src.tactile.rules.check_layout", return_value=[violation]):
+                    self.assertEqual(self.run_cli(["--strict"] if strict else []), int(strict))
+                metadata = self.metadata()
+                self.assertEqual(metadata["completion_status"], "failed" if strict else "complete")
+                self.assertEqual(metadata["rendering"]["status"], "complete")
+                page, = metadata["rendering"]["pages"]
+                self.assertTrue(page["saved"])
+                self.assertEqual(page["violations"][0]["rule_id"], "bar_width")
+                self.assertEqual(page["violations"][0]["element_ids"], ["bar-1"])
+                if strict:
+                    self.assertEqual(metadata["error_stage"], "validation")
+
+    def test_renderer_flags_and_orientation_dispatch(self):
+        from src.tactile import layout, layout_hbar, svg
+        for filename, module, single, multiple, label_key in (
+            ("vertical_response.json", layout, "layout_vertical_bar_chart", "layout_vertical_bar_chart_pages", "x_labels"),
+            ("horizontal_response.json", layout_hbar, "layout_horizontal_bar_chart", "layout_horizontal_bar_chart_pages", "labels"),
+        ):
+            for one_page in (False, True):
+                self.output = self.root / f"{filename}-{one_page}"
+                self.raw = (FIXTURES / filename).read_text()
+                target = single if one_page else multiple
+                with patch.object(module, target, wraps=getattr(module, target)) as build, \
+                        patch.object(svg, "render_svg", wraps=svg.render_svg) as render:
+                    flags = ["--show-print", "--show-violations", "--x-labels", "number"]
+                    if one_page:
+                        flags.append("--one-page")
+                    self.assertEqual(self.run_cli(flags), 0)
+                self.assertEqual(build.call_args.kwargs, {label_key: "number"})
+                self.assertTrue(render.call_args.kwargs["show_print"])
+                self.assertIsNotNone(render.call_args.kwargs["violations"])
+
+    def test_notes_and_review_alone_do_not_fail_strict(self):
+        from src.tactile import layout
+        original = layout.layout_vertical_bar_chart_pages
+
+        def reviewed(chart, **kwargs):
+            return [replace(p, notes=("Review note",), needs_review=("Review reason",))
+                    for p in original(chart, **kwargs)]
+
+        # Isolate the CLI policy: the real checker normally translates review
+        # reasons into violations, which strict mode must still respect.
+        with patch.object(layout, "layout_vertical_bar_chart_pages", side_effect=reviewed), \
+                patch("src.tactile.rules.check_layout", return_value=[]):
+            self.assertEqual(self.run_cli(["--strict"]), 0)
+        page, = self.metadata()["rendering"]["pages"]
+        self.assertEqual(page["notes"], ["Review note"])
+        self.assertEqual(page["needs_review"], ["Review reason"])
+        self.assertIn("NEEDS REVIEW: Review reason", self.stdout.getvalue())
+
+    def test_unsupported_charts_keep_extraction(self):
+        base = json.loads(self.raw)
+        negative = {**base, "series": [{"name": None, "values": [-1] * len(base["categories"])}]}
+        many = {**base, "series": [{"name": f"Series {i}", "values": [1] * len(base["categories"])} for i in range(6)]}
+        for index, data in enumerate((negative, many, {**base, "title": "Unsupported \u2603"})):
+            self.output = self.root / f"unsupported-{index}"
+            self.raw = json.dumps(data)
+            self.assertEqual(self.run_cli(), 1)
+            self.assertEqual(self.metadata()["error_stage"], "rendering")
+            self.assertEqual(self.metadata()["rendering"]["status"], "failed")
+            self.assertEqual(json.loads((self.output / "chart.json").read_text())["series"], data["series"])
+            self.assertTrue((self.output / "raw_response.txt").exists())
+            self.assertFalse(list(self.output.glob("*.svg")))
+
+    def test_rendering_failure_is_sanitized(self):
+        for target in ("src.tactile.layout.layout_vertical_bar_chart_pages",
+                       "src.tactile.rules.check_layout", "src.tactile.svg.render_svg"):
+            self.output = self.root / target
+            with patch(target, side_effect=RuntimeError("secret-token")):
+                self.assertEqual(self.run_cli(), 1)
+            self.assertEqual(self.metadata()["error_stage"], "rendering")
+            self.assertTrue((self.output / "chart.json").exists())
+            self.assertNotIn("secret-token", json.dumps(self.metadata()))
+            self.assertNotIn("secret-token", self.stderr.getvalue())
+
+    def test_later_page_serialization_failure_publishes_no_svgs(self):
+        from src.tactile import svg
+        self.use_crowded_chart()
+        original = svg.render_svg
+        calls = 0
+
+        def fail_second(layout, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("secret-token")
+            return original(layout, **kwargs)
+
+        with patch.object(svg, "render_svg", side_effect=fail_second):
+            self.assertEqual(self.run_cli(), 1)
+        self.assertEqual(calls, 2)
+        self.assertFalse(list(self.output.glob("*.svg")))
+        self.assertEqual(self.metadata()["error_stage"], "rendering")
+        self.assertEqual(self.metadata()["rendering"]["pages"], [])
+
+    def test_renderer_import_failure_retains_extraction(self):
+        import builtins
+        original = builtins.__import__
+
+        def fail_import(name, *args, **kwargs):
+            if name.startswith("src.tactile"):
+                raise ImportError("secret-token")
+            return original(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fail_import):
+            self.assertEqual(self.run_cli(), 1)
+        self.assertTrue((self.output / "chart.json").exists())
+        self.assertEqual(self.metadata()["error_stage"], "rendering")
+        self.assertNotIn("secret-token", self.stderr.getvalue())
+
+    def test_page_write_failures_track_saved_pages_and_override_strict(self):
+        self.use_crowded_chart()
+        original = gemma._atomic_write
+        for failed_number in (1, 2):
+            self.output = self.root / f"write-{failed_number}"
+
+            def fail_page(path, writer):
+                if path.name == f"chart-{failed_number}.svg":
+                    def partial(pending):
+                        pending.write_text("partial")
+                        raise OSError("secret-token")
+                    return original(path, partial)
+                return original(path, writer)
+
+            with patch.object(gemma, "_atomic_write", side_effect=fail_page):
+                self.assertEqual(self.run_cli(["--strict"]), 1)
+            metadata = self.metadata()
+            self.assertEqual(metadata["error_stage"], "output")
+            self.assertEqual(metadata["rendering"]["status"], "failed")
+            for page in metadata["rendering"]["pages"]:
+                self.assertEqual(page["saved"], page["page_number"] < failed_number)
+                self.assertEqual((self.output / page["filename"]).exists(), page["saved"])
+            self.assertFalse(list(self.output.glob("*.tmp")))
+            self.assertNotIn("secret-token", self.stderr.getvalue())

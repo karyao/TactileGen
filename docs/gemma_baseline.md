@@ -46,9 +46,20 @@ python -m src.baseline.gemma \
 match the Python configuration table below. Use `python -m src.baseline.gemma
 --help` for usage; help works without inference dependencies installed.
 
-During Stage 3, omitting `--extract-only` also produces extraction artifacts.
-SVG rendering is not connected yet; Stage 4 will add rendering to the default
-command path. `--extract-only` will continue to stop after chart extraction.
+Omit `--extract-only` to also render tactile SVG pages using the existing vertical
+or horizontal bar layout. The Python extraction API continues to return chart
+data only. Rendering does not call detection, OCR, or reconstruction.
+
+```bash
+python -m src.baseline.gemma --image charts/sales.png --output-dir output/gemma/rendered
+```
+
+Renderer options match `python -m src.tactile`: `--show-print` adds print text
+under braille, `--show-violations` marks rule violations, `--x-labels
+{auto,full,abbreviation,number}` selects category labeling (default `auto`),
+`--one-page` disables division into sections, and `--strict` returns failure if
+any layout rule fails. Boolean flags default to false. All five options are
+accepted but have no effect with `--extract-only`.
 
 The output directory must be new or empty, including hidden files and
 subdirectories. Existing contents are never cleared. Choose a different output
@@ -59,14 +70,43 @@ directory for a retry. Use one invocation per output directory.
 | `raw_response.txt` | Exact decoded model response, including whitespace. Saved whenever decoding produced text, even if the response is empty or invalid. |
 | `chart.json` | Validated chart serialized with the existing schema-version-1 writer. Absent after extraction or parsing failures. |
 | `run_metadata.json` | Requested/resolved settings, input image and source identity, available timing and placeholder diagnostics, completion status, and safe failure details. |
+| `chart.svg` | Tactile SVG when the rendered chart fits on one page. Absent in extraction-only mode. |
+| `chart-1.svg`, `chart-2.svg`, … | Multi-page output, in layout order including any key page; replaces the single `chart.svg` filename. |
 
 Initial metadata has `completion_status: "started"`; the CLI records `"complete"`
-only after extraction artifacts have been saved. Individual artifacts are written
+only after every requested stage and artifact save succeeds. Individual artifacts are written
 through temporary files and replaced when complete. A failed or interrupted run
 may retain partial sets of artifacts; check metadata and exit status. A valid
 chart already saved may remain if a subsequent metadata write fails.
 
-Exit codes are `0` for success, `1` for extraction/output failures, and `2` for
+The CLI adds a `rendering` metadata object containing `status` (`pending`,
+`skipped`, `complete`, or `failed`), resolved `options`, and ordered `pages`.
+Each page records `filename` (relative to the output directory), `saved`,
+`page_number`, `page_kind`, `section` (a pair or null), `notes`, `needs_review`,
+and `violations`. Each violation records `rule_id`, `section`, `message`, and
+`element_ids`. Extraction-only mode records `skipped` and an empty page list.
+
+Rendering failures preserve `raw_response.txt` and `chart.json`. A later page
+write failure also preserves earlier SVGs; page `saved` flags identify successful
+writes when final metadata can be saved. Failed in-memory rendering publishes
+no SVGs. A final metadata failure can leave an earlier `started` record even
+when the SVGs exist; stderr reports incomplete diagnostics.
+
+Layout findings are reported and saved without failing the default command.
+With `--strict`, any rule violation returns failure **after saving SVGs**:
+overall completion is `failed`, `error_stage` is `validation`, and rendering is
+`complete`. Notes and review reasons do not independently fail the CLI, but the
+existing checker translates review reasons into overflow violations. Divided
+charts currently report `overview_first` because no overview is generated, so
+they also fail strict mode. Passing checks covers implemented rules only and
+does not establish full BANA compliance.
+
+Negative values, more than five series, and text outside the supported braille
+character set can fail rendering. The extracted chart is retained unchanged.
+Horizontal charts currently remain one page even when crowded; findings report
+layout problems rather than adding pagination.
+
+Exit codes are `0` for success, `1` for extraction/rendering/output or strict validation failures, and `2` for
 argument/configuration errors. Failures print concise messages to stderr. When
 possible, failures retain metadata and any decoded response, without retries or
 fallback analysis. Output-writing failures use `error_stage: "output"`; if
@@ -137,6 +177,9 @@ except GemmaExtractionError as error:
 
 Invalid constructor configuration raises `ValueError`. Extraction errors use
 stages `input`, `dependencies`, `device`, `loading`, `inference`, and `parsing`.
+The CLI additionally uses `rendering` for layout/checking/SVG-generation errors,
+`validation` for strict rule failures, and `output` for filesystem failures.
+An SVG write failure takes precedence over strict validation findings.
 Public errors and metadata contain safe messages rather than unrestricted
 upstream exception text. Raw model responses are retained separately for review.
 The Python extraction API does not write artifacts or generate SVGs; the CLI
@@ -152,6 +195,9 @@ python -m unittest tests.test_gemma_cli tests.test_gemma tests.test_vlm_response
   tests.test_contract_io tests.test_contracts tests.test_tactile
 ```
 
+CLI tests mock Gemma extraction and exercise real layouts, rule checks, SVG XML,
+pagination, strict mode, import isolation, and partial-output failure handling.
+
 In the VLM environment, also run the real offline processor initialization check:
 
 ```bash
@@ -166,8 +212,9 @@ test skips when the entire optional VLM stack is absent, but a partial installat
 (including a missing SentencePiece dependency) fails. This checks initialization
 and tokenization, not model extraction accuracy.
 
-A real-model smoke test is separate: extract one vertical and one horizontal
-image with suitable hardware/model access, inspect the chart and raw response,
+A real-model smoke test is separate: run the default rendering command on one
+vertical and one horizontal image with suitable hardware/model access, inspect
+the chart, raw response, SVG pages, and layout findings,
 and record the checkpoint/revision, configuration, timing, and hardware. The
 automated tests do not establish model extraction accuracy. Structural contract
 validation cannot establish that Gemma read the printed chart correctly.
