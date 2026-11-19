@@ -1,6 +1,6 @@
-"""Benchmark interchangeable OCR engines against authoritative PlotQA text.
+"""Benchmark OCR against PlotQA or ChartQA bar-chart text.
 
-The oracle track uses PlotQA boxes and measures recognition alone.  The
+The oracle track uses authoritative boxes and measures recognition alone. The
 end-to-end track uses YOLO boxes and therefore also measures localization.
 Run ``python -m src.baseline.ocr evaluate --help`` for the CLI.
 """
@@ -29,11 +29,13 @@ from src.contracts import Box, Detection, DetectionFrame, RecognizedText, TEXT_R
 from src.dataset.prepare_plotqa import iter_annotations, png_size
 from src.detection import (
     DEFAULT_CONFIDENCE,
+    DEFAULT_IMGSZ,
     DEFAULT_NMS_IOU,
     _validate_threshold,
     check_model_classes,
     detection_frame,
     load_model,
+    validate_imgsz,
 )
 from src.ocr import OCRBackend, run_ocr
 from src.ocr.pipeline import _read_image
@@ -43,6 +45,10 @@ DEFAULT_ANNOTATIONS = Path("data/annotations_test.json")
 DEFAULT_DATA_ROOT = Path("dataset_yolo_vbars_clean")
 DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
 DEFAULT_MATCH_IOU = 0.5
+BAR_CHART_TYPES = {
+    "vbar_categorical": "vbar_categorical", "hbar_categorical": "hbar_categorical",
+    "v_bar": "vbar_categorical", "h_bar": "hbar_categorical",
+}
 CSV_FIELDS = (
     "track", "source_key", "role", "status", "ground_truth_id", "prediction_id",
     "iou", "reference_text", "predicted_text", "ocr_confidence", "raw_exact",
@@ -241,14 +247,73 @@ def _annotation_regions(annotation: dict[str, Any]) -> Iterator[tuple[str, str, 
             yield "legend_label", str(label["text"]), label["bbox"]
 
 
+def _chartqa_regions(annotation: dict[str, Any]) -> Iterator[tuple[str, str, Any]]:
+    """ChartQA has optional titles, axis titles, and legends.
+
+    A list of title boxes must have one text entry per box; never fabricate
+    ground-truth text by stringifying a list or repeating a whole title.
+    """
+    def label_regions(role, label):
+        if not label or label.get("bbox") is None or label.get("bbox") == []:
+            return
+        boxes = label["bbox"]
+        boxes = boxes if isinstance(boxes, list) else [boxes]
+        texts = label.get("text")
+        texts = texts if isinstance(texts, list) else [texts]
+        if len(boxes) != len(texts):
+            raise ValueError(f"ChartQA {role} text and boxes differ in length")
+        for text, box in zip(texts, boxes, strict=True):
+            if text is None or isinstance(text, (dict, list)) or not str(text).strip():
+                raise ValueError(f"Missing authoritative ChartQA text for {role}")
+            yield role, str(text), box
+
+    info = annotation["general_figure_info"]
+    yield from label_regions("chart_title", info.get("title"))
+    for axis in ("x", "y"):
+        axis_info = info.get(f"{axis}_axis") or {}
+        yield from label_regions(f"{axis}_axis_title", axis_info.get("label"))
+        ticks = axis_info.get("major_labels") or {}
+        values, boxes = ticks.get("values", []), ticks.get("bboxes", [])
+        if not isinstance(values, list) or not isinstance(boxes, list) or len(values) != len(boxes):
+            raise ValueError(f"{axis}-axis major-label values and boxes differ in length")
+        for text, box in zip(values, boxes, strict=True):
+            yield from label_regions(f"{axis}_tick_label", {"text": text, "bbox": box})
+    for item in (info.get("legend") or {}).get("items", []):
+        yield from label_regions("legend_label", item.get("label"))
+
+
+def _image_sort_key(path: Path):
+    return (0, int(path.stem), path.stem) if path.stem.isdecimal() else (1, path.stem, path.stem)
+
+
 def load_truth_images(
-    annotations: Path, data_root: Path, split: str, limit: int | None = None
+    annotations: Path, data_root: Path, split: str, limit: int | None = None,
+    *, dataset_format: str = "plotqa", chart_types: Sequence[str] = ("vbar_categorical",),
 ) -> tuple[list[TruthImage], dict[str, int]]:
-    """Join a PlotQA annotation stream to images selected by a prepared split."""
+    """Join original annotations to an orientation-filtered prepared split."""
+    if dataset_format not in {"plotqa", "chartqa"}:
+        raise ValueError("dataset_format must be plotqa or chartqa")
+    if not chart_types or set(chart_types) - BAR_CHART_TYPES.keys():
+        raise ValueError("chart_types must select supported vertical/horizontal bar types")
+    selected_types = {BAR_CHART_TYPES[kind] for kind in chart_types}
     images_dir = data_root / "images" / split
-    paths = sorted(images_dir.glob("*.png"), key=lambda path: int(path.stem))
+    paths = sorted(images_dir.glob("*.png"), key=_image_sort_key)
     if not paths:
         raise ValueError(f"No PNG images found in {images_dir}")
+    manifest = data_root / f"chart_types_{split}.csv"
+    manifest_types = None
+    if manifest.is_file():
+        with manifest.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
+            if reader.fieldnames != ["image_id", "chart_type"]:
+                raise ValueError(f"Invalid chart-type manifest: {manifest}")
+            rows = list(reader)
+        manifest_types = {row["image_id"]: BAR_CHART_TYPES.get(row["chart_type"]) for row in rows}
+        if len(manifest_types) != len(rows) or set(manifest_types) != {path.stem for path in paths}:
+            raise ValueError(f"Manifest/image IDs differ in {split}")
+        paths = [path for path in paths if manifest_types[path.stem] in selected_types]
+        if not paths:
+            raise ValueError(f"No selected bar-chart images found in {images_dir}")
     if limit is not None:
         if limit < 1:
             raise ValueError("--limit must be positive")
@@ -256,22 +321,42 @@ def load_truth_images(
     requested = {path.stem: path for path in paths}
     found: dict[str, TruthImage] = {}
     raw_regions = unique_regions = duplicates = excluded_empty_boxes = 0
-    for annotation in iter_annotations(annotations):
-        image_id = str(annotation.get("image_index"))
+    if dataset_format == "plotqa":
+        if not annotations.is_file():
+            raise FileNotFoundError(f"Missing annotations: {annotations}")
+        records = ((str(item.get("image_index")), item) for item in iter_annotations(annotations))
+        extract_regions = _annotation_regions
+    else:
+        if not annotations.is_dir():
+            raise FileNotFoundError(f"Missing ChartQA annotation directory: {annotations}")
+
+        def chartqa_records():
+            for path in paths:
+                annotation_path = annotations / f"{path.stem}.json"
+                if not annotation_path.is_file():
+                    raise FileNotFoundError(f"Missing ChartQA annotation: {annotation_path}")
+                yield path.stem, json.loads(annotation_path.read_text(encoding="utf-8"))
+
+        records = chartqa_records()
+        extract_regions = _chartqa_regions
+    for image_id, annotation in records:
         path = requested.get(image_id)
         if path is None:
             continue
         if image_id in found:
             raise ValueError(f"Duplicate annotation for selected image {image_id}")
-        if annotation.get("type") != "vbar_categorical":
-            raise ValueError(f"Expected vbar_categorical annotation for image {image_id}")
+        chart_type = BAR_CHART_TYPES.get(annotation.get("type"))
+        if chart_type not in selected_types:
+            raise ValueError(f"Image {image_id} has a chart type outside --chart-types")
+        if manifest_types is not None and chart_type != manifest_types[image_id]:
+            raise ValueError(f"Manifest/annotation chart types differ for image {image_id}")
         width, height = png_size(path)
         detections: list[Detection] = []
         text_by_id: dict[str, str] = {}
         seen: set[tuple[str, str, Box]] = set()
         text_for_box: dict[tuple[str, Box], str] = {}
         image_raw = image_excluded = 0
-        for role, text, raw_box in _annotation_regions(annotation):
+        for role, text, raw_box in extract_regions(annotation):
             image_raw += 1
             if not text:
                 raise ValueError(f"Empty authoritative text for image {image_id} role {role}")
@@ -292,6 +377,8 @@ def load_truth_images(
             detection_id = f"gt-{len(detections) + 1:05d}"
             detections.append(Detection(detection_id, role, box, 1.0))
             text_by_id[detection_id] = text
+        if not detections:
+            raise ValueError(f"No scorable authoritative text for image {image_id}")
         source_key = f"{split}/{path.name}"
         image_duplicates = image_raw - image_excluded - len(detections)
         found[image_id] = TruthImage(
@@ -303,7 +390,7 @@ def load_truth_images(
         duplicates += image_duplicates
     missing = requested.keys() - found.keys()
     if missing:
-        sample = ", ".join(sorted(missing, key=int)[:5])
+        sample = ", ".join(sorted(missing)[:5])
         raise ValueError(f"Annotations are missing selected image IDs: {sample}")
     ordered = [found[path.stem] for path in paths]
     return ordered, {
@@ -487,6 +574,9 @@ def evaluate(
     nms_iou: float = DEFAULT_NMS_IOU,
     match_iou: float = DEFAULT_MATCH_IOU,
     device: str | None = None,
+    dataset_format: str = "plotqa",
+    chart_types: Sequence[str] = ("vbar_categorical",),
+    imgsz: int = DEFAULT_IMGSZ,
 ) -> dict[str, Any]:
     """Run detector and both OCR tracks, then atomically write benchmark artifacts."""
     for value, name in ((confidence, "--confidence"), (nms_iou, "--nms-iou"),
@@ -498,11 +588,11 @@ def evaluate(
         raise ValueError("--workers must be positive")
     if not isinstance(language, str) or not language.strip():
         raise ValueError("--language must be nonempty")
-    if not annotations.is_file():
-        raise FileNotFoundError(f"Missing annotations: {annotations}")
+    validate_imgsz(imgsz)
     check_model_classes(model)
     truth_images, dataset_report = load_truth_images(
-        annotations, data_root, split, limit
+        annotations, data_root, split, limit, dataset_format=dataset_format,
+        chart_types=chart_types,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_fd, csv_name = tempfile.mkstemp(prefix=".regions.", suffix=".csv", dir=output_dir)
@@ -532,7 +622,7 @@ def evaluate(
                     paths = [str(item.path) for item in current]
                     predictions = model.predict(
                         source=paths, stream=True, batch=batch, conf=confidence,
-                        iou=nms_iou, device=device, verbose=False,
+                        iou=nms_iou, device=device, verbose=False, imgsz=imgsz,
                     )
                     jobs = []
                     count = 0
@@ -578,6 +668,9 @@ def evaluate(
             "annotations": str(annotations),
             "data_root": str(data_root),
             "split": split,
+            "dataset_format": dataset_format,
+            "chart_types": sorted({BAR_CHART_TYPES[kind] for kind in chart_types}),
+            "imgsz": imgsz,
             "confidence": confidence,
             "nms_iou": nms_iou,
             "match_iou": match_iou,
@@ -636,7 +729,10 @@ def register_engine(name: str, factory: Callable[[], OCRBackend]) -> None:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    scoring = commands.add_parser("evaluate", help="Score OCR on a PlotQA split")
+    scoring = commands.add_parser("evaluate", help="Score OCR on a PlotQA or ChartQA bar split")
+    scoring.add_argument("--dataset-format", choices=("plotqa", "chartqa"), default="plotqa")
+    scoring.add_argument("--chart-types", nargs="+", choices=tuple(BAR_CHART_TYPES),
+                         default=["vbar_categorical"], help="Bar orientations to score (default vertical)")
     scoring.add_argument("--annotations", type=Path, default=DEFAULT_ANNOTATIONS)
     scoring.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     scoring.add_argument("--split", choices=("train", "val", "test"), default="test")
@@ -648,6 +744,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     scoring.add_argument("--batch", type=int, default=16)
     scoring.add_argument("--workers", type=int, default=1)
     scoring.add_argument("--device")
+    scoring.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ)
     scoring.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE)
     scoring.add_argument("--nms-iou", type=float, default=DEFAULT_NMS_IOU)
     scoring.add_argument("--match-iou", type=float, default=DEFAULT_MATCH_IOU)
@@ -663,7 +760,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         output_dir=args.output_dir, engine=args.engine, language=args.language,
         limit=args.limit, batch=args.batch, workers=args.workers,
         confidence=args.confidence, nms_iou=args.nms_iou,
-        match_iou=args.match_iou, device=args.device,
+        match_iou=args.match_iou, device=args.device, dataset_format=args.dataset_format,
+        chart_types=args.chart_types, imgsz=args.imgsz,
     )
     print(json.dumps(report, indent=2))
 

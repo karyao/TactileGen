@@ -517,6 +517,43 @@ class YoloBaselineTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "bar role"):
                 evaluate(YoloFakeModel([]), Path("best.pt"), root, "test", root / "out", role="dot")
 
+    def test_plotqa_and_chartqa_share_the_same_scoring_for_both_orientations(self):
+        for dataset, vertical, horizontal in (
+            ("plotqa", ("1", "vbar_categorical"), ("2", "hbar_categorical")),
+            ("chartqa", ("two_col_995", "v_bar"), ("00339007006077", "h_bar")),
+        ):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for class_id, (image_id, _) in enumerate((horizontal, vertical)):
+                    image, label = root / f"images/test/{image_id}.png", root / f"labels/test/{image_id}.txt"
+                    image.parent.mkdir(parents=True, exist_ok=True)
+                    label.parent.mkdir(parents=True, exist_ok=True)
+                    image.touch()
+                    label.write_text(f"{class_id} 0.5 0.5 0.4 0.2\n")
+                (root / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n")
+                (root / "chart_types_test.csv").write_text(
+                    f"image_id,chart_type\n{vertical[0]},{vertical[1]}\n{horizontal[0]},{horizontal[1]}\n")
+                for class_id, (role, (image_id, _)) in enumerate((
+                    ("horizontal_bar", horizontal), ("vertical_bar", vertical),
+                )):
+                    with self.subTest(dataset=dataset, role=role):
+                        image = root / f"images/test/{image_id}.png"
+                        result = yolo_fake_result(
+                            image, [[30, 40, 70, 60], [0, 0, 10, 10]], [class_id, class_id], [0.9, 0.8])
+                        with patch("src.baseline.yolo_bars.read_image", return_value=None), \
+                                patch("src.baseline.yolo_bars._write_overlay"):
+                            report = evaluate(YoloFakeModel([result]), Path("best.pt"), root, "test",
+                                              root / role, role=role, match_iou=(0.5, 0.75, 0.9))
+                        for metrics in report["matching_results"]:
+                            self.assertEqual(metrics["images"], 1)
+                            self.assertEqual((metrics["true_positive"], metrics["false_positive"],
+                                              metrics["false_negative"]), (1, 1, 0))
+                            self.assertEqual(metrics["precision"], 0.5)
+                            self.assertEqual(metrics["recall"], 1)
+                            self.assertAlmostEqual(metrics["f1"], 2 / 3)
+                            self.assertEqual(metrics["exact_bar_count_accuracy"], 0)
+                            self.assertEqual(metrics["sample_images"][0]["image_id"], image_id)
+
     def test_validation_reports_each_present_chart_part(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

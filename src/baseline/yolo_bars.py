@@ -2,6 +2,7 @@
 
 Vertical bars are scored by default; ``--bar-role horizontal_bar`` scores
 horizontal-bar charts the same way.
+Prepared PlotQA and ChartQA datasets use the same YOLO label schema.
 
 Use ``python -m src.baseline.yolo_bars --help`` for the CLI. Inference reads
 images only; evaluation reads labels after predictions have been made.
@@ -43,20 +44,29 @@ DEFAULT_DATA_ROOT = Path("dataset_yolo_vbars_clean")
 BAR_ROLES = ("vertical_bar", "horizontal_bar")
 # Chart type whose bars carry each role (vbar_categorical -> vertical_bar, ...).
 CHART_TYPE_FOR_ROLE = {role: chart for chart, role in CHART_MARK_ROLE.items() if role in BAR_ROLES}
+CHART_TYPE_ALIASES = {"v_bar": "vbar_categorical", "h_bar": "hbar_categorical"}
+
+
+def _image_sort_key(path: Path):
+    # Preserve numeric PlotQA order and accept ChartQA IDs such as two_col_995.
+    return (0, int(path.stem), path.stem) if path.stem.isdecimal() else (1, path.stem, path.stem)
 
 
 def _test_images(data_root: Path, split: str, limit: int | None,
                  role: str = "vertical_bar") -> list[Path]:
     images_dir = data_root / "images" / split
     manifest = data_root / f"chart_types_{split}.csv"
-    images = sorted(images_dir.glob("*.png"), key=lambda path: int(path.stem))
+    images = sorted(images_dir.glob("*.png"), key=_image_sort_key)
     if manifest.is_file():
         with manifest.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
             if reader.fieldnames != ["image_id", "chart_type"]:
                 raise ValueError(f"Invalid chart-type manifest: {manifest}")
             chart_type = CHART_TYPE_FOR_ROLE[role]
-            selected = {row["image_id"] for row in reader if row["chart_type"] == chart_type}
+            selected = {
+                row["image_id"] for row in reader
+                if CHART_TYPE_ALIASES.get(row["chart_type"], row["chart_type"]) == chart_type
+            }
         available = {path.stem for path in images}
         if selected - available:
             raise FileNotFoundError(f"Manifest references missing images in {images_dir}")
