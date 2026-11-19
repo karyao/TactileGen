@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from src.contracts import VerticalBarSpec
+from src.contracts import VerticalBarSpec, VerticalBarChart, HorizontalBarChart
+from src.contract_io import parse_bar_chart
 from src.tactile.completeness import READY, check_completeness, spec_to_chart_with_notes
 from src.tactile.layout import layout_vertical_bar_chart_pages
 from src.tactile.layout_hbar import layout_horizontal_bar_chart_pages
@@ -111,10 +113,25 @@ def generate_tactile_artifacts(
     service creates one UUID-named child and removes it if any later stage
     fails.
     """
+    return _generate_artifacts(spec, artifact_root)
+
+
+def generate_chart_tactile_artifacts(
+    chart: VerticalBarChart | HorizontalBarChart, artifact_root: Path | str,
+) -> GenerationResult:
+    """Generate preview/clean SVGs and a ZIP directly from a validated chart."""
+    return _generate_artifacts(chart, artifact_root, chart_mode=True)
+
+
+def _generate_artifacts(spec, artifact_root, *, chart_mode=False):
     root = Path(artifact_root)
     try:
-        completeness = check_completeness(spec)
-        if completeness.status != READY:
+        completeness = None if chart_mode else check_completeness(spec)
+        if chart_mode:
+            data = {"schema_version": 1, **asdict(spec), "chart_type":
+                    "hbar_categorical" if isinstance(spec, HorizontalBarChart) else "vbar_categorical"}
+            chart = parse_bar_chart(json.loads(json.dumps(data)))
+        if completeness is not None and completeness.status != READY:
             details = completeness.blockers or [
                 f"{item.field}: {item.reason}" for item in completeness.missing
             ]
@@ -134,8 +151,10 @@ def generate_tactile_artifacts(
         _failure("write", "Could not create the generation directory.", exc, job_dir)
 
     try:
-        chart, conversion_notes = spec_to_chart_with_notes(spec)
-        if spec.orientation == "horizontal":
+        conversion_notes = ()
+        if not chart_mode:
+            chart, conversion_notes = spec_to_chart_with_notes(spec)
+        if isinstance(chart, HorizontalBarChart):
             layouts = layout_horizontal_bar_chart_pages(chart, labels="auto")
         else:
             layouts = layout_vertical_bar_chart_pages(chart, x_labels="auto")
@@ -187,7 +206,7 @@ def generate_tactile_artifacts(
         output_dir=job_dir,
         pages=tuple(pages),
         zip_path=zip_path,
-        notes=_unique((*completeness.notes, *conversion_notes)),
+        notes=_unique((*(completeness.notes if completeness else ()), *conversion_notes)),
     )
 
 

@@ -104,6 +104,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_OCR_ENGINE,
         help="Initial OCR engine (default rapidocr; selectable in the browser)",
     )
+    parser.add_argument("--workflow", choices=("both", "gemma"), default="both")
+    parser.add_argument("--gemma-model-id", default="google/gemma-3-4b-it")
+    parser.add_argument("--gemma-revision")
+    parser.add_argument("--gemma-device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
+    parser.add_argument("--gemma-dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto")
+    parser.add_argument("--gemma-max-new-tokens", type=int, default=4096)
     return parser.parse_args(argv)
 
 
@@ -112,12 +118,23 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(add_help=False)
     try:
         _import_gradio()
-        model = load_model(args.weights)
+        from src.baseline.gemma import DEFAULT_MODEL_ID, GemmaChartExtractor
+        gemma_config = {
+            "model_id": args.gemma_model_id, "revision": args.gemma_revision,
+            "device": args.gemma_device, "dtype": args.gemma_dtype,
+            "max_new_tokens": args.gemma_max_new_tokens,
+        }
+        # Validate configuration before loading either model; construction is lazy.
+        GemmaChartExtractor(**gemma_config)
+        default_config = {"model_id": DEFAULT_MODEL_ID, "revision": None,
+                          "device": "auto", "dtype": "auto", "max_new_tokens": 4096}
+        options = {}
+        if args.workflow != "both" or gemma_config != default_config:
+            options = {"workflow": args.workflow, "gemma_config": gemma_config}
+        model = load_model(args.weights) if args.workflow == "both" else None
         demo = build_app(
-            model,
-            ocr_engine=args.ocr,
-            device=args.device,
-            imgsz=args.imgsz,
+            model, ocr_engine=args.ocr, device=args.device, imgsz=args.imgsz,
+            **options,
         )
         theme = borealis_theme()
     except Exception as exc:

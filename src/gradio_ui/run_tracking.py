@@ -113,9 +113,10 @@ def guarded_blocks(gr, tracker):
     """Keep revision changes and Gradio state publication mutually exclusive."""
     class GuardedBlocks(gr.Blocks):
         async def postprocess_data(self, block_fn, predictions, state=None):
+            stamps = [getattr(self, "review_stamp", None), *getattr(self, "review_stamps", ())]
+            stamp_component = next((c for c in stamps if c is not None and block_fn.outputs and block_fn.outputs[-1] is c), None)
             if not isinstance(predictions, GuardedUpdates):
-                if (getattr(self, "review_stamp", None) is not None
-                        and block_fn.outputs and block_fn.outputs[-1] is self.review_stamp
+                if (stamp_component is not None
                         and len(predictions) == len(block_fn.outputs) - 1):
                     predictions = (*predictions, gr.skip())
                 return await super().postprocess_data(block_fn, predictions, state)
@@ -136,7 +137,7 @@ def guarded_blocks(gr, tracker):
                     staged.blocks_config.blocks = dict(state.blocks_config.blocks)
                 try:
                     values = predictions
-                    if getattr(self, "review_stamp", None) is not None and block_fn.outputs and block_fn.outputs[-1] is self.review_stamp:
+                    if stamp_component is not None:
                         ticket = getattr(predictions, "ticket", None)
                         stamp = [ticket.run_id, ticket.review_revision] if ticket and ticket.run_id else None
                         values = (*predictions, gr.update(value=stamp))
@@ -161,7 +162,7 @@ def guarded_blocks(gr, tracker):
                                 '<div role="alert">Results could not be displayed. '
                                 'Analyze the chart again.</div>'
                             ), visible=True))
-                        elif component.stateful or component is getattr(self, "review_stamp", None):
+                        elif component.stateful or component is stamp_component:
                             recovery.append(gr.update(value=None))
                         else:
                             recovery.append(gr.skip())

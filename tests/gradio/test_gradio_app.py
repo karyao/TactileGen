@@ -1034,7 +1034,7 @@ class GradioUiTest(GradioTestCase):
         self.assertNotIn("RuntimeError", unexpected_updates[23]["value"])
 
         change_events = [dependency for dependency in config["dependencies"]
-                         if dependency["targets"] and dependency["targets"][0][1] == "change"]
+                         if dependency["targets"] and dependency["targets"][0] == (inference_fn.inputs[0]._id, "change")]
         self.assertEqual(len(change_events), 1)
         self.assertTrue(all(not event["queue"] for event in change_events))
         self.assertEqual(change_events[0]["api_visibility"], "private")

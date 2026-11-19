@@ -93,3 +93,43 @@ python3.12 -m pytest -q tests/gradio/
 
 The tests use small generated images and mocked detector results, so they do not
 need a real model checkpoint or a running server.
+
+## Gemma tab
+
+The app always shows **Detector + OCR** and **Gemma** tabs. Each has its own upload,
+review, downloads, and Clear action; switching tabs preserves both workflows.
+Gemma loads its checkpoint on the first extraction and shares one serialized
+extractor across browser sessions. Missing VLM packages or model access are shown
+in the tab; installing Gemma is optional for the detector workflow.
+
+```bash
+python -m pip install -r requirements-app.txt -r requirements-vlm.txt
+python -m src.gradio_app --workflow gemma
+```
+
+Gemma-only startup skips detector weights; it still needs the app dependencies.
+The default `--workflow both` starts the normal detector and also provides Gemma.
+Configure Gemma at startup with `--gemma-model-id`, `--gemma-revision`,
+`--gemma-device`, `--gemma-dtype`, and `--gemma-max-new-tokens`. Defaults match the
+[Gemma baseline](gemma_baseline.md). For gated checkpoints, accept the model terms
+and authenticate locally with `hf auth login` before extracting.
+
+In Gemma, upload → Extract chart → review labels and numeric values → Generate
+Gemma tactile pages. Edit only the Text/Value columns. Category/series order and
+counts stay fixed. Blank, boolean, NaN, and infinite values are rejected. Original
+extraction files remain separate from the reviewed chart JSON. Placeholder titles
+are identified in the review status. The gallery contains annotated preview SVGs;
+the ZIP contains clean SVGs. Layout findings require review before production.
+
+`gradio_ui/gemma.py` owns the Gemma backend, chart review, and callbacks. The shared
+`generate_chart_tactile_artifacts(chart, artifact_root)` service renders chart
+contracts directly; the detector continues using the existing spec-based API.
+Run tickets and review revisions prevent late extraction/generation from restoring
+cleared or edited results. Clear/unload discard session artifacts, not cached model
+weights. Clearing while extraction runs discards its result without promising to
+interrupt GPU inference.
+
+Automated tab tests inject inference and exercise real Gradio file publication
+and tactile rendering. A real-model acceptance check remains separate: extract
+one vertical and one horizontal chart, correct a value, inspect the preview and
+reviewed chart, and download the clean ZIP.
