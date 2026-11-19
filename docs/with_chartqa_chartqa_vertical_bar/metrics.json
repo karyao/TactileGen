@@ -1,0 +1,205 @@
+{
+  "matching_results": [
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_chartqa_bars_eval",
+      "split": "test",
+      "class": "vertical_bar",
+      "confidence": 0.25,
+      "iou": 0.5,
+      "imgsz": 640,
+      "images": 759,
+      "true_positive": 8954,
+      "false_positive": 136,
+      "false_negative": 738,
+      "precision": 0.985038503850385,
+      "recall": 0.9238547255468428,
+      "f1": 0.9534660845490363,
+      "exact_bar_count_accuracy": 0.9314888010540184,
+      "sample_images": [
+        {
+          "image_id": "OECD_ADEQUACY_OF_MINIMUM_INCOME_BENEFITS_FRA_NLD_SVK_000010",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_AGRICULTURAL_LAND_CAN_ESP_KAZ_KOR_LUX_000017",
+          "predicted": 3,
+          "actual": 5,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_BENEFITS_IN_UNEMPLOYMENT,_SHARE_OF_PREVIOUS_INCOME_BGR_IRL_ISR_LUX_MLT_000003",
+          "predicted": 5,
+          "actual": 5,
+          "matched": 5
+        },
+        {
+          "image_id": "OECD_BUILT-UP_AREA_MNE_SLV_YEM_000001",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_DEATHS_FROM_CANCER_COL_CRI_SVN_000015",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_FINANCIAL_DISINCENTIVE_TO_RETURN_TO_WORK_AUS_DNK_LUX_NOR_SVN_000002",
+          "predicted": 5,
+          "actual": 5,
+          "matched": 5
+        },
+        {
+          "image_id": "OECD_FOREIGN-BORN_PARTICIPATION_RATES_CAN_ISR_PRT_000008",
+          "predicted": 2,
+          "actual": 2,
+          "matched": 2
+        },
+        {
+          "image_id": "OECD_FREIGHT_TRANSPORT_FIN_HUN_IND_PRT_RUS_000027",
+          "predicted": 3,
+          "actual": 5,
+          "matched": 2
+        }
+      ]
+    },
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_chartqa_bars_eval",
+      "split": "test",
+      "class": "vertical_bar",
+      "confidence": 0.25,
+      "iou": 0.75,
+      "imgsz": 640,
+      "images": 759,
+      "true_positive": 8912,
+      "false_positive": 178,
+      "false_negative": 780,
+      "precision": 0.9804180418041805,
+      "recall": 0.9195212546430045,
+      "f1": 0.9489937173889895,
+      "exact_bar_count_accuracy": 0.9314888010540184,
+      "sample_images": [
+        {
+          "image_id": "OECD_ADEQUACY_OF_MINIMUM_INCOME_BENEFITS_FRA_NLD_SVK_000010",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_AGRICULTURAL_LAND_CAN_ESP_KAZ_KOR_LUX_000017",
+          "predicted": 3,
+          "actual": 5,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_BENEFITS_IN_UNEMPLOYMENT,_SHARE_OF_PREVIOUS_INCOME_BGR_IRL_ISR_LUX_MLT_000003",
+          "predicted": 5,
+          "actual": 5,
+          "matched": 5
+        },
+        {
+          "image_id": "OECD_BUILT-UP_AREA_MNE_SLV_YEM_000001",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_DEATHS_FROM_CANCER_COL_CRI_SVN_000015",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_FINANCIAL_DISINCENTIVE_TO_RETURN_TO_WORK_AUS_DNK_LUX_NOR_SVN_000002",
+          "predicted": 5,
+          "actual": 5,
+          "matched": 5
+        },
+        {
+          "image_id": "OECD_FOREIGN-BORN_PARTICIPATION_RATES_CAN_ISR_PRT_000008",
+          "predicted": 2,
+          "actual": 2,
+          "matched": 2
+        },
+        {
+          "image_id": "OECD_FREIGHT_TRANSPORT_FIN_HUN_IND_PRT_RUS_000027",
+          "predicted": 3,
+          "actual": 5,
+          "matched": 2
+        }
+      ]
+    },
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_chartqa_bars_eval",
+      "split": "test",
+      "class": "vertical_bar",
+      "confidence": 0.25,
+      "iou": 0.9,
+      "imgsz": 640,
+      "images": 759,
+      "true_positive": 8452,
+      "false_positive": 638,
+      "false_negative": 1240,
+      "precision": 0.9298129812981298,
+      "recall": 0.8720594304581097,
+      "f1": 0.9000106484932381,
+      "exact_bar_count_accuracy": 0.9314888010540184,
+      "sample_images": [
+        {
+          "image_id": "OECD_ADEQUACY_OF_MINIMUM_INCOME_BENEFITS_FRA_NLD_SVK_000010",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_AGRICULTURAL_LAND_CAN_ESP_KAZ_KOR_LUX_000017",
+          "predicted": 3,
+          "actual": 5,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_BENEFITS_IN_UNEMPLOYMENT,_SHARE_OF_PREVIOUS_INCOME_BGR_IRL_ISR_LUX_MLT_000003",
+          "predicted": 5,
+          "actual": 5,
+          "matched": 5
+        },
+        {
+          "image_id": "OECD_BUILT-UP_AREA_MNE_SLV_YEM_000001",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_DEATHS_FROM_CANCER_COL_CRI_SVN_000015",
+          "predicted": 3,
+          "actual": 3,
+          "matched": 3
+        },
+        {
+          "image_id": "OECD_FINANCIAL_DISINCENTIVE_TO_RETURN_TO_WORK_AUS_DNK_LUX_NOR_SVN_000002",
+          "predicted": 5,
+          "actual": 5,
+          "matched": 5
+        },
+        {
+          "image_id": "OECD_FOREIGN-BORN_PARTICIPATION_RATES_CAN_ISR_PRT_000008",
+          "predicted": 2,
+          "actual": 2,
+          "matched": 2
+        },
+        {
+          "image_id": "OECD_FREIGHT_TRANSPORT_FIN_HUN_IND_PRT_RUS_000027",
+          "predicted": 3,
+          "actual": 5,
+          "matched": 2
+        }
+      ]
+    }
+  ]
+}

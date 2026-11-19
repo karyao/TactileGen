@@ -1,0 +1,205 @@
+{
+  "matching_results": [
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_chartqa_bars_eval",
+      "split": "test",
+      "class": "horizontal_bar",
+      "confidence": 0.25,
+      "iou": 0.5,
+      "imgsz": 640,
+      "images": 461,
+      "true_positive": 5339,
+      "false_positive": 497,
+      "false_negative": 378,
+      "precision": 0.9148389307745031,
+      "recall": 0.9338814063319923,
+      "f1": 0.9242620964251711,
+      "exact_bar_count_accuracy": 0.7939262472885033,
+      "sample_images": [
+        {
+          "image_id": "166",
+          "predicted": 7,
+          "actual": 7,
+          "matched": 7
+        },
+        {
+          "image_id": "277",
+          "predicted": 7,
+          "actual": 6,
+          "matched": 6
+        },
+        {
+          "image_id": "302",
+          "predicted": 4,
+          "actual": 4,
+          "matched": 4
+        },
+        {
+          "image_id": "619",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        },
+        {
+          "image_id": "632",
+          "predicted": 6,
+          "actual": 6,
+          "matched": 6
+        },
+        {
+          "image_id": "689",
+          "predicted": 27,
+          "actual": 27,
+          "matched": 20
+        },
+        {
+          "image_id": "735",
+          "predicted": 6,
+          "actual": 6,
+          "matched": 6
+        },
+        {
+          "image_id": "848",
+          "predicted": 16,
+          "actual": 15,
+          "matched": 13
+        }
+      ]
+    },
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_chartqa_bars_eval",
+      "split": "test",
+      "class": "horizontal_bar",
+      "confidence": 0.25,
+      "iou": 0.75,
+      "imgsz": 640,
+      "images": 461,
+      "true_positive": 5173,
+      "false_positive": 663,
+      "false_negative": 544,
+      "precision": 0.8863947909527073,
+      "recall": 0.9048451985306979,
+      "f1": 0.8955249718687787,
+      "exact_bar_count_accuracy": 0.7939262472885033,
+      "sample_images": [
+        {
+          "image_id": "166",
+          "predicted": 7,
+          "actual": 7,
+          "matched": 7
+        },
+        {
+          "image_id": "277",
+          "predicted": 7,
+          "actual": 6,
+          "matched": 5
+        },
+        {
+          "image_id": "302",
+          "predicted": 4,
+          "actual": 4,
+          "matched": 4
+        },
+        {
+          "image_id": "619",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        },
+        {
+          "image_id": "632",
+          "predicted": 6,
+          "actual": 6,
+          "matched": 6
+        },
+        {
+          "image_id": "689",
+          "predicted": 27,
+          "actual": 27,
+          "matched": 19
+        },
+        {
+          "image_id": "735",
+          "predicted": 6,
+          "actual": 6,
+          "matched": 6
+        },
+        {
+          "image_id": "848",
+          "predicted": 16,
+          "actual": 15,
+          "matched": 11
+        }
+      ]
+    },
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_chartqa_bars_eval",
+      "split": "test",
+      "class": "horizontal_bar",
+      "confidence": 0.25,
+      "iou": 0.9,
+      "imgsz": 640,
+      "images": 461,
+      "true_positive": 4284,
+      "false_positive": 1552,
+      "false_negative": 1433,
+      "precision": 0.7340644276901988,
+      "recall": 0.7493440615707538,
+      "f1": 0.7416255518047261,
+      "exact_bar_count_accuracy": 0.7939262472885033,
+      "sample_images": [
+        {
+          "image_id": "166",
+          "predicted": 7,
+          "actual": 7,
+          "matched": 3
+        },
+        {
+          "image_id": "277",
+          "predicted": 7,
+          "actual": 6,
+          "matched": 1
+        },
+        {
+          "image_id": "302",
+          "predicted": 4,
+          "actual": 4,
+          "matched": 2
+        },
+        {
+          "image_id": "619",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 1
+        },
+        {
+          "image_id": "632",
+          "predicted": 6,
+          "actual": 6,
+          "matched": 3
+        },
+        {
+          "image_id": "689",
+          "predicted": 27,
+          "actual": 27,
+          "matched": 6
+        },
+        {
+          "image_id": "735",
+          "predicted": 6,
+          "actual": 6,
+          "matched": 2
+        },
+        {
+          "image_id": "848",
+          "predicted": 16,
+          "actual": 15,
+          "matched": 1
+        }
+      ]
+    }
+  ]
+}
