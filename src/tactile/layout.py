@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
-from src.contracts import BarSeries, VerticalBarChart, effective_omit_legend
+from src.contracts import BarSeries, HorizontalBarChart, VerticalBarChart, effective_omit_legend
 from src.tactile.braille import BLANK, TN_CLOSE, TN_OPEN, Cell, to_braille
 from src.tactile.keys import abbreviation_keys, numeric_keys
 from src.tactile.value_labels import plan_value_labels
@@ -54,6 +54,7 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     PAGE_HEIGHT,
     PAGE_WIDTH,
     TEXTURES,
+    TEXTURE_TILE,
     TN_FIRST_CELL,
     TN_RUNOVER_CELL,
     Y_HEADING_CLEARANCE,
@@ -328,8 +329,8 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
                                     value_labels: bool = True) -> list[TactileLayout]:
     """One page when it passes every rule; otherwise sections (BANA §3.9).
 
-    A series key that would leave the plot under ``MIN_PLOT_HEIGHT`` goes on a
-    key page before a single graph page instead.
+    Prefer one page when its checks pass and positive bars have enough exposed
+    height for a texture tile. Otherwise try moving the series key first.
 
     The categories are divided into the fewest consecutive sections whose
     pages each pass every rule except ``overview_first``, trying the x-label
@@ -344,19 +345,22 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
     from src.tactile.rules import check_layout   # rules imports this module
 
     single = layout_vertical_bar_chart(chart, x_labels=x_labels, value_labels=value_labels)
-    if _has_series_key(chart) and _plot_height(single) < MIN_PLOT_HEIGHT:
-        # The key, notes and title leave too little plot: move them to a key
-        # page before the graph page (§6.6.6.4), as for a divided graph.
-        graph = layout_vertical_bar_chart(chart, x_labels=x_labels, key_on_page=True,
-                                          value_labels=value_labels)
-        if _plot_height(graph) > _plot_height(single) and not check_layout(graph):
-            if _plot_height(graph) < MIN_PLOT_HEIGHT:
-                graph = replace(graph, needs_review=graph.needs_review + (
-                    f"the plot is {_plot_height(graph):.0f} mm high even with the key on its "
-                    f"own page (minimum {MIN_PLOT_HEIGHT:.0f} mm)",))
-            return [_key_page(chart, ()), graph]
-    if not check_layout(single):
+    single_violations = check_layout(single)
+    if not single_violations and _minimum_exposed_bar_height(single) >= TEXTURE_TILE:
         return [single]
+    if _has_series_key(chart):
+        try:
+            graph = layout_vertical_bar_chart(chart, x_labels=x_labels, key_on_page=True,
+                                              value_labels=value_labels)
+            key = _key_page(chart, ())
+            if not check_layout(graph) and not check_layout(key) and (
+                    single_violations or
+                    _minimum_exposed_bar_height(graph) > _minimum_exposed_bar_height(single)):
+                return [key, _bar_visibility_note(graph)]
+        except ValueError:
+            pass  # Try category sections if a complete graph/key cannot be built.
+    if not single_violations:
+        return [_bar_visibility_note(single)]
     modes = X_LABEL_MODES if x_labels == "auto" else (x_labels,)
     n_cat = len(chart.categories)
     value_max = max(v for series in chart.series for v in series.values)
@@ -369,8 +373,27 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
             except ValueError:
                 continue
             if all(v.rule.id == "overview_first" for page in pages for v in check_layout(page)):
-                return pages
-    return [single]
+                return [_bar_visibility_note(page) for page in pages]
+    return [_bar_visibility_note(single)]
+
+
+def _minimum_exposed_bar_height(layout: TactileLayout) -> float:
+    """Smallest positive bar interior above its outline/baseline, in mm.
+
+    One texture tile of exposed height is an application heuristic, not a BANA
+    rule. Zero values and absent series do not require texture-bearing height.
+    """
+    bottom = max(BAR_OUTLINE_WIDTH, (AXIS_WIDTH + BAR_OUTLINE_WIDTH) / 2)
+    return min((bar.height - bottom for bar in layout.bars if bar.value > 0),
+               default=float("inf"))
+
+
+def _bar_visibility_note(layout: TactileLayout) -> TactileLayout:
+    if _minimum_exposed_bar_height(layout) >= TEXTURE_TILE:
+        return layout
+    return replace(layout, notes=layout.notes + (
+        "Small positive bars have less than one texture tile of exposed height; "
+        "tactile review is needed (application heuristic, not a BANA rule).",))
 
 
 def _plot_height(layout: TactileLayout) -> float:
@@ -739,7 +762,8 @@ def _value_notes(chart, rescued, omitted, estimate) -> tuple[str, ...]:
     if estimate:
         notes.append("Bar values are estimated from the print.")
     if rescued:
-        notes.append("No value is shown for bars whose height was measured without a "
+        dimension = "length" if isinstance(chart, HorizontalBarChart) else "height"
+        notes.append(f"No value is shown for bars whose {dimension} was measured without a "
                      f"detected bar: {_bar_names(chart, rescued)}.")
     if omitted:
         notes.append(f"No value is shown for bars lacking space: "
@@ -945,18 +969,21 @@ def _cut_grid(lines: list[Line], labels) -> list[Line]:
             out.append(line)
             continue
         reach = LABEL_MIN_GAP + line.width / 2 + 0.02
-        cuts = sorted((l.bounds.x1 - reach, l.bounds.x2 + reach) for l in labels
-                      if l.bounds.y1 - reach < line.y1 < l.bounds.y2 + reach)
-        start, pieces = line.x1, []
-        for x1, x2 in cuts:
-            if x1 > start:
-                pieces.append((start, x1))
-            start = max(start, x2)
-        if start < line.x2:
-            pieces.append((start, line.x2))
-        if not cuts:
-            pieces = [(line.x1, line.x2)]
-        for k, (x1, x2) in enumerate(pieces):
-            if x2 - x1 >= LABEL_MIN_GAP:
-                out.append(replace(line, id=line.id if k == 0 else f"{line.id}-{k}", x1=x1, x2=x2))
+        vertical = line.x1 == line.x2
+        cuts = sorted((l.bounds.y1 - reach, l.bounds.y2 + reach) for l in labels
+                      if l.bounds.x1 - reach < line.x1 < l.bounds.x2 + reach) if vertical else sorted(
+                          (l.bounds.x1 - reach, l.bounds.x2 + reach) for l in labels
+                          if l.bounds.y1 - reach < line.y1 < l.bounds.y2 + reach)
+        end = line.y2 if vertical else line.x2
+        start, pieces = line.y1 if vertical else line.x1, []
+        for low, high in cuts:
+            if low > start:
+                pieces.append((start, min(low, end)))
+            start = max(start, high)
+        if start < end:
+            pieces.append((start, end))
+        for k, (low, high) in enumerate(pieces):
+            if high - low >= LABEL_MIN_GAP:
+                coordinates = dict(y1=low, y2=high) if vertical else dict(x1=low, x2=high)
+                out.append(replace(line, id=line.id if k == 0 else f"{line.id}-{k}", **coordinates))
     return out

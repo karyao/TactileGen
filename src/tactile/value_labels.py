@@ -1,6 +1,6 @@
-"""Braille value labels for the bars of a vertical bar chart.
+"""Braille value labels for the bars of a bar chart.
 
-Text: a value is rounded to the decimals of the y-axis tick step, then to at most
+Text: a value is rounded to the decimals of the value-axis tick step, then to at most
 ``max(VALUE_LABEL_SIG_DIGITS, significant digits of the ticks)`` significant digits;
 a nonzero value is never shown as 0 (it keeps one significant digit instead).
 
@@ -10,6 +10,8 @@ enough surrounding clearance is tried with fewer decimals (the same for every
 label on the page, down to the fewest that keep each value nonzero), then raised on a 3/4 inch lead line
 (§3.4.3.12), then omitted. The planner checks real distances to every bar, line,
 label and key sample, so the layout passes ``label_clearance`` by construction.
+Horizontal labels are vertically centred to the right of the bar, with rightward
+lead lines. Their text and collision policies are otherwise identical.
 Negative values are formatted but not placed: the layout rejects them.
 """
 from __future__ import annotations
@@ -68,12 +70,14 @@ class ValuePlan:
 
 
 def plan_value_labels(bars, skipped, forced_omit, fixed_labels, fixed_lines, samples, usable,
-                      step: float, tick_texts: list[str], make_label, make_lead) -> ValuePlan:
+                      step: float, tick_texts: list[str], make_label, make_lead, *,
+                      orientation: str = "vertical") -> ValuePlan:
     """Choose text and position for the label of every bar not in ``skipped``.
 
     ``fixed_*`` are the page's other labels, non-grid lines (grid lines are cut
     around labels afterwards) and key samples. ``make_label(id, text, x, y, owner)``
-    and ``make_lead(id, x, y1, y2)`` build the layout elements.
+    and ``make_lead(id, x, y1, y2)`` build vertical elements. Horizontal leads
+    use ``make_lead(id, x1, y1, x2, y2)``.
     """
     todo = [b for b in bars if b.id not in skipped]
     cap = significant_cap(tick_texts)
@@ -92,7 +96,7 @@ def plan_value_labels(bars, skipped, forced_omit, fixed_labels, fixed_lines, sam
             made = None
             for lift in ((0.0, LEAD_LINE_LENGTH) if stagger else (0.0,)):
                 made = _try(bar, text, lift, bars, labels, leads, fixed_labels, fixed_lines,
-                            samples, usable, make_label, make_lead)
+                            samples, usable, make_label, make_lead, orientation)
                 if made:
                     break
             if made is None:
@@ -112,19 +116,31 @@ def plan_value_labels(bars, skipped, forced_omit, fixed_labels, fixed_lines, sam
 
 
 def _try(bar, text, lift, bars, placed, leads, fixed_labels, fixed_lines, samples, usable,
-         make_label, make_lead):
+         make_label, make_lead, orientation):
     """One candidate: directly above the bar (``lift`` 0) or raised on a lead line."""
-    centre = bar.x + bar.width / 2
-    top = bar.bounds.y1
     owner, lead = bar.id, None
-    bottom = top - LABEL_MIN_GAP - _EPS - lift
-    if lift:
-        lead = make_lead(f"lead-{bar.series_index}-{bar.category_index}", centre, top, top - lift)
-        owner = lead.id
-        bottom -= lead.width / 2         # the clearance is measured from the line's edge
-    label = make_label(f"value-{bar.series_index}-{bar.category_index}", text, 0.0,
-                       bottom - LABEL_HEIGHT, owner)
-    label = _centred(label, centre, make_label)
+    if orientation == "horizontal":
+        centre = bar.y + bar.height / 2
+        edge = bar.bounds.x2
+        left = edge + LABEL_MIN_GAP + _EPS + lift
+        if lift:
+            lead = make_lead(f"lead-{bar.series_index}-{bar.category_index}",
+                             edge, centre, edge + lift, centre)
+            owner = lead.id
+            left += lead.width / 2
+        label = make_label(f"value-{bar.series_index}-{bar.category_index}", text,
+                           left, centre - LABEL_HEIGHT / 2, owner)
+    else:
+        centre = bar.x + bar.width / 2
+        top = bar.bounds.y1
+        bottom = top - LABEL_MIN_GAP - _EPS - lift
+        if lift:
+            lead = make_lead(f"lead-{bar.series_index}-{bar.category_index}", centre, top, top - lift)
+            owner = lead.id
+            bottom -= lead.width / 2
+        label = make_label(f"value-{bar.series_index}-{bar.category_index}", text, 0.0,
+                           bottom - LABEL_HEIGHT, owner)
+        label = _centred(label, centre, make_label)
     box = label.bounds
     if not box.inside(usable):
         return None

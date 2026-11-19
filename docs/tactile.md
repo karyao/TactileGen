@@ -58,10 +58,20 @@ Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 A legend entry with no visible bars (`BarSeries.has_bars` false) is keyed like any other series
 and takes no bar slot. The page gets a transcriber's note before the key, "No bars are visible for:
 <names>." (never "zero": the data may be below the axis), on the page that carries the key. Because the key and
-note take space, the plot is shorter than for the same chart without them. When that leaves less than
-`MIN_PLOT_HEIGHT` (5 × `GRID_MIN_SPACING`, 47.6 mm: room for 5 grid intervals; not from BANA), the title, notes and
-series key go on a key page before the graph page, the same key page a divided graph uses, and the
-graph page keeps the height. A single graph page with a short plot and no series key is unchanged.
+note take space, the plot is shorter than for the same chart without them. Vertical charts prefer
+one page when all implemented checks pass and every positive bar has at least one `TEXTURE_TILE`
+of exposed height above its bottom outline/baseline. Zero values and absent series are ignored.
+Exposed height is `bar.height - max(BAR_OUTLINE_WIDTH, (AXIS_WIDTH + BAR_OUTLINE_WIDTH) / 2)`.
+This is an application readability heuristic, not a BANA requirement or a guarantee of tactile
+readability; embossed output still needs physical review.
+
+Otherwise the title, notes and series key are tried on a preceding key page. Both pages must
+pass the checks, and the change must resolve the original violations or increase the smallest
+positive bar's exposed height. Remaining small bars receive an advisory layout note requesting
+tactile review. If no acceptable complete-chart arrangement exists, category splitting is tried
+for rule violations; otherwise the original one-page layout is retained with the advisory.
+`MIN_PLOT_HEIGHT` (47.6 mm, not from BANA) remains a preference for value-label placement, not
+a trigger for moving the vertical chart's key by itself.
 
 The layout never drops content to make a chart fit. If a chart breaks a
 limit (for example 36 bars on one page), the page is still produced and the
@@ -213,3 +223,18 @@ without labels; a chart with no room for it keeps the layout it had before and t
 Labels may be wider than their bars; placement depends on clearance from surrounding elements and page boundaries.
 Omitted labels are named in a note explaining that space is insufficient.
 Negative values are formatted (`-13`) but not placed: the layout still rejects negative bars.
+
+
+Horizontal charts also enable bar values by default:
+`layout_horizontal_bar_chart(chart, value_labels=True)` and
+`layout_horizontal_bar_chart_pages(chart, value_labels=True)`. Each braille value
+is centred vertically to the right of its bar, with 1/8 inch clearance. The plot
+reserves space on the right for the widest value; the x-axis tick step controls
+precision. The same precision reduction, 3/4 inch lead-line, rescued-value and
+omission-note behavior applies, with lead lines extending right. Vertical grid
+lines are interrupted around value labels to preserve clearance. When labels
+cannot fit without compromising bar thickness or plot width, the original
+unlabelled layout is retained with a no-room note. Set `value_labels=False` on
+either entry point to preserve the original horizontal layout. The pages entry point can move the key and value notes onto a preceding page
+when this allows more values to fit while passing the layout rules. The graph
+itself remains on one page; category sections and negative bars are not supported.

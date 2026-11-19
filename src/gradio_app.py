@@ -25,7 +25,7 @@ from src.gradio_ui.analysis import (
     decode_upload,
     analyze_image,
 )
-from src.gradio_ui.dependencies import import_gradio as _import_gradio
+from src.gradio_ui.dependencies import import_gradio as _import_gradio, launch_app
 from src.gradio_ui.formatting import (
     generation_report,
     ready_status,
@@ -122,7 +122,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         theme = borealis_theme()
     except Exception as exc:
         parser.error(f"Could not start TactileGen: {exc}")
-    demo.launch(
+    launch_app(
+        demo,
         server_name=args.host,
         server_port=args.port,
         share=False,
@@ -130,8 +131,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_file_size=MAX_UPLOAD_BYTES,
         theme=theme,
         css=BOREALIS_CSS,
-        run_history=False,
-        enable_monitoring=False,
     )
 
 

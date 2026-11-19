@@ -101,7 +101,8 @@ RULES = {rule.id: rule for rule in (
          "Labels of horizontal bars are left-aligned, with one blank cell and at least two "
          "guide dots (dot 5) before the vertical axis."),
     Rule("value_label_clearance", "§3.4.3.12",
-         "A bar value label is centred on its bar, 1/8 to 1/4 inch above it, or raised on a "
+         "A bar value label is centred above a vertical bar or right of a horizontal bar, "
+         "1/8 to 1/4 inch away, or extended on a "
          "lead line of 3/4 inch that touches the bar and ends 1/8 to 1/4 inch from the label. "
          "(Clearance from everything else is label_clearance.)"),
 )}
@@ -345,21 +346,36 @@ def _value_labels(layout):
         if bar is None:
             yield _violation("value_label_clearance", f"{label.id} has no bar", label.id)
             continue
-        centre = (bar.bounds.x1 + bar.bounds.x2) / 2
-        if abs((label.bounds.x1 + label.bounds.x2) / 2 - centre) > TOLERANCE:
+        horizontal = _horizontal(layout)
+        centre = ((bar.bounds.y1 + bar.bounds.y2) / 2 if horizontal
+                  else (bar.bounds.x1 + bar.bounds.x2) / 2)
+        label_centre = ((label.bounds.y1 + label.bounds.y2) / 2 if horizontal
+                        else (label.bounds.x1 + label.bounds.x2) / 2)
+        if abs(label_centre - centre) > TOLERANCE:
             yield _violation("value_label_clearance", f"{label.id} is not centred on {bar.id}",
                              label.id, bar.id)
         if raised:
-            if abs(owner.y1 - bar.bounds.y1) > TOLERANCE or abs(owner.x1 - centre) > TOLERANCE:
+            attached = (abs(owner.x1 - bar.bounds.x2) <= TOLERANCE
+                        and abs(owner.y1 - centre) <= TOLERANCE
+                        and abs(owner.y2 - centre) <= TOLERANCE
+                        and owner.x2 > owner.x1) if horizontal else (
+                            abs(owner.y1 - bar.bounds.y1) <= TOLERANCE
+                            and abs(owner.x1 - centre) <= TOLERANCE)
+            if not attached:
                 yield _violation("value_label_clearance",
-                                 f"{owner.id} does not start at the top of {bar.id}", owner.id, bar.id)
+                                 f"{owner.id} does not start at the end of {bar.id}", owner.id, bar.id)
             if owner.length < LEAD_LINE_LENGTH - TOLERANCE:
                 yield _violation("value_label_clearance", f"{owner.id} is {owner.length:.1f} mm "
                                  f"long (min {LEAD_LINE_LENGTH:.1f} mm)", owner.id)
+            if horizontal and label.bounds.x1 < owner.bounds.x2:
+                yield _violation("value_label_clearance", f"{label.id} is not right of its lead",
+                                 label.id, owner.id)
             gap = label.bounds.gap(owner.bounds)
         else:
-            if label.bounds.y2 > bar.bounds.y1:
-                yield _violation("value_label_clearance", f"{label.id} is not above {bar.id}",
+            wrong_side = (label.bounds.x1 < bar.bounds.x2 if horizontal
+                          else label.bounds.y2 > bar.bounds.y1)
+            if wrong_side:
+                yield _violation("value_label_clearance", f"{label.id} is on the wrong side of {bar.id}",
                                  label.id, bar.id)
             gap = label.bounds.gap(bar.bounds)
         if not LABEL_MIN_GAP - TOLERANCE <= gap <= LABEL_MAX_GAP + TOLERANCE:

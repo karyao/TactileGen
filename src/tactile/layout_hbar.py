@@ -33,6 +33,7 @@ from src.tactile.constants import (
     AXIS_STRENGTH,
     AXIS_WIDTH,
     BAR_GAP,
+    BAR_MIN_WIDTH,
     BAR_OUTLINE_WIDTH,
     CATEGORY_COLUMN_MAX_CELLS,
     CELL_PITCH,
@@ -46,6 +47,9 @@ from src.tactile.constants import (
     LABEL_GAP,
     LABEL_HEIGHT,
     LABEL_MIN_GAP,
+    LEAD_LINE_LENGTH,
+    LEAD_STRENGTH,
+    MIN_PLOT_HEIGHT,
     LINE_PITCH,
     MAX_AREA_TEXTURES,
     MAX_GRID_INTERVALS,
@@ -62,6 +66,9 @@ from src.tactile.layout import (
     Line,
     Rect,
     TactileLayout,
+    _cut_grid,
+    _key_page,
+    _value_notes,
     _category_key,
     _category_texts,
     _format_value,
@@ -77,28 +84,32 @@ from src.tactile.layout import (
     wrap_cells,
 )
 
+from src.tactile.value_labels import plan_value_labels, value_text, tick_decimals, significant_cap
+
 # From a label's left edge to the centre of dots 4-5-6 of its first cell.
 FIRST_CELL_RIGHT_COLUMN = DOT_DIAMETER / 2 + DOT_PITCH
 
 
 def layout_horizontal_bar_chart(chart: HorizontalBarChart, *,
-                                labels: str = "auto") -> TactileLayout:
+                                labels: str = "auto",
+                                value_labels: bool = True) -> TactileLayout:
     """Build a one-page tactile layout for a horizontal bar chart.
 
     ``labels`` is ``"auto"`` (full names, then abbreviation keys, then
     numeric keys, BANA §5.8) or one mode from ``X_LABEL_MODES``. Like the
     vertical layout it never drops content: when nothing fits, the last page
-    that could be built is returned with ``needs_review`` set.
+    that could be built is returned with ``needs_review`` set. Values appear
+    to the right of bars by default; ``value_labels=False`` preserves the plain layout.
     """
     if labels != "auto":
         if labels not in X_LABEL_MODES:
             raise ValueError(f"labels must be 'auto' or one of {X_LABEL_MODES}")
-        return _layout(chart, labels)
+        return _layout(chart, labels, value_labels=value_labels)
     built: TactileLayout | None = None
     tried: list[str] = []
     for mode in X_LABEL_MODES:
         try:
-            layout = _layout(chart, mode)
+            layout = _layout(chart, mode, value_labels=value_labels)
         except ValueError as exc:
             tried.append(f"{mode}: {exc}")
             continue
@@ -113,10 +124,43 @@ def layout_horizontal_bar_chart(chart: HorizontalBarChart, *,
 
 
 def layout_horizontal_bar_chart_pages(chart: HorizontalBarChart, *,
-                                      labels: str = "auto") -> list[TactileLayout]:
-    """Pages for the chart. Dividing into sections (§3.9) is not done yet, so
-    this is always one page; the rule checker reports anything that breaks."""
-    return [layout_horizontal_bar_chart(chart, labels=labels)]
+                                      labels: str = "auto",
+                                      value_labels: bool = True) -> list[TactileLayout]:
+    """Keep the graph on one page, moving its key/notes to a preceding page
+    when that frees space for more bar values. Category sections are not supported.
+    """
+    single = layout_horizontal_bar_chart(chart, labels=labels, value_labels=value_labels)
+    if not value_labels:
+        return [single]
+    eligible = {f"bar-{s}-{j}" for s, series in enumerate(chart.series) if series.has_bars
+                for j, flag in enumerate(series.rescued or (False,) * len(series.values)) if not flag}
+    def labelled(page):
+        return {f"bar-{label.id[len('value-'):]}" for label in page.labels if label.role == "value"}
+    if eligible <= labelled(single):
+        return [single]
+    from src.tactile.rules import check_layout
+    best = None
+    for mode in X_LABEL_MODES if labels == "auto" else (labels,):
+        try:
+            graph = _layout(chart, mode, series_key_elsewhere=True)
+            if check_layout(graph) or not _categories_fit(graph):
+                continue
+            shown = labelled(graph)
+            if len(shown) <= len(labelled(single)):
+                continue
+            rescued = {f"bar-{s}-{j}" for s, series in enumerate(chart.series)
+                       for j, flag in enumerate(series.rescued) if flag}
+            key = replace(_key_page(chart, _value_notes(chart, rescued, eligible - shown, bool(shown))),
+                          orientation="horizontal")
+            if check_layout(key):
+                continue
+        except ValueError:
+            continue
+        if best is None or len(shown) > len(labelled(best[1])):
+            best = [key, graph]
+        if eligible <= shown:
+            break
+    return best if best is not None else [single]
 
 
 def _categories_fit(layout: TactileLayout) -> bool:
@@ -146,7 +190,45 @@ def _value_scale(maximum: float, axis_x: float, right_limit: float):
     raise ValueError("the values do not fit along the horizontal axis")
 
 
-def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
+def _layout(chart: HorizontalBarChart, mode: str, *, value_labels: bool = True,
+            series_key_elsewhere: bool = False) -> TactileLayout:
+    if not value_labels:
+        return _layout_pass(chart, mode, series_key_elsewhere=series_key_elsewhere)[0]
+    best = None
+    eligible = sum(not flag for series in chart.series if series.has_bars
+                   for flag in (series.rescued or (False,) * len(series.values)))
+    for lead_room in (0.0, LEAD_LINE_LENGTH + GRID_WIDTH / 2):
+        forced, estimate = frozenset(), bool(eligible)
+        try:
+            # Each unstable pass adds an omitted bar or changes the estimate note.
+            for _ in range(2 * (eligible + 1) + 4):
+                result = _layout_pass(chart, mode, value_labels=True, lead_room=lead_room,
+                                      forced_omit=forced, estimate_note=estimate,
+                                      series_key_elsewhere=series_key_elsewhere)
+                omitted, drawn = frozenset(result[1]), result[2]
+                if omitted == forced and bool(drawn) == estimate:
+                    break
+                forced, estimate = forced | omitted, bool(drawn)
+            else:
+                raise ValueError("horizontal value-label notes did not converge")
+        except ValueError:
+            continue
+        if any(bar.height < BAR_MIN_WIDTH - 0.05 for bar in result[0].bars):
+            continue
+        if best is None or len(result[1]) < len(best[1]):
+            best = result
+        if not result[1]:
+            break
+    if best is not None:
+        return best[0]
+    plain = _layout_pass(chart, mode, series_key_elsewhere=series_key_elsewhere)[0]
+    return replace(plain, notes=plain.notes + (
+        "bar values are not labelled: no room on the page for them",))
+
+
+def _layout_pass(chart: HorizontalBarChart, mode: str, *, value_labels=False,
+                 lead_room=0.0, forced_omit=frozenset(), estimate_note=False,
+                 series_key_elsewhere=False):
     keyed = mode != "full"
     category_texts = _category_texts(chart.categories, mode)
     values = [v for series in chart.series for v in series.values]
@@ -158,16 +240,21 @@ def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
         raise ValueError(f"BANA §3.2.2 allows at most {MAX_AREA_TEXTURES} area textures; "
                          "this chart needs an alphabetic key or several graphics")
     textures = TEXTURES[:n_keyed]
-    has_key = _has_series_key(chart)
+    has_key = _has_series_key(chart) and not series_key_elsewhere
 
     usable = _usable_area()
     labels: list[BrailleLabel] = []
     lines: list[Line] = []
     notes: list[str] = []
     samples: list = []
+    rescued_ids = frozenset(f"bar-{i}-{j}" for i, series in enumerate(chart.series)
+                            for j, flag in enumerate(series.rescued) if flag)
+    value_notes = _value_notes(chart, rescued_ids, forced_omit, estimate_note) if value_labels else ()
+    if series_key_elsewhere:
+        notes.extend(value_notes)
     no_bars = _no_bars_note(chart)
     y = _header(chart, usable, usable.y1, labels, samples, notes, show_title=True,
-                transcriber_notes=(no_bars,) if no_bars else (), series_key=has_key)
+                transcriber_notes=((no_bars,) if no_bars else ()) + (() if series_key_elsewhere else value_notes), series_key=has_key)
     if keyed:
         y = _category_key(chart.categories, category_texts, usable, y, labels)
     if has_key or keyed:
@@ -187,7 +274,24 @@ def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
               - LABEL_GAP - AXIS_WIDTH / 2)
     value_label_y = axis_y + AXIS_WIDTH / 2 + LABEL_GAP
 
-    step, intervals, tick_texts, plot_right = _value_scale(max(values), axis_x, usable.x2)
+    right_limit = usable.x2
+    if value_labels:
+        # Tick precision can change with reservation; bound the reservation using
+        # every scale candidate so the final label widths always fit the margin.
+        widths = []
+        for cap in range(MAX_GRID_INTERVALS, 0, -1):
+            candidate_step, count = _nice_step(max(values), cap)
+            ticks = [_format_value(candidate_step * k, candidate_step) for k in range(count + 1)]
+            for i, series in enumerate(chart.series):
+                for j, value in enumerate(series.values):
+                    if f"bar-{i}-{j}" not in rescued_ids:
+                        text = value_text(value, tick_decimals(candidate_step), significant_cap(ticks))
+                        widths.append(label_width(len(to_braille(text))))
+        if widths:
+            right_limit -= max(widths) + LABEL_MIN_GAP + BAR_OUTLINE_WIDTH / 2 + 0.02 + lead_room
+    step, intervals, tick_texts, plot_right = _value_scale(max(values), axis_x, right_limit)
+    if value_labels and plot_right - axis_x < MIN_PLOT_HEIGHT:
+        raise ValueError("value labels leave too little horizontal plot width")
     top_value = step * intervals
 
     def value_x(value: float) -> float:
@@ -266,10 +370,27 @@ def _layout(chart: HorizontalBarChart, mode: str) -> TactileLayout:
         notes.append("zero-length bars have no raised area; consider a transcriber's note")
     if keyed:
         notes.append(f"category labels are keyed ({mode} keys, BANA §5.8)")
-    return TactileLayout(
+    omitted, drawn = (), 0
+    if value_labels:
+        plan = plan_value_labels(
+            bars, rescued_ids, forced_omit, labels, [l for l in lines if l.kind != "grid"],
+            samples, usable, step, tick_texts,
+            lambda lid, text, x, y, owner: _label(
+                lid, "value", text, x, y, owner_id=owner, numeric=True,
+                category_index=int(lid.split("-")[-1])),
+            lambda lid, x1, y1, x2, y2: Line(
+                lid, "lead", x1, y1, x2, y2, GRID_WIDTH, LEAD_STRENGTH),
+            orientation="horizontal")
+        labels += plan.labels
+        lines += plan.leads
+        lines = _cut_grid(lines, plan.labels)
+        omitted, drawn = plan.omitted, len(plan.labels)
+    layout = TactileLayout(
         source_key=chart.source_key, page_width=PAGE_WIDTH, page_height=PAGE_HEIGHT,
         usable=usable, plot=Rect(axis_x, plot_top, plot_right, axis_y),
         lines=tuple(lines), bars=tuple(bars), labels=tuple(labels),
         key_samples=tuple(samples), category_count=n_cat, series_textures=textures,
         x_label_mode=mode, notes=tuple(notes), orientation="horizontal",
+        series_key_elsewhere=series_key_elsewhere,
         omit_legend=effective_omit_legend(len(chart.series), chart.omit_legend))
+    return layout, omitted, drawn
