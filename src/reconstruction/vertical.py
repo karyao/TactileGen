@@ -868,21 +868,27 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     bar_width = statistics.median(d.box.x2 - d.box.x1 for d in bars)
     # The detector sometimes puts a bar's top edge several pixels off while the
     # box still overlaps the bar well. Check positive bars against the pixels.
+    # Positive values grow up the image for a vertical chart (a < 0) and down
+    # it for a transposed horizontal chart (a > 0), so measure that way.
     edges_corrected = 0
     if can_rescue:
+        step = -1 if a < 0 else 1
+        zero = int(round(baseline))
         for c, members in enumerate(clusters):
             if cluster_centre[c] is None:
                 continue
             for k in members:
                 box = bars[k].box
-                if abs(box.y2 - baseline) > abs(box.y1 - baseline):
-                    continue
+                free, anchor = (box.y1, box.y2) if step < 0 else (box.y2, box.y1)
+                if abs(anchor - baseline) > abs(free - baseline):
+                    continue   # a negative bar
                 half = RESCUE_STRIP_FRACTION * (box.x2 - box.x1) / 2
                 left = max(0, int(round(_centre(bars[k])[0] - half)))
                 right = min(rgb.shape[1], max(left + 1, int(round(_centre(bars[k])[0] + half))))
-                up = _run_length(rgb, left, right, int(round(baseline)) - 1, -1, cluster_centre[c])
-                if up >= 1 and abs(box.y1 - (round(baseline) - up)) >= BAR_EDGE_TOLERANCE_PX:
-                    values[k] = -a * up
+                run = _run_length(rgb, left, right, zero - 1 if step < 0 else zero, step,
+                                  cluster_centre[c])
+                if run >= 1 and abs(free - (zero + step * run)) >= BAR_EDGE_TOLERANCE_PX:
+                    values[k] = a * step * run
                     edges_corrected += 1
     trace("series_ambiguous" if ambiguous_series else "series_grouping",
           unresolved_bar_ids=[bars[k].id for k in unresolved],
