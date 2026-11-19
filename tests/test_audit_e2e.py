@@ -62,6 +62,7 @@ class ReasonsAndGroupsTest(unittest.TestCase):
         self.assertEqual(audit.failure_group("detector_missing_bars", 2, 1), "real_bars_undetected")
         self.assertEqual(audit.failure_group("series_separation", 0, 0), "series_legend_colour_match")
         self.assertEqual(audit.failure_group("bar_rescue_wrong", 0, 0), "other_rare")
+        self.assertEqual(audit.failure_group("other_wrong_values", 0, 0), "bar_values_off")
         self.assertEqual(audit.failure_group("none_correct", 0, 0), "")
 
 

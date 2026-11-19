@@ -66,6 +66,7 @@ GROUP_OF_CAUSE = {
     "ocr_title_or_axis_title": "title_axis_title_ocr",
     "false_block": "false_block_gate",
     "y_calibration": "y_axis_calibration",
+    "other_wrong_values": "bar_values_off",
 }
 GROUP_WHY = {
     "tiny_bars_undetected": "every missed bar is near-zero; the detector does not find it",
@@ -75,7 +76,8 @@ GROUP_WHY = {
     "title_axis_title_ocr": "the title or an axis title could not be read",
     "false_block_gate": "the content is correct but a BANA/completeness check blocked it",
     "y_axis_calibration": "value-axis ticks dropped, uneven, or a value clipped at the axis",
-    "other_rare": "pairing, extra bars, interpretation errors, other wrong values",
+    "bar_values_off": "bars, labels and series are right but a value is off by more than 1%",
+    "other_rare": "pairing, extra bars, rescued values, interpretation errors, layout",
 }
 
 
