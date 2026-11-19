@@ -17,9 +17,14 @@ Tactile Graphics, 2022*:
   category labels, at most 20 cells a line (§6.6.6.6);
 * the key lists the bars from top to bottom (§6.6.6.4).
 
+A graph still too dense for one page after its key moves to a key page is
+divided by category into sections (§3.9), as for vertical bars: same value
+scale and bar thickness on every part, a transcriber's note naming each part,
+and the series key on its own page before the graph pages (§6.6.6.4).
+
 Not done yet: staggering values onto extra lines with lead lines (BANA
-allows it; here the grid step grows until the values fit on one line),
-dividing a graph into sections, and place-value alignment for numeric
+allows it; here the grid step grows until the values fit on one line), the
+overview page of a divided graph, and place-value alignment for numeric
 category labels.
 """
 
@@ -77,6 +82,7 @@ from src.tactile.layout import (
     _label,
     _nice_step,
     _no_bars_note,
+    _split,
     _usable_area,
     bar_width_for,
     label_width,
@@ -126,41 +132,137 @@ def layout_horizontal_bar_chart(chart: HorizontalBarChart, *,
 def layout_horizontal_bar_chart_pages(chart: HorizontalBarChart, *,
                                       labels: str = "auto",
                                       value_labels: bool = True) -> list[TactileLayout]:
-    """Keep the graph on one page, moving its key/notes to a preceding page
-    when that frees space for more bar values. Category sections are not supported.
+    """Pages for the chart, trying in order:
+
+    1. one page, when it passes every rule (except ``overview_first``);
+       its key and notes still move to a preceding page when that frees
+       room for more bar values;
+    2. a key page (title, notes, series key) before one graph page;
+    3. the categories divided into the fewest consecutive sections (BANA
+       §3.9) whose pages all pass, every section sharing the value scale,
+       category column width and bar thickness so bars compare across pages.
+
+    If nothing passes, the one-page layout is returned with its problems.
     """
-    single = layout_horizontal_bar_chart(chart, labels=labels, value_labels=value_labels)
-    if not value_labels:
-        return [single]
+    from src.tactile.rules import check_layout   # rules imports the layout modules
+
+    try:
+        single, single_error = layout_horizontal_bar_chart(
+            chart, labels=labels, value_labels=value_labels), None
+    except ValueError as exc:   # e.g. too many bars for one page
+        single, single_error = None, exc
+    if single is not None and not _problems(check_layout(single)):
+        return _moved_key(chart, labels, value_labels, single) or [single]
+    pages = _moved_key(chart, labels, value_labels, None) or _divided(chart, labels, value_labels)
+    if pages:
+        return pages
+    if single is None:
+        raise single_error
+    return [single]
+
+
+def _problems(violations) -> list:
+    """Violations that block a page; the missing overview is reported separately."""
+    return [v for v in violations if v.rule.id != "overview_first"]
+
+
+def _labelled(page: TactileLayout) -> set[str]:
+    return {f"bar-{label.id[len('value-'):]}" for label in page.labels if label.role == "value"}
+
+
+def _moved_key(chart: HorizontalBarChart, labels: str, value_labels: bool,
+               single: TactileLayout | None) -> list[TactileLayout] | None:
+    """A key page plus one graph page that both pass, showing the most values.
+
+    With a passing ``single`` page, a move is only worth a second page when
+    it labels more bars."""
+    from src.tactile.rules import check_layout
+
     eligible = {f"bar-{s}-{j}" for s, series in enumerate(chart.series) if series.has_bars
                 for j, flag in enumerate(series.rescued or (False,) * len(series.values)) if not flag}
-    def labelled(page):
-        return {f"bar-{label.id[len('value-'):]}" for label in page.labels if label.role == "value"}
-    if eligible <= labelled(single):
-        return [single]
-    from src.tactile.rules import check_layout
+    if single is not None and (not value_labels or eligible <= _labelled(single)):
+        return None
+    rescued = {f"bar-{s}-{j}" for s, series in enumerate(chart.series)
+               for j, flag in enumerate(series.rescued) if flag}
     best = None
     for mode in X_LABEL_MODES if labels == "auto" else (labels,):
         try:
-            graph = _layout(chart, mode, series_key_elsewhere=True)
-            if check_layout(graph) or not _categories_fit(graph):
+            # The title is on the key page, as for vertical charts.
+            graph = _layout(chart, mode, value_labels=value_labels, series_key_elsewhere=True,
+                            show_title=False)
+            if _problems(check_layout(graph)) or not _categories_fit(graph):
                 continue
-            shown = labelled(graph)
-            if len(shown) <= len(labelled(single)):
+            shown = _labelled(graph)
+            if single is not None and len(shown) <= len(_labelled(single)):
                 continue
-            rescued = {f"bar-{s}-{j}" for s, series in enumerate(chart.series)
-                       for j, flag in enumerate(series.rescued) if flag}
-            key = replace(_key_page(chart, _value_notes(chart, rescued, eligible - shown, bool(shown))),
-                          orientation="horizontal")
-            if check_layout(key):
+            notes = _value_notes(chart, rescued, eligible - shown, bool(shown)) if value_labels else ()
+            key = replace(_key_page(chart, notes), orientation="horizontal")
+            if _problems(check_layout(key)):
                 continue
         except ValueError:
             continue
-        if best is None or len(shown) > len(labelled(best[1])):
+        if best is None or len(shown) > len(_labelled(best[1])):
             best = [key, graph]
         if eligible <= shown:
             break
-    return best if best is not None else [single]
+    return best
+
+
+def _divided(chart: HorizontalBarChart, labels: str,
+             value_labels: bool) -> list[TactileLayout] | None:
+    """The fewest sections whose pages all pass. Value labels are kept when
+    every section can show them at one shared plot width."""
+    from src.tactile.rules import check_layout
+
+    modes = X_LABEL_MODES if labels == "auto" else (labels,)
+    attempts = ([(True, (0.0,)), (True, (LEAD_LINE_LENGTH + GRID_WIDTH / 2,))]
+                if value_labels else []) + [(False, (0.0,))]
+    n_cat = len(chart.categories)
+    value_max = max(v for series in chart.series for v in series.values)
+    for parts in range(2, n_cat + 1):
+        chunks = _split(n_cat, parts)
+        for mode in modes:
+            for with_values, lead_rooms in attempts:
+                try:
+                    pages = _sections(chart, mode, chunks, value_max, with_values, lead_rooms)
+                except ValueError:
+                    continue
+                graphs = [page for page in pages if page.page_kind != "key"]
+                if len({round(page.plot.x2, 3) for page in graphs}) != 1:
+                    continue   # value labels left a different plot width on some part
+                if (all(_categories_fit(page) for page in graphs)
+                        and not any(_problems(check_layout(page)) for page in pages)):
+                    return pages
+    return None
+
+
+def _sections(chart: HorizontalBarChart, mode: str, chunks: list[range], value_max: float,
+              value_labels: bool, lead_rooms: tuple[float, ...]) -> list[TactileLayout]:
+    names = chart.categories
+    texts = _category_texts(names, mode)
+    n = len(chunks)
+    division = (f"This graph is divided by category into {n} parts with the same "
+                "scale on each part.")
+    key_page = _has_series_key(chart)
+    size = max(len(r) for r in chunks)
+    pages = []
+    for k, r in enumerate(chunks, 1):
+        span = names[r[0]] if len(r) == 1 else f"{names[r[0]]} to {names[r[-1]]}"
+        part = f"Part {k} of {n}: {span}."
+        section = replace(chart, categories=tuple(names[i] for i in r), series=tuple(
+            replace(s, values=tuple(s.values[i] for i in r) if s.has_bars else (),
+                    rescued=tuple(s.rescued[i] for i in r) if s.rescued else ())
+            for s in chart.series))
+        page = _layout(section, mode, value_labels=value_labels, lead_rooms=lead_rooms,
+                       series_key_elsewhere=key_page,
+                       show_title=k == 1 and not key_page,
+                       section_notes=(division, part) if k == 1 and not key_page else (part,),
+                       value_max=value_max, category_texts=[texts[i] for i in r],
+                       column_texts=texts, size_categories=size)
+        pages.append(replace(page, section=(k, n)))
+    if key_page:
+        pages.insert(0, replace(_key_page(chart, (division,)), orientation="horizontal"))
+    return pages
 
 
 def _categories_fit(layout: TactileLayout) -> bool:
@@ -191,20 +293,27 @@ def _value_scale(maximum: float, axis_x: float, right_limit: float):
 
 
 def _layout(chart: HorizontalBarChart, mode: str, *, value_labels: bool = True,
-            series_key_elsewhere: bool = False) -> TactileLayout:
+            series_key_elsewhere: bool = False,
+            lead_rooms: tuple[float, ...] = (0.0, LEAD_LINE_LENGTH + GRID_WIDTH / 2),
+            **section) -> TactileLayout:
+    """One page. ``section`` holds the ``_layout_pass`` settings for one part
+    of a divided graph; ``lead_rooms`` are the right-margin reserves for lead
+    lines to try (a divided graph uses the same one on every part)."""
     if not value_labels:
-        return _layout_pass(chart, mode, series_key_elsewhere=series_key_elsewhere)[0]
+        return _layout_pass(chart, mode, series_key_elsewhere=series_key_elsewhere,
+                            **section)[0]
     best = None
     eligible = sum(not flag for series in chart.series if series.has_bars
                    for flag in (series.rescued or (False,) * len(series.values)))
-    for lead_room in (0.0, LEAD_LINE_LENGTH + GRID_WIDTH / 2):
+    for lead_room in lead_rooms:
         forced, estimate = frozenset(), bool(eligible)
         try:
             # Each unstable pass adds an omitted bar or changes the estimate note.
             for _ in range(2 * (eligible + 1) + 4):
                 result = _layout_pass(chart, mode, value_labels=True, lead_room=lead_room,
                                       forced_omit=forced, estimate_note=estimate,
-                                      series_key_elsewhere=series_key_elsewhere)
+                                      series_key_elsewhere=series_key_elsewhere,
+                                      **section)
                 omitted, drawn = frozenset(result[1]), result[2]
                 if omitted == forced and bool(drawn) == estimate:
                     break
@@ -221,17 +330,25 @@ def _layout(chart: HorizontalBarChart, mode: str, *, value_labels: bool = True,
             break
     if best is not None:
         return best[0]
-    plain = _layout_pass(chart, mode, series_key_elsewhere=series_key_elsewhere)[0]
+    plain = _layout_pass(chart, mode, series_key_elsewhere=series_key_elsewhere, **section)[0]
     return replace(plain, notes=plain.notes + (
         "bar values are not labelled: no room on the page for them",))
 
 
 def _layout_pass(chart: HorizontalBarChart, mode: str, *, value_labels=False,
                  lead_room=0.0, forced_omit=frozenset(), estimate_note=False,
-                 series_key_elsewhere=False):
+                 series_key_elsewhere=False, show_title=True, section_notes=(),
+                 value_max=None, category_texts=None, column_texts=None,
+                 size_categories=None):
+    """One layout attempt. The last six arguments are for one section of a
+    divided graph: whether the title shows, its part notes, and the value
+    maximum, category texts, column texts and category count that size every
+    section the same way."""
     keyed = mode != "full"
-    category_texts = _category_texts(chart.categories, mode)
+    if category_texts is None:
+        category_texts = _category_texts(chart.categories, mode)
     values = [v for series in chart.series for v in series.values]
+    maximum = max(values) if value_max is None else value_max
     if any(v < 0 for v in values):
         raise ValueError("negative bar values are not supported yet")
     n_keyed, n_cat = len(chart.series), len(chart.categories)
@@ -253,8 +370,10 @@ def _layout_pass(chart: HorizontalBarChart, mode: str, *, value_labels=False,
     if series_key_elsewhere:
         notes.extend(value_notes)
     no_bars = _no_bars_note(chart)
-    y = _header(chart, usable, usable.y1, labels, samples, notes, show_title=True,
-                transcriber_notes=((no_bars,) if no_bars else ()) + (() if series_key_elsewhere else value_notes), series_key=has_key)
+    y = _header(chart, usable, usable.y1, labels, samples, notes, show_title=show_title,
+                transcriber_notes=(tuple(section_notes) + ((no_bars,) if no_bars else ())
+                                   + (() if series_key_elsewhere else value_notes)),
+                series_key=has_key)
     if keyed:
         y = _category_key(chart.categories, category_texts, usable, y, labels)
     if has_key or keyed:
@@ -263,7 +382,9 @@ def _layout_pass(chart: HorizontalBarChart, mode: str, *, value_labels=False,
     # Category column: label, one blank cell, then guide dots up to the column edge.
     wrapped = [wrap_cells(t, CATEGORY_COLUMN_MAX_CELLS - 1 - GUIDE_DOTS_MIN)
                for t in category_texts]
-    column_cells = max(len(to_braille(t)) for rows in wrapped for t in rows) + 1 + GUIDE_DOTS_MIN
+    sizing = wrapped if column_texts is None else [
+        wrap_cells(t, CATEGORY_COLUMN_MAX_CELLS - 1 - GUIDE_DOTS_MIN) for t in column_texts]
+    column_cells = max(len(to_braille(t)) for rows in sizing for t in rows) + 1 + GUIDE_DOTS_MIN
     axis_x = usable.x1 + label_width(column_cells) + LABEL_GAP + AXIS_WIDTH / 2
     first_value_x = axis_x - FIRST_CELL_RIGHT_COLUMN
 
@@ -280,7 +401,7 @@ def _layout_pass(chart: HorizontalBarChart, mode: str, *, value_labels=False,
         # every scale candidate so the final label widths always fit the margin.
         widths = []
         for cap in range(MAX_GRID_INTERVALS, 0, -1):
-            candidate_step, count = _nice_step(max(values), cap)
+            candidate_step, count = _nice_step(maximum, cap)
             ticks = [_format_value(candidate_step * k, candidate_step) for k in range(count + 1)]
             for i, series in enumerate(chart.series):
                 for j, value in enumerate(series.values):
@@ -289,7 +410,7 @@ def _layout_pass(chart: HorizontalBarChart, mode: str, *, value_labels=False,
                         widths.append(label_width(len(to_braille(text))))
         if widths:
             right_limit -= max(widths) + LABEL_MIN_GAP + BAR_OUTLINE_WIDTH / 2 + 0.02 + lead_room
-    step, intervals, tick_texts, plot_right = _value_scale(max(values), axis_x, right_limit)
+    step, intervals, tick_texts, plot_right = _value_scale(maximum, axis_x, right_limit)
     if value_labels and plot_right - axis_x < MIN_PLOT_HEIGHT:
         raise ValueError("value labels leave too little horizontal plot width")
     top_value = step * intervals
@@ -303,7 +424,7 @@ def _layout_pass(chart: HorizontalBarChart, mode: str, *, value_labels=False,
     heading_height = (len(y_heading) - 1) * LINE_PITCH + LABEL_HEIGHT
     bars_bottom = axis_y - AXIS_WIDTH / 2
     available = bars_bottom - (y + heading_height + Y_HEADING_CLEARANCE)
-    thickness = bar_width_for(available, n_cat, n_series)
+    thickness = bar_width_for(available, size_categories or n_cat, n_series)
     if thickness <= 0:
         raise ValueError("too many bars to draw on one page")
     group = set_width(thickness, n_series)
