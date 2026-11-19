@@ -30,7 +30,7 @@ class VLMResponseTest(unittest.TestCase):
         )
         for filename, kind, placeholders, categories, x_title, y_title in cases:
             raw = (FIXTURES / filename).read_text(encoding="utf-8")
-            for response in (raw, f" \n```json\n{raw}\n```\t\n"):
+            for response in (raw, f" \n```json\n{raw}\n```\t\n", "```json\n" + raw):
                 with self.subTest(filename=filename, response=response):
                     result = parse_chart_response(response, image=Path("charts/example.png"))
                     self.assertIs(type(result.chart), kind)
@@ -86,11 +86,40 @@ class VLMResponseTest(unittest.TestCase):
         response = "```json\r\n" + self.raw + "\r\n```"
         self.assertEqual(parse_chart_response(response, image="input.png").placeholder_fields, ())
 
+    def test_csil_values_with_missing_closing_fence(self):
+        # Minimal payload preserving the reported Gemma categories and values.
+        response = '''```json
+{
+  "chart_type": "vbar_categorical",
+  "categories": ["A", "B"],
+  "series": [{"name": "N", "values": [3.5, 6]}]
+}'''
+        chart = parse_chart_response(response, image="csil.png").chart
+        self.assertEqual(chart.categories, ("A", "B"))
+        self.assertEqual(len(chart.series), 1)
+        self.assertEqual(chart.series[0].name, "N")
+        self.assertEqual(chart.series[0].values, (3.5, 6))
+
+    def test_missing_closing_fence_whitespace(self):
+        expected = parse_chart_response(self.raw, image="input.png")
+        for newline in ("\n", "\r\n"):
+            for padding in ("", " \t"):
+                response = f" \n```json{padding}{newline}{self.raw}\t\n"
+                with self.subTest(newline=newline, padding=padding):
+                    self.assertEqual(parse_chart_response(response, image="input.png"), expected)
+
+    def test_missing_closing_fence_does_not_salvage_invalid_body(self):
+        invalid_chart = {**self.data, "series": [{"name": "N", "values": [3.5]}]}
+        for body in (self.raw[:-3], self.raw + " Done.", self.raw + self.raw,
+                     json.dumps(invalid_chart)):
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                parse_chart_response("```json\n" + body, image="input.png")
+
     def test_invalid_json_and_wrappers(self):
         for response in (
             "", "Here is the chart: " + self.raw, self.raw + " Done.",
             self.raw + self.raw, self.raw[:-3], "{invalid}",
-            "```json\n" + self.raw, self.raw + "\n```",
+            "```json" + self.raw, self.raw + "\n```",
             "```\n" + self.raw + "\n```", "```python\n" + self.raw + "\n```",
             "```json\n" + self.raw + "\n```\n```json\n" + self.raw + "\n```",
             "Prose\n```json\n" + self.raw + "\n```",
