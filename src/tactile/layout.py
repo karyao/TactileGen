@@ -54,6 +54,7 @@ from src.tactile.constants import (  # noqa: F401  (re-exported for callers and 
     PAGE_HEIGHT,
     PAGE_WIDTH,
     TEXTURES,
+    TEXTURE_TILE,
     TN_FIRST_CELL,
     TN_RUNOVER_CELL,
     Y_HEADING_CLEARANCE,
@@ -328,8 +329,8 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
                                     value_labels: bool = True) -> list[TactileLayout]:
     """One page when it passes every rule; otherwise sections (BANA §3.9).
 
-    A series key that would leave the plot under ``MIN_PLOT_HEIGHT`` goes on a
-    key page before a single graph page instead.
+    Prefer one page when its checks pass and positive bars have enough exposed
+    height for a texture tile. Otherwise try moving the series key first.
 
     The categories are divided into the fewest consecutive sections whose
     pages each pass every rule except ``overview_first``, trying the x-label
@@ -344,19 +345,22 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
     from src.tactile.rules import check_layout   # rules imports this module
 
     single = layout_vertical_bar_chart(chart, x_labels=x_labels, value_labels=value_labels)
-    if _has_series_key(chart) and _plot_height(single) < MIN_PLOT_HEIGHT:
-        # The key, notes and title leave too little plot: move them to a key
-        # page before the graph page (§6.6.6.4), as for a divided graph.
-        graph = layout_vertical_bar_chart(chart, x_labels=x_labels, key_on_page=True,
-                                          value_labels=value_labels)
-        if _plot_height(graph) > _plot_height(single) and not check_layout(graph):
-            if _plot_height(graph) < MIN_PLOT_HEIGHT:
-                graph = replace(graph, needs_review=graph.needs_review + (
-                    f"the plot is {_plot_height(graph):.0f} mm high even with the key on its "
-                    f"own page (minimum {MIN_PLOT_HEIGHT:.0f} mm)",))
-            return [_key_page(chart, ()), graph]
-    if not check_layout(single):
+    single_violations = check_layout(single)
+    if not single_violations and _minimum_exposed_bar_height(single) >= TEXTURE_TILE:
         return [single]
+    if _has_series_key(chart):
+        try:
+            graph = layout_vertical_bar_chart(chart, x_labels=x_labels, key_on_page=True,
+                                              value_labels=value_labels)
+            key = _key_page(chart, ())
+            if not check_layout(graph) and not check_layout(key) and (
+                    single_violations or
+                    _minimum_exposed_bar_height(graph) > _minimum_exposed_bar_height(single)):
+                return [key, _bar_visibility_note(graph)]
+        except ValueError:
+            pass  # Try category sections if a complete graph/key cannot be built.
+    if not single_violations:
+        return [_bar_visibility_note(single)]
     modes = X_LABEL_MODES if x_labels == "auto" else (x_labels,)
     n_cat = len(chart.categories)
     value_max = max(v for series in chart.series for v in series.values)
@@ -369,8 +373,27 @@ def layout_vertical_bar_chart_pages(chart: VerticalBarChart, *,
             except ValueError:
                 continue
             if all(v.rule.id == "overview_first" for page in pages for v in check_layout(page)):
-                return pages
-    return [single]
+                return [_bar_visibility_note(page) for page in pages]
+    return [_bar_visibility_note(single)]
+
+
+def _minimum_exposed_bar_height(layout: TactileLayout) -> float:
+    """Smallest positive bar interior above its outline/baseline, in mm.
+
+    One texture tile of exposed height is an application heuristic, not a BANA
+    rule. Zero values and absent series do not require texture-bearing height.
+    """
+    bottom = max(BAR_OUTLINE_WIDTH, (AXIS_WIDTH + BAR_OUTLINE_WIDTH) / 2)
+    return min((bar.height - bottom for bar in layout.bars if bar.value > 0),
+               default=float("inf"))
+
+
+def _bar_visibility_note(layout: TactileLayout) -> TactileLayout:
+    if _minimum_exposed_bar_height(layout) >= TEXTURE_TILE:
+        return layout
+    return replace(layout, notes=layout.notes + (
+        "Small positive bars have less than one texture tile of exposed height; "
+        "tactile review is needed (application heuristic, not a BANA rule).",))
 
 
 def _plot_height(layout: TactileLayout) -> float:

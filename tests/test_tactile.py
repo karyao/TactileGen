@@ -1725,7 +1725,7 @@ class NoVisibleBarsTest(unittest.TestCase):
 
 
 class MinimumPlotHeightTest(unittest.TestCase):
-    """A key that leaves the plot too short goes on a key page before the graph page."""
+    """Page selection protects exposed bars rather than a blanket plot height."""
 
     def short(self):
         """24811-like: three keyed series, numbered categories and a long y title."""
@@ -1750,8 +1750,21 @@ class MinimumPlotHeightTest(unittest.TestCase):
         self.assertLess(self.height(layout_vertical_bar_chart(self.short())),
                         constants.MIN_PLOT_HEIGHT)
 
-    def test_a_short_plot_moves_the_key_and_note_to_a_key_page(self):
+    def small_bars(self, value=1.0):
+        chart = self.short()
+        return replace(chart, series=(chart.series[0],
+                       replace(chart.series[1], values=(value, 14.0, 15.0, 16.0)),
+                       chart.series[2]))
+
+    def test_a_readable_short_plot_keeps_the_key_and_notes_on_one_page(self):
         pages = layout_vertical_bar_chart_pages(self.short())
+        self.assertEqual(pages, [layout_vertical_bar_chart(self.short())])
+        self.assertEqual(len(pages[0].key_samples), 3)
+        self.assertIn("No bars are visible for: Low & middle income, Vietnam.",
+                      " ".join(l.text for l in pages[0].labels if l.role == "note"))
+
+    def test_a_small_positive_bar_moves_the_key_and_note_to_a_key_page(self):
+        pages = layout_vertical_bar_chart_pages(self.small_bars())
         self.assertEqual([p.page_kind for p in pages], ["key", "graph"])
         key_page, graph = pages
         self.assertEqual(len(key_page.key_samples), 3)
@@ -1762,9 +1775,62 @@ class MinimumPlotHeightTest(unittest.TestCase):
         self.assertGreaterEqual(self.height(graph), constants.MIN_PLOT_HEIGHT)
         self.assertEqual({bar.series_index for bar in graph.bars}, {1})
         self.assertEqual(len(graph.bars), 4)
+        smallest = min(graph.bars, key=lambda b: b.value)
+        self.assertGreaterEqual(smallest.height - max(constants.BAR_OUTLINE_WIDTH,
+            (constants.AXIS_WIDTH + constants.BAR_OUTLINE_WIDTH) / 2), constants.TEXTURE_TILE)
+
+    def test_zero_values_and_absent_series_do_not_force_extra_pages(self):
+        chart = self.small_bars(0.0)
+        self.assertEqual(layout_vertical_bar_chart_pages(chart),
+                         [layout_vertical_bar_chart(chart)])
+
+    def test_unresolved_small_bars_request_review_without_changing_values(self):
+        chart = self.small_bars(0.1)
+        pages = layout_vertical_bar_chart_pages(chart)
+        self.assertEqual([p.page_kind for p in pages], ["key", "graph"])
+        self.assertTrue(any("tactile review" in note for note in pages[1].notes))
+        self.assertEqual([bar.value for bar in pages[1].bars], [0.1, 14, 15, 16])
+        self.assertEqual(check_layout(pages[1]), [])
+
+    def test_no_extra_page_when_moving_the_key_cannot_improve_visibility(self):
+        chart = self.small_bars()
+        single = layout_vertical_bar_chart(chart)
+        with patch("src.tactile.layout.layout_vertical_bar_chart", return_value=single):
+            pages = layout_vertical_bar_chart_pages(chart)
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0].bars, single.bars)
+        self.assertTrue(any("tactile review" in note for note in pages[0].notes))
+
+    def test_invalid_key_page_is_rejected(self):
+        from src.tactile.layout import _key_page, Rect
+        chart = self.small_bars()
+        invalid_key = replace(_key_page(chart, ()), usable=Rect(0, 0, 1, 1))
+        self.assertTrue(check_layout(invalid_key))
+        with patch("src.tactile.layout._key_page", return_value=invalid_key):
+            pages = layout_vertical_bar_chart_pages(chart)
+        self.assertEqual(len(pages), 1)
+        self.assertTrue(any("tactile review" in note for note in pages[0].notes))
+
+    def test_one_page_violations_still_require_a_valid_fallback(self):
+        from src.tactile.layout import Rect
+        chart = self.short()
+        single = layout_vertical_bar_chart(chart)
+        invalid = replace(single, usable=Rect(0, 0, 1, 1))
+        graph = layout_vertical_bar_chart(chart, key_on_page=True)
+        with patch("src.tactile.layout.layout_vertical_bar_chart", side_effect=[invalid, graph]):
+            pages = layout_vertical_bar_chart_pages(chart)
+        self.assertEqual([p.page_kind for p in pages], ["key", "graph"])
+        self.assertTrue(all(not check_layout(p) for p in pages))
+
+    def test_page_preference_also_applies_without_value_labels(self):
+        chart = self.short()
+        self.assertEqual(layout_vertical_bar_chart_pages(chart, value_labels=False),
+                         [layout_vertical_bar_chart(chart, value_labels=False)])
+        pages = layout_vertical_bar_chart_pages(self.small_bars(), value_labels=False)
+        self.assertEqual([p.page_kind for p in pages], ["key", "graph"])
 
     def test_both_pages_pass_every_rule(self):
-        for page in layout_vertical_bar_chart_pages(self.short()):
+        for page in layout_vertical_bar_chart_pages(self.small_bars()):
             self.assertEqual(check_layout(page), [])
 
     def test_a_chart_with_enough_plot_stays_on_one_page(self):
