@@ -14,7 +14,7 @@ from PIL import Image
 
 from src.baseline.gemma import (
     DEFAULT_MODEL_ID, EXTRACTION_PROMPT, PROMPT_VERSION,
-    GemmaChartExtractor, GemmaExtractionError, _resolve_runtime,
+    GemmaChartExtractor, GemmaExtractionError, _resolve_runtime, _save_artifacts,
 )
 from src.contracts import HorizontalBarChart, VerticalBarChart
 
@@ -177,6 +177,53 @@ class GemmaInferenceTest(unittest.TestCase):
         json.dumps(result.metadata, allow_nan=False)
         with self.assertRaises(ValueError):
             self.rgb.getpixel((0, 0))  # closed even after successful inference
+
+    def test_saved_end_of_turn_response_and_diagnostics(self):
+        fixture = FIXTURES / "gemma_end_of_turn_response.txt"
+        self.raw = fixture.read_bytes().decode("utf-8")
+        result = self.extractor.extract_result(self.image)
+        chart = result.chart
+        self.assertIsInstance(chart, VerticalBarChart)
+        self.assertEqual(chart.title, "AB")
+        self.assertEqual(chart.x_axis_title, "X")
+        self.assertEqual(chart.y_axis_title, "Y")
+        self.assertEqual(chart.categories, ("A", "B"))
+        self.assertEqual(len(chart.series), 1)
+        self.assertEqual(chart.series[0].name, "N")
+        self.assertEqual(chart.series[0].values, (3.5, 6))
+        self.assertTrue(chart.series[0].has_bars)
+        self.assertEqual(result.raw_response, self.raw)
+        self.assertTrue(_save_artifacts(self.image.parent, result.metadata,
+                                        result.raw_response, result.chart))
+        self.assertEqual((self.image.parent / "raw_response.txt").read_bytes(), fixture.read_bytes())
+
+    def test_terminal_turn_marker_and_whitespace(self):
+        valid = self.raw
+        for body in (valid, "```json\n" + valid, "```json\n" + valid + "\n```"):
+            for suffix in ("", "<end_of_turn>", "<end_of_turn> \t\r\n"):
+                with self.subTest(body=body, suffix=suffix):
+                    self.raw = body + suffix
+                    result = self.extractor.extract_result(self.image)
+                    self.assertEqual(result.chart.series[0].values, (4, 6))
+                    self.assertEqual(result.raw_response, self.raw)
+
+    def test_turn_marker_inside_json_string_is_preserved(self):
+        data = json.loads(self.raw)
+        data["title"] = "Literal <end_of_turn>"
+        self.raw = json.dumps(data) + "<end_of_turn>"
+        self.assertEqual(self.extractor.extract(self.image).title, data["title"])
+
+    def test_turn_marker_does_not_salvage_invalid_response(self):
+        valid = self.raw
+        for response in (valid + "<end_of_turn><end_of_turn>",
+                         valid + "<end_of_turn> Done.", valid[:-3] + "<end_of_turn>",
+                         json.dumps({"chart_type": "line"}) + "<end_of_turn>"):
+            with self.subTest(response=response):
+                self.raw = response
+                error = self.assert_safe_failure("parsing")
+                self.assertEqual(error.raw_response, response)
+                self.assertTrue(_save_artifacts(self.image.parent, error.metadata, error.raw_response))
+                self.assertEqual((self.image.parent / "raw_response.txt").read_bytes(), response.encode())
 
     def test_reuse_and_both_orientations(self):
         first = self.extractor.extract_result(self.image)

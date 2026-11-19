@@ -251,7 +251,10 @@ class GemmaChartExtractor:
                        if _out_of_memory(exc) else "Gemma image preparation, generation, or decoding failed; check the runtime and image.")
             raise GemmaExtractionError("inference", message, metadata, raw_response) from None
         try:
-            parsed = parse_chart_response(raw_response, image=path, source_key=source_key)
+            # Keep the decoded response intact for diagnostics; tolerate one
+            # terminal Gemma turn marker only in the copy passed to the parser.
+            response_to_parse = raw_response.rstrip().removesuffix("<end_of_turn>")
+            parsed = parse_chart_response(response_to_parse, image=path, source_key=source_key)
         except Exception:
             raise GemmaExtractionError(
                 "parsing", "Gemma did not return a supported, complete chart JSON object; inspect raw_response.",
