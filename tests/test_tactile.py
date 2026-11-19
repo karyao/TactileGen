@@ -899,6 +899,64 @@ class HorizontalLayoutTest(unittest.TestCase):
         self.assertEqual(len([l for l in layout.labels if l.role == "key"
                               and l.category_index is not None and l.id.count("-") == 2]), 7)
 
+    def test_dense_multi_series_chart_moves_the_key_to_its_own_page(self):
+        # 6 years x 2 series is too tight under a title and key (bars < 9.5 mm).
+        years = tuple(str(y) for y in range(2012, 2006, -1))
+        chart = HorizontalBarChart(
+            "demo/5.png", "Balance of payments as percentage of commercial service exports",
+            "Balance of Payment (as % of commercial service exports)", "Year", years,
+            (BarSeries("Transport services", (40.6, 35.2, 32.4, 34.7, 25.8, 23.1)),
+             BarSeries("Travel services", (42.3, 40.8, 39.9, 42.6, 42.8, 38.5))))
+        self.assertIn("bar_width", horizontal_rule_ids(layout_horizontal_bar_chart(chart)))
+        key, graph = layout_horizontal_bar_chart_pages(chart)
+        self.assertEqual((key.page_kind, graph.page_kind), ("key", "graph"))
+        self.assertEqual(len(key.key_samples), 2)
+        self.assertIn(chart.title.split()[0], " ".join(l.text for l in key.labels))
+        self.assertEqual(len(graph.bars), 12)
+        self.assertEqual(graph.key_samples, ())
+        self.assertNotIn("title", {l.role for l in graph.labels})
+        for page in (key, graph):
+            self.assertEqual([r for r in horizontal_rule_ids(page) if r != "overview_first"], [])
+
+    def test_graph_too_dense_for_one_page_is_divided_with_one_scale(self):
+        names = tuple(f"Country {k}" for k in range(12))
+        chart = HorizontalBarChart(
+            "demo/6.png", "Employment", "Share (%)", "Country", names,
+            tuple(BarSeries(f"Group {s}", tuple(float(5 + k + 3 * s) for k in range(12)))
+                  for s in range(3)))
+        pages = layout_horizontal_bar_chart_pages(chart)
+        key, graphs = pages[0], pages[1:]
+        self.assertEqual(key.page_kind, "key")
+        self.assertGreaterEqual(len(graphs), 2)
+        self.assertEqual([g.section for g in graphs], [(k, len(graphs)) for k in range(1, len(graphs) + 1)])
+        # Every bar once, in order, on the same value scale and thickness.
+        self.assertEqual(sum(len(g.bars) for g in graphs), 36)
+        self.assertEqual(len({tuple(l.text for l in by_role(g, "x_value")) for g in graphs}), 1)
+        self.assertEqual(len({round(b.height, 6) for g in graphs for b in g.bars}), 1)
+        self.assertEqual(len({g.plot.x1 for g in graphs}), 1)
+        # Value labels stay on when every part has room for them.
+        self.assertEqual(sum(len(by_role(g, "value")) for g in graphs), 36)
+        notes = " ".join(l.text for l in key.labels if l.role == "note")
+        self.assertIn(f"divided by category into {len(graphs)} parts", notes)
+        self.assertIn("Part 1 of", " ".join(l.text for l in graphs[0].labels if l.role == "note"))
+        for page in pages:
+            self.assertEqual([r for r in horizontal_rule_ids(page) if r != "overview_first"], [])
+
+    def test_single_series_division_keeps_the_title_on_the_first_part(self):
+        names = tuple(f"Item {k}" for k in range(30))
+        chart = HorizontalBarChart("demo/7.png", "Many items", "Count", "Item", names,
+                                   (BarSeries(None, tuple(float(k + 1) for k in range(30))),))
+        pages = layout_horizontal_bar_chart_pages(chart)
+        self.assertGreater(len(pages), 1)
+        self.assertTrue(all(p.page_kind == "graph" for p in pages))
+        self.assertIn("title", {l.role for l in pages[0].labels})
+        self.assertNotIn("title", {l.role for l in pages[1].labels})
+        first_notes = " ".join(l.text for l in pages[0].labels if l.role == "note")
+        self.assertIn("divided by category", first_notes)
+        self.assertEqual(sum(len(p.bars) for p in pages), 30)
+        for page in pages:
+            self.assertEqual([r for r in horizontal_rule_ids(page) if r != "overview_first"], [])
+
     def test_pages_and_svg(self):
         pages = layout_horizontal_bar_chart_pages(BOOKS)
         self.assertEqual(len(pages), 1)
