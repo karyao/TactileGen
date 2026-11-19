@@ -15,6 +15,9 @@ source .venv-vlm/bin/activate
 python -m pip install -r requirements-vlm.txt
 ```
 
+This includes SentencePiece, required by the slow Gemma tokenizer selected by
+the processor's `use_fast=False` setting.
+
 The default checkpoint is
 [`google/gemma-3-4b-it`](https://huggingface.co/google/gemma-3-4b-it).
 Accept the model's access/license terms on Hugging Face, then authenticate locally:
@@ -148,6 +151,20 @@ dependencies; processor/model calls are mocked and no weights are downloaded:
 python -m unittest tests.test_gemma_cli tests.test_gemma tests.test_vlm_response \
   tests.test_contract_io tests.test_contracts tests.test_tactile
 ```
+
+In the VLM environment, also run the real offline processor initialization check:
+
+```bash
+python -m pip check
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m unittest tests.test_gemma_processor
+```
+
+This check creates a tiny synthetic SentencePiece tokenizer and image processor
+locally, then initializes the real `AutoProcessor` through the extractor. Only
+model loading is mocked; no checkpoint access, weights, or GPU are needed. The
+test skips when the entire optional VLM stack is absent, but a partial installation
+(including a missing SentencePiece dependency) fails. This checks initialization
+and tokenization, not model extraction accuracy.
 
 A real-model smoke test is separate: extract one vertical and one horizontal
 image with suitable hardware/model access, inspect the chart and raw response,
