@@ -109,7 +109,7 @@ class VLMResponseTest(unittest.TestCase):
         for response in (duplicate_chart, duplicate_series):
             with self.subTest(response=response), self.assertRaisesRegex(ValueError, "Duplicate JSON key"):
                 parse_chart_response(response, image="input.png")
-        for token in ("NaN", "Infinity", "-Infinity", "1e999"):
+        for token in ("NaN", "Infinity", "-Infinity", "1e999", str(10 ** 400), str(-10 ** 400)):
             response = self.raw.replace("[4, 6]", f"[{token}, 6]")
             with self.subTest(token=token), self.assertRaises(ValueError):
                 parse_chart_response(response, image="input.png")

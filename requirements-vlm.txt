@@ -1,0 +1,5 @@
+# Optional Gemma baseline; independent of the detector/OCR installation.
+torch>=2.6,<3
+transformers>=4.57.1,<5
+accelerate>=1,<2
+Pillow>=10.0.1,<13

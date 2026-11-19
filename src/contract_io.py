@@ -121,10 +121,13 @@ def parse_bar_chart(data: dict[str, Any]) -> VerticalBarChart | HorizontalBarCha
         has_bars = item.get("has_bars", True)
         if not isinstance(has_bars, bool):
             raise ValueError(f"{name}.has_bars must be a boolean")
-        series.append(BarSeries(
-            item["name"], tuple(_array(item["values"], f"{name}.values")),
-            has_bars, tuple(_array(item.get("rescued", []), f"{name}.rescued")),
-        ))
+        try:
+            series.append(BarSeries(
+                item["name"], tuple(_array(item["values"], f"{name}.values")),
+                has_bars, tuple(_array(item.get("rescued", []), f"{name}.rescued")),
+            ))
+        except OverflowError as exc:
+            raise ValueError(f"{name}.values must be finite representable numbers") from exc
     return _CHART_TYPES[kind](
         data["source_key"], data["title"], data["x_axis_title"],
         data["y_axis_title"], tuple(_array(data["categories"], "categories")), tuple(series),

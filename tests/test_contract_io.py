@@ -127,6 +127,7 @@ class ParseBarChartTest(unittest.TestCase):
             ("values", [None, 2]), ("values", ["1", 2]),
             ("values", [float("nan"), 2]), ("values", [float("inf"), 2]),
             ("values", [-float("inf"), 2]),
+            ("values", [10 ** 400, 2]), ("values", [-10 ** 400, 2]),
             ("rescued", [True]), ("rescued", [0, 1]),
             ("name", ""), ("has_bars", False),
         ):
