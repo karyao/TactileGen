@@ -101,7 +101,7 @@ stages, not the accuracy or tactile readability of the final graphic.
   training, and evaluation commands.
 - [YOLO ablation benchmark](docs/ablation_benchmark.md) — model comparisons.
 - [OCR comparison](docs/ocr_comparison.md) — Tesseract and RapidOCR results.
-- [Gemma baseline](docs/gemma_baseline.md) — optional direct image-to-chart Python API.
+- [Gemma baseline](docs/gemma_baseline.md) — optional image-to-chart Python API, CLI, and diagnostic artifacts.
 - [Tactile output](docs/tactile.md) — layouts, BANA references, and limitations.
 - [Analysis diagnostics](docs/analysis_diagnostics.md) — reports and troubleshooting.
 - [Stage contracts](docs/contracts.md) and [Gradio structure](docs/gradio_structure.md)

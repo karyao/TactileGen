@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import sys
+import tempfile
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 from src.baseline.vlm_response import parse_chart_response
+from src.contract_io import write_bar_chart
 from src.contracts import HorizontalBarChart, VerticalBarChart, validate_source_key
 
 
@@ -48,7 +53,7 @@ class GemmaExtractionResult:
 
 
 class GemmaExtractionError(RuntimeError):
-    """Safe failure details, with available diagnostics for a future CLI."""
+    """Safe failure details, with available diagnostics for the CLI."""
 
     def __init__(self, stage: str, message: str, metadata: dict[str, Any],
                  raw_response: str | None = None):
@@ -241,3 +246,112 @@ class GemmaChartExtractor:
                 metadata, raw_response) from None
         metadata.update(placeholder_fields=list(parsed.placeholder_fields), completion_status="complete")
         return GemmaExtractionResult(parsed.chart, raw_response, metadata)
+
+
+def _atomic_write(path: Path, write: Callable[[Path], None]) -> None:
+    """Replace one artifact only after its temporary sibling is fully written."""
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.",
+                                     suffix=".tmp", delete=False) as temporary:
+        pending = Path(temporary.name)
+    try:
+        write(pending)
+        pending.replace(path)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def _write_metadata(output_dir: Path, metadata: dict[str, Any]) -> None:
+    text = json.dumps(metadata, indent=2, allow_nan=False) + "\n"
+    _atomic_write(output_dir / "run_metadata.json",
+                  lambda path: path.write_text(text, encoding="utf-8"))
+
+
+def _prepare_output_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if any(path.iterdir()):
+        raise ValueError("Output directory must be new or empty; choose a different directory.")
+
+
+def _save_artifacts(output_dir: Path, metadata: dict[str, Any], raw_response: str | None,
+                    chart: VerticalBarChart | HorizontalBarChart | None = None) -> bool:
+    """Save available output and final metadata; report write failures safely."""
+    saved = True
+    try:
+        if raw_response is not None:
+            _atomic_write(output_dir / "raw_response.txt",
+                          lambda path: path.write_text(raw_response, encoding="utf-8", newline=""))
+        if chart is not None:
+            _atomic_write(output_dir / "chart.json", lambda path: write_bar_chart(path, chart))
+    except Exception:
+        saved = False
+        metadata = {**metadata, "completion_status": "failed", "error_stage": "output",
+                    "error_message": "Could not save extraction artifacts."}
+        print("gemma: output: Could not save extraction artifacts.", file=sys.stderr)
+    try:
+        _write_metadata(output_dir, metadata)
+    except Exception:
+        print("gemma: output: Could not save final run metadata; diagnostics are incomplete.", file=sys.stderr)
+        return False
+    return saved
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Extract chart JSON and diagnostics; SVG rendering is not connected yet."""
+    parser = argparse.ArgumentParser(
+        description="Extract a chart with Gemma and save JSON/diagnostics. SVG rendering is not connected yet.")
+    parser.add_argument("--image", type=Path, required=True, help="Local chart image")
+    parser.add_argument("--output-dir", type=Path, required=True, help="New or empty output directory")
+    parser.add_argument("--source-key", help="Namespaced identity (default: vlm/<image filename>)")
+    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
+    parser.add_argument("--revision")
+    parser.add_argument("--device", choices=("auto", "cuda", "mps", "cpu"), default="auto")
+    parser.add_argument("--dtype", choices=("auto", "float32", "bfloat16", "float16"), default="auto")
+    parser.add_argument("--max-new-tokens", type=int, default=4096)
+    parser.add_argument("--extract-only", action="store_true",
+                        help="Save extraction artifacts only (also the current default; no SVG rendering yet)")
+    args = parser.parse_args(argv)
+    source_key = args.source_key if args.source_key is not None else f"vlm/{args.image.name}"
+    try:
+        extractor = GemmaChartExtractor(model_id=args.model_id, revision=args.revision,
+                                       device=args.device, dtype=args.dtype, max_new_tokens=args.max_new_tokens)
+        validate_source_key(source_key)
+    except ValueError as exc:
+        parser.error(str(exc))
+    try:
+        _prepare_output_dir(args.output_dir)
+    except ValueError as exc:
+        print(f"gemma: output: {exc}", file=sys.stderr)
+        return 1
+    except OSError:
+        print("gemma: output: Could not create or access the output directory; use a writable directory.", file=sys.stderr)
+        return 1
+
+    context = {"image": str(args.image), "source_key": source_key}
+    metadata = {**extractor._metadata(), **context}
+    try:
+        _write_metadata(args.output_dir, metadata)
+    except Exception:
+        print("gemma: output: Could not save initial run metadata; extraction was not started.", file=sys.stderr)
+        return 1
+    try:
+        result = extractor.extract_result(args.image, source_key=args.source_key)
+    except GemmaExtractionError as exc:
+        saved = _save_artifacts(args.output_dir, {**metadata, **exc.metadata, **context}, exc.raw_response)
+        location = f" Diagnostics saved in {args.output_dir}." if saved else " Diagnostics are incomplete."
+        print(f"gemma: {exc.stage}: {exc}{location}", file=sys.stderr)
+        return 1
+    except Exception:
+        metadata.update(completion_status="failed", error_stage="inference",
+                        error_message="Unexpected extraction failure.")
+        _save_artifacts(args.output_dir, metadata, None)
+        print("gemma: inference: Unexpected extraction failure; inspect available run metadata.", file=sys.stderr)
+        return 1
+    if not _save_artifacts(args.output_dir, {**metadata, **result.metadata, **context},
+                           result.raw_response, result.chart):
+        return 1
+    print(f"Chart extraction completed. Artifacts saved in {args.output_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

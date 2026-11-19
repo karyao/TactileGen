@@ -3,8 +3,7 @@
 The optional Gemma baseline reads a local chart image directly and returns a
 `VerticalBarChart` or `HorizontalBarChart`. It reuses the chart parser and VLM
 response adapter without calling detection, OCR, reconstruction, or tactile
-rendering. The Python inference API is implemented; CLI arguments and diagnostic
-artifact writing are planned for Stage 3.
+rendering. Both the Python API and CLI support extraction and diagnostics.
 
 ## Optional installation
 
@@ -29,6 +28,46 @@ cache or downloads them if needed. Importing the module and constructing the
 extractor do not import inference packages, download weights, or initialize a
 device. Subsequent sequential calls on the same extractor reuse the loaded model.
 Use one extractor per worker; concurrent calls on one instance are unsupported.
+
+## Command-line extraction
+
+```bash
+python -m src.baseline.gemma \
+  --image charts/sales.png \
+  --output-dir output/gemma/sales \
+  --extract-only
+```
+
+`--image` and `--output-dir` are required. The CLI accepts `--source-key`,
+`--model-id`, `--revision`, `--device`, `--dtype`, and `--max-new-tokens`; defaults
+match the Python configuration table below. Use `python -m src.baseline.gemma
+--help` for usage; help works without inference dependencies installed.
+
+During Stage 3, omitting `--extract-only` also produces extraction artifacts.
+SVG rendering is not connected yet; Stage 4 will add rendering to the default
+command path. `--extract-only` will continue to stop after chart extraction.
+
+The output directory must be new or empty, including hidden files and
+subdirectories. Existing contents are never cleared. Choose a different output
+directory for a retry. Use one invocation per output directory.
+
+| Artifact | Contents |
+| --- | --- |
+| `raw_response.txt` | Exact decoded model response, including whitespace. Saved whenever decoding produced text, even if the response is empty or invalid. |
+| `chart.json` | Validated chart serialized with the existing schema-version-1 writer. Absent after extraction or parsing failures. |
+| `run_metadata.json` | Requested/resolved settings, input image and source identity, available timing and placeholder diagnostics, completion status, and safe failure details. |
+
+Initial metadata has `completion_status: "started"`; the CLI records `"complete"`
+only after extraction artifacts have been saved. Individual artifacts are written
+through temporary files and replaced when complete. A failed or interrupted run
+may retain partial sets of artifacts; check metadata and exit status. A valid
+chart already saved may remain if a subsequent metadata write fails.
+
+Exit codes are `0` for success, `1` for extraction/output failures, and `2` for
+argument/configuration errors. Failures print concise messages to stderr. When
+possible, failures retain metadata and any decoded response, without retries or
+fallback analysis. Output-writing failures use `error_stage: "output"`; if
+metadata cannot be written, stderr reports that diagnostics are incomplete.
 
 ## Python API
 
@@ -97,7 +136,8 @@ Invalid constructor configuration raises `ValueError`. Extraction errors use
 stages `input`, `dependencies`, `device`, `loading`, `inference`, and `parsing`.
 Public errors and metadata contain safe messages rather than unrestricted
 upstream exception text. Raw model responses are retained separately for review.
-Extraction does not write artifacts or generate SVGs.
+The Python extraction API does not write artifacts or generate SVGs; the CLI
+saves extraction artifacts as described above.
 
 ## Validation
 
@@ -105,7 +145,7 @@ Run offline tests using an environment with the existing contract/tactile test
 dependencies; processor/model calls are mocked and no weights are downloaded:
 
 ```bash
-python -m unittest tests.test_gemma tests.test_vlm_response \
+python -m unittest tests.test_gemma_cli tests.test_gemma tests.test_vlm_response \
   tests.test_contract_io tests.test_contracts tests.test_tactile
 ```
 
