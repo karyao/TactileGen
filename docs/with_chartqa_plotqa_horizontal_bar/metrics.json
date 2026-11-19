@@ -1,0 +1,205 @@
+{
+  "matching_results": [
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_plotqa_bars_eval",
+      "split": "test",
+      "class": "horizontal_bar",
+      "confidence": 0.25,
+      "iou": 0.5,
+      "imgsz": 640,
+      "images": 11292,
+      "true_positive": 122975,
+      "false_positive": 4620,
+      "false_negative": 6053,
+      "precision": 0.9637916846271406,
+      "recall": 0.9530877018941625,
+      "f1": 0.9584098073828144,
+      "exact_bar_count_accuracy": 0.6679064824654622,
+      "sample_images": [
+        {
+          "image_id": "5574",
+          "predicted": 12,
+          "actual": 12,
+          "matched": 12
+        },
+        {
+          "image_id": "5575",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        },
+        {
+          "image_id": "5576",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5577",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        },
+        {
+          "image_id": "5578",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5579",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5580",
+          "predicted": 12,
+          "actual": 12,
+          "matched": 12
+        },
+        {
+          "image_id": "5581",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        }
+      ]
+    },
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_plotqa_bars_eval",
+      "split": "test",
+      "class": "horizontal_bar",
+      "confidence": 0.25,
+      "iou": 0.75,
+      "imgsz": 640,
+      "images": 11292,
+      "true_positive": 118582,
+      "false_positive": 9013,
+      "false_negative": 10446,
+      "precision": 0.9293624358321251,
+      "recall": 0.9190408283473355,
+      "f1": 0.9241728138163765,
+      "exact_bar_count_accuracy": 0.6679064824654622,
+      "sample_images": [
+        {
+          "image_id": "5574",
+          "predicted": 12,
+          "actual": 12,
+          "matched": 12
+        },
+        {
+          "image_id": "5575",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        },
+        {
+          "image_id": "5576",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5577",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        },
+        {
+          "image_id": "5578",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5579",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5580",
+          "predicted": 12,
+          "actual": 12,
+          "matched": 9
+        },
+        {
+          "image_id": "5581",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        }
+      ]
+    },
+    {
+      "model": "models/best_with_chartqa.pt",
+      "data_root": "dataset_plotqa_bars_eval",
+      "split": "test",
+      "class": "horizontal_bar",
+      "confidence": 0.25,
+      "iou": 0.9,
+      "imgsz": 640,
+      "images": 11292,
+      "true_positive": 98614,
+      "false_positive": 28981,
+      "false_negative": 30414,
+      "precision": 0.7728672753634547,
+      "recall": 0.764283721362805,
+      "f1": 0.7685515327932414,
+      "exact_bar_count_accuracy": 0.6679064824654622,
+      "sample_images": [
+        {
+          "image_id": "5574",
+          "predicted": 12,
+          "actual": 12,
+          "matched": 12
+        },
+        {
+          "image_id": "5575",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        },
+        {
+          "image_id": "5576",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5577",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 8
+        },
+        {
+          "image_id": "5578",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5579",
+          "predicted": 8,
+          "actual": 8,
+          "matched": 8
+        },
+        {
+          "image_id": "5580",
+          "predicted": 12,
+          "actual": 12,
+          "matched": 9
+        },
+        {
+          "image_id": "5581",
+          "predicted": 10,
+          "actual": 10,
+          "matched": 10
+        }
+      ]
+    }
+  ]
+}
