@@ -229,7 +229,7 @@ python -m scripts.eval_gemma --limit 8 --output-dir output/gemma-eval-smoke
 python -m scripts.eval_gemma --output-dir output/gemma-eval-test
 ```
 
-The default images are `dataset_yolo_vbars_clean/images/test` and annotations
+The default images are `~/Desktop/TactileGen/dataset_plotqa_bars_eval/images/test` and annotations
 are `data/plotqa/test/annotations.json`; override them with `--images` and
 `--annotations`. Device, dtype, checkpoint, revision and token budget can also
 be configured; see `--help`. The script loads the model once and saves a JSON
@@ -245,5 +245,10 @@ unique category and series labels, with a single-series positional fallback.
 Value accuracy uses an absolute tolerance of 5% of the largest absolute ground
 truth value in the chart (exact for an all-zero chart). Both alignment coverage
 and accuracy over all ground-truth values are reported. Bar count uses the number
-of non-null annotated values; it is not an object-detection IoU metric. PlotQA
+of annotated values for charts with no missing values; it is not an object-detection IoU metric.
+NaN and null values are treated as missing and excluded from value metrics. Charts
+with missing values are excluded from bar-count accuracy; the report includes
+the eligible chart count, affected chart count, and missing value count. Invalid
+numeric values and unsupported chart types fail validation before model loading.
+Scoring changes require a new output directory. PlotQA
 annotations are imperfect and model values may be sensitive to axis scaling.

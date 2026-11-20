@@ -38,7 +38,9 @@ def validate_record(record):
     for model in models:
         if len(model[category_axis]) != len(model[value_axis]):
             raise ValueError('category and value counts differ')
-        for value in model[value_axis]:
+        for index, value in enumerate(model[value_axis]):
+            if isinstance(value, float) and math.isnan(value):
+                model[value_axis][index] = value = None
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
                                       or not math.isfinite(value)):
                 raise ValueError(f'invalid numeric value {value!r}')
@@ -55,8 +57,11 @@ def score(record, chart):
     categories = [lookup.get(str(x), str(x)) for x in models[0][category_axis]]
     names = [m.get('label') or m.get('name') or '' for m in models]
     values = [v for m in models for v in m[value_axis] if v is not None]
+    missing = sum(v is None for m in models for v in m[value_axis])
     out = dict(category_total=len(categories), series_total=len(names), value_total=len(values),
-               category_correct=0, series_correct=0, value_aligned=0, value_correct=0, bar_count_correct=0)
+               category_correct=0, series_correct=0, value_aligned=0, value_correct=0, bar_count_correct=0,
+               bar_count_eligible=int(missing == 0), missing_value_count=missing,
+               charts_with_missing_values=int(missing > 0))
     if not isinstance(chart, chart_class):
         return out
     cm = unique_matches(categories, chart.categories)
@@ -64,7 +69,7 @@ def score(record, chart):
     out['category_correct'], out['series_correct'] = len(cm), len(sm)
     if len(models) == len(chart.series) == 1:
         sm = {0: 0}
-    out['bar_count_correct'] = int(sum(len(s.values) for s in chart.series if s.has_bars) == len(values))
+    out['bar_count_correct'] = int(not missing and sum(len(s.values) for s in chart.series if s.has_bars) == len(values))
     scale = max((abs(v) for v in values), default=0)
     for i, j in sm.items():
         series = chart.series[j]
@@ -82,6 +87,22 @@ def write_json(path, data):
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
     tmp.replace(path)
+
+
+def aggregate_metrics(rows):
+    totals = {key: sum(r['scores'][key] for r in rows) for key in rows[0]['scores']}
+    def ratio(n, d):
+        return n / d if d else None
+    return dict(images=len(rows), successes=sum(r['status'] == 'complete' for r in rows), totals=totals,
+                bar_count_eligible=totals['bar_count_eligible'],
+                charts_with_missing_values=totals['charts_with_missing_values'],
+                missing_value_count=totals['missing_value_count'],
+                bar_count_accuracy=ratio(totals['bar_count_correct'], totals['bar_count_eligible']),
+                category_accuracy=ratio(totals['category_correct'], totals['category_total']),
+                series_label_accuracy=ratio(totals['series_correct'], totals['series_total']),
+                value_alignment_coverage=ratio(totals['value_aligned'], totals['value_total']),
+                value_accuracy_aligned=ratio(totals['value_correct'], totals['value_aligned']),
+                value_accuracy_all=ratio(totals['value_correct'], totals['value_total']))
 
 
 def main():
@@ -126,7 +147,7 @@ def main():
     digest = hashlib.sha256(a.annotations.read_bytes()).hexdigest()
     config = dict(images=str(a.images.resolve()), ids=ids, annotations=str(a.annotations.resolve()), annotation_sha256=digest,
                   model_id=a.model_id, revision=a.revision, device=a.device, dtype=a.dtype,
-                  max_new_tokens=a.max_new_tokens, prompt_version=PROMPT_VERSION, scoring_version=2)
+                  max_new_tokens=a.max_new_tokens, prompt_version=PROMPT_VERSION, scoring_version=3)
     a.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = a.output_dir / 'manifest.json'
     if manifest.exists():
@@ -156,16 +177,7 @@ def main():
         write_json(path, row)
         print(f'[{index}/{len(images)}] {image.stem}: {row["status"]}', flush=True)
     rows = [json.loads((rows_dir / (i + '.json')).read_text()) for i in ids]
-    totals = {key: sum(r['scores'][key] for r in rows) for key in rows[0]['scores']}
-    def ratio(n, d):
-        return n / d if d else None
-    metrics = dict(images=len(rows), successes=sum(r['status'] == 'complete' for r in rows), totals=totals,
-                   bar_count_accuracy=ratio(totals['bar_count_correct'], len(rows)),
-                   category_accuracy=ratio(totals['category_correct'], totals['category_total']),
-                   series_label_accuracy=ratio(totals['series_correct'], totals['series_total']),
-                   value_alignment_coverage=ratio(totals['value_aligned'], totals['value_total']),
-                   value_accuracy_aligned=ratio(totals['value_correct'], totals['value_aligned']),
-                   value_accuracy_all=ratio(totals['value_correct'], totals['value_total']))
+    metrics = aggregate_metrics(rows)
     write_json(a.output_dir / 'metrics.json', metrics)
     (a.output_dir / 'report.md').write_text('# Gemma baseline\n\n' + '\n'.join(f'- {k}: {v}' for k, v in metrics.items() if k != 'totals') + '\n')
 

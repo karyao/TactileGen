@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.eval_gemma import score, unique_matches, validate_record
+from scripts.eval_gemma import aggregate_metrics, score, unique_matches, validate_record
 from src.contracts import BarSeries, HorizontalBarChart, VerticalBarChart
 
 
@@ -50,6 +50,33 @@ class GemmaEvaluationTests(unittest.TestCase):
                                                        'major_labels': {'values': []}}}}
         with self.assertRaises(ValueError):
             validate_record(record)
+        record['models'][0]['y'][0] = float('inf')
+        with self.assertRaises(ValueError):
+            validate_record(record)
+
+    def test_missing_values_and_aggregate(self):
+        rows = []
+        for chart_type, category_axis, value_axis, chart_class in (
+                ('vbar_categorical', 'x', 'y', VerticalBarChart),
+                ('hbar_categorical', 'y', 'x', HorizontalBarChart)):
+            for missing in (float('nan'), None):
+                record = {'type': chart_type, 'models': [{category_axis: ['A', 'B'],
+                          value_axis: [10, missing], 'name': 's'}],
+                          'general_figure_info': {category_axis + '_axis': {
+                              'major_ticks': {'values': []}, 'major_labels': {'values': []}}}}
+                validate_record(record)
+                self.assertIsNone(record['models'][0][value_axis][1])
+                chart = chart_class('test/a', 't', 'x', 'y', ('A', 'B'), (BarSeries('s', (10, 99)),))
+                result = score(record, chart)
+                self.assertEqual((result['value_total'], result['value_correct'], result['bar_count_eligible']), (1, 1, 0))
+                rows.append({'status': 'complete', 'scores': result})
+        complete = {'type': 'vbar_categorical', 'models': [{'x': ['A'], 'y': [10]}],
+                    'general_figure_info': {'x_axis': {'major_ticks': {'values': []}, 'major_labels': {'values': []}}}}
+        chart = VerticalBarChart('test/a', 't', 'x', 'y', ('A',), (BarSeries(None, (10,)),))
+        rows.append({'status': 'complete', 'scores': score(complete, chart)})
+        metrics = aggregate_metrics(rows)
+        self.assertEqual((metrics['bar_count_accuracy'], metrics['bar_count_eligible']), (1, 1))
+        self.assertEqual((metrics['charts_with_missing_values'], metrics['missing_value_count']), (4, 4))
 
 
 if __name__ == '__main__':
