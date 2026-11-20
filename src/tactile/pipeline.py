@@ -41,10 +41,13 @@ def interpret(image, frame, ocr):
 
     mapping = None
     try:
-        mapping = match_legend_to_bars(image, frame, ocr)
-        reduced = drop_unmatched_bars(frame, mapping)
+        # Which bars to drop is decided from the template match alone; the colour resolution
+        # that names the series would otherwise keep low-confidence bars this rule removes.
+        reduced = drop_unmatched_bars(
+            frame, match_legend_to_bars(image, frame, ocr, resolve_by_colour=False))
         if reduced is not None:
-            frame, mapping = reduced, match_legend_to_bars(image, reduced, ocr)
+            frame = reduced
+        mapping = match_legend_to_bars(image, frame, ocr)
         return reconstruct_vbar(frame, ocr, image, legend_mapping=mapping), None, mapping
     except ChartInterpretationError as error:
         return None, error, mapping

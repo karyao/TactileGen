@@ -459,20 +459,19 @@ def _resolve_by_colour(image, detections: DetectionFrame, mapping: LegendMapping
         bar = by_id.get(assignment.bar_id)
         colour = None if bar is None else _median_colour(image, bar)
         if colour is None:
-            continue
+            return mapping
         distances = [float(np.linalg.norm(colour - swatch)) for swatch in swatches]
         order = sorted(range(len(distances)), key=distances.__getitem__)
         best = order[0]
+        # All or nothing: a mix of named and unresolved bars makes reconstruct stop rescuing bars.
         if distances[best] > COLOUR_MAX_DISTANCE or not entries[best].name:
-            continue
+            return mapping
         if len(order) > 1 and distances[order[1]] - distances[best] < COLOUR_MIN_MARGIN:
-            continue
+            return mapping
         entry = entries[best]
         resolved[assignment.bar_id] = LegendBarAssignment(
             assignment.bar_id, entry.swatch_id, entry.label_id, entry.name,
             1.0 - distances[best] / 441.7, "matched")
-    if not resolved:
-        return mapping
     return replace(mapping, assignments=tuple(
         resolved.get(a.bar_id, a) for a in mapping.assignments))
 
@@ -484,11 +483,15 @@ def match_legend_to_bars(
     *,
     max_error: float = 0.03,
     min_margin: float = 0.01,
+    resolve_by_colour: bool = True,
 ) -> LegendMappingFrame:
-    """Return one deterministic, in-memory legend assignment per vertical bar."""
+    """Return one deterministic, in-memory legend assignment per vertical bar.
+
+    ``resolve_by_colour=False`` returns the template-match result alone.
+    """
     mapping = _classify_legend_scores(
         _score_legend_to_bars(image, detections, ocr),
         max_error=max_error,
         min_margin=min_margin,
     )
-    return _resolve_by_colour(image, detections, mapping)
+    return _resolve_by_colour(image, detections, mapping) if resolve_by_colour else mapping

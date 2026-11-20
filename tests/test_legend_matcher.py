@@ -370,3 +370,11 @@ class ColourResolutionTest(unittest.TestCase):
         assignments = match_legend_to_bars(image, detections, ocr).assignments
         self.assertTrue(all(a.series_name is None for a in assignments))
 
+    def test_one_bar_that_matches_no_swatch_leaves_the_whole_chart_unresolved(self):
+        # a mix of named and unresolved bars would make reconstruct stop rescuing bars
+        image, detections, ocr = self._chart((10, 50, 30))
+        image[6:44, 70:78] = (200, 10, 200)
+        detections = frame(*detections.detections, detection("b3", "vertical_bar", (69, 5, 79, 45)))
+        assignments = match_legend_to_bars(image, detections, ocr).assignments
+        self.assertTrue(all(a.series_name is None for a in assignments[:2]))
+

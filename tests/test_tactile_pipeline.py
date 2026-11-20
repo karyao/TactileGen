@@ -63,7 +63,9 @@ class Pipeline(unittest.TestCase):
         ):
             result = pipeline.analyse(Path("chart.png"), Path("weights.pt"))
 
-        matcher.assert_called_once_with(image, frame, ocr)
+        # first call decides which bars to drop (template only), the last names the series
+        matcher.assert_has_calls([
+            mock.call(image, frame, ocr, resolve_by_colour=False), mock.call(image, frame, ocr)])
         reconstruct.assert_called_once_with(
             frame, ocr, image, legend_mapping=mapping
         )
