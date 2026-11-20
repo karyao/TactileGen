@@ -3,6 +3,7 @@
 from contextlib import redirect_stdout
 from dataclasses import replace
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -485,6 +486,51 @@ class RuleTest(unittest.TestCase):
     def test_label_gap_constants_match_bana(self):
         self.assertAlmostEqual(LABEL_MIN_GAP, 3.175)
         self.assertAlmostEqual(LABEL_MAX_GAP, 6.35)
+
+
+class KeyOwnerDistanceTest(unittest.TestCase):
+    """label_owner_distance: a key entry is measured by its first line (BANA §5.8.4.3 puts
+    runovers in cell 8, further than 1/4 inch from the sample); graphic labels by every label."""
+
+    NAME = "Net savings(excluding particulate emission damage)"   # wraps to two key lines
+
+    def setUp(self):
+        self.layout = layout_vertical_bar_chart(VerticalBarChart(
+            "demo/key.png", "Savings", "Years", "Savings", ("2003", "2004", "2005"),
+            (BarSeries(self.NAME, (1.0, 2.0, 3.0)), BarSeries("Net National savings", (3.0, 2.0, 1.0)))))
+
+    def owner_ids(self, layout):
+        return [v.element_ids for v in check_layout(layout) if v.rule.id == "label_owner_distance"]
+
+    def key_lines(self, layout, series=0):
+        return sorted((l for l in layout.labels if l.owner_id == f"key-sample-{series}"),
+                      key=lambda l: l.y)
+
+    def test_a_wrapped_key_entry_with_a_cell_8_runover_passes(self):
+        lines = self.key_lines(self.layout)
+        self.assertEqual(len(lines), 2)
+        sample = self.layout.by_id("key-sample-0")
+        self.assertGreater(lines[1].bounds.gap(sample.bounds), LABEL_MAX_GAP)   # runover is far
+        self.assertEqual(self.owner_ids(self.layout), [])
+
+    def test_a_key_entry_whose_first_line_is_too_far_from_its_sample_still_fails(self):
+        first = self.key_lines(self.layout)[0]
+        moved = tuple(replace(l, x=l.x + 2 * LABEL_MAX_GAP) if l is first else l
+                      for l in self.layout.labels)
+        self.assertEqual(self.owner_ids(replace(self.layout, labels=moved)),
+                         [(first.id, "key-sample-0")])
+
+    def test_a_graphic_label_too_far_from_its_owner_still_fails(self):
+        category = next(l for l in self.layout.labels if l.role == "category")
+        moved = tuple(replace(l, y=l.y + 2 * LABEL_MAX_GAP) if l is category else l
+                      for l in self.layout.labels)
+        self.assertIn((category.id, "axis-x"), self.owner_ids(replace(self.layout, labels=moved)))
+
+    def test_every_line_of_a_graphic_label_is_still_measured(self):
+        heading = [l for l in self.layout.labels if l.role == "y_value"]
+        moved = tuple(replace(l, x=l.x - LABEL_MAX_GAP) if l.role == "y_value" else l
+                      for l in self.layout.labels)
+        self.assertEqual(len(self.owner_ids(replace(self.layout, labels=moved))), len(heading))
 
 
 class ConstantsTest(unittest.TestCase):
@@ -1267,6 +1313,8 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr) as ocr_call,
             mock.patch("src.ocr.tesseract.TesseractBackend", return_value=backend),
+            mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars"),
+            mock.patch("src.bar_filter.drop_unmatched_bars", return_value=None),
             mock.patch(
                 "src.reconstruction.legend_matcher.filter_bars_by_legend",
                 side_effect=lambda image, frame, ocr, **kwargs: LegendFilterResult(frame, mapping)
@@ -1585,6 +1633,8 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.ocr.run_ocr", return_value=ocr),
             mock.patch("src.ocr.tesseract.TesseractBackend",
                        return_value=mock.sentinel.backend),
+            mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars"),
+            mock.patch("src.bar_filter.drop_unmatched_bars", return_value=None),
             mock.patch("src.reconstruction.legend_matcher.filter_bars_by_legend",
                        side_effect=lambda image, frame, ocr, **kwargs: LegendFilterResult(frame, mapping)) as matcher,
             mock.patch("src.reconstruction.vertical.reconstruct_vbar",
@@ -1689,6 +1739,40 @@ class Pipeline(unittest.TestCase):
         for sample in ("key-sample-0", "key-sample-1", "key-sample-2"):
             self.assertIn(sample, svg)
         self.assertEqual(svg.count('id="bar-'), 3)           # Kenya's three bars only
+
+
+class ReviewFlag(unittest.TestCase):
+    def test_reasons_for_no_visible_bars_and_inferred_zeros(self):
+        spec = make_spec(series=[
+            SeriesSpec("A", "#112233", [10.0, 0.0, 30.0], value_rescued=[False, True, False]),
+            SeriesSpec("B", "#445566", [None, None, None], no_visible_bars=True)])
+        reasons = pipeline.review_reasons(spec)
+        self.assertEqual([r["code"] for r in reasons], ["possible_hidden_bars"] * 2)
+        self.assertIn("no bars are visible for B", reasons[0]["detail"])
+        self.assertIn("1 bar(s)", reasons[1]["detail"])
+        self.assertEqual(pipeline.review_reasons(make_spec()), [])
+
+    def test_flagged_chart_still_builds_and_writes_a_sidecar(self):
+        spec = make_spec(series=[SeriesSpec("A", "#112233", [10.0, 20.0, 30.0]),
+                                 SeriesSpec("B", "#445566", [None] * 3, no_visible_bars=True)])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            out = io.StringIO()
+            code = pipeline.run(args, analyse_fn=lambda *_, **__: (spec, None, None), stdin_is_tty=False,
+                                out=out, err=io.StringIO())
+            self.assertEqual(code, 0)
+            self.assertIn("NEEDS REVIEW: possible_hidden_bars", out.getvalue())
+            data = json.loads((Path(tmp) / "out.review.json").read_text())
+            self.assertEqual(data["review"][0]["code"], "possible_hidden_bars")
+
+    def test_unflagged_chart_writes_no_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            pipeline.run(args, analyse_fn=lambda *_, **__: (make_spec(), None, None), stdin_is_tty=False,
+                         out=io.StringIO(), err=io.StringIO())
+            self.assertFalse((Path(tmp) / "out.review.json").exists())
 
 
 if __name__ == "__main__":

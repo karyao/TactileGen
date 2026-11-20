@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.gradio_ui.review import ManualGenerationResult
 from src.tactile.completeness import Completeness
 from src.tactile.rules import format_report
+from src.tactile.pipeline import review_reasons
 
 
 def generation_report(result: ManualGenerationResult) -> str:
@@ -68,7 +69,7 @@ def alert_message(message: str) -> str:
     return f'<div role="alert">{message}</div>'
 
 
-def completeness_summary(result: Completeness) -> str:
+def completeness_summary(result: Completeness, spec=None) -> str:
     """Render a compact, readable reconstruction assessment."""
     labels = {
         "ready": "Ready",
@@ -76,6 +77,10 @@ def completeness_summary(result: Completeness) -> str:
         "cannot_build": "Cannot build",
     }
     lines = [f"### Reconstruction: {labels.get(result.status, result.status)}"]
+    if spec is not None:
+        reasons = review_reasons(spec)
+        if reasons:
+            lines.extend(("", "**Needs review**", *(f"- {item['detail']}" for item in reasons)))
     if result.notes:
         lines.extend(("", "**Notes**", *(f"- {note}" for note in result.notes)))
     if result.missing:

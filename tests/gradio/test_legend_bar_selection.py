@@ -9,6 +9,7 @@ import pytest
 from src.contracts import Box, OCRFrame, RecognizedText
 from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.analysis import analyze_image
+from src.reconstruction.legend_matcher import filter_bars_by_legend
 from src.reconstruction.horizontal import transpose_frame, transpose_image
 from src.tactile.completeness import Overrides, apply_overrides
 from src.tactile.generation import generate_tactile_artifacts
@@ -40,6 +41,20 @@ def selection_case(tmp_path, horizontal, legend=True):
     path = tmp_path / "chart.png"
     assert cv2.imwrite(str(path), image)
     return path, frame, ocr
+
+
+def test_low_confidence_unmatched_vertical_bar_is_filtered_before_colour_matching(tmp_path):
+    path, frame, ocr = selection_case(tmp_path, False)
+    bar = next(d for d in frame.detections if d.role == "vertical_bar")
+    reduced = replace(frame, detections=tuple(d for d in frame.detections if d.id != bar.id))
+    with patch("src.gradio_ui.analysis.run_detection", return_value=frame), \
+         patch("src.gradio_ui.analysis.run_ocr", return_value=ocr), \
+         patch("src.gradio_ui.analysis.drop_unmatched_bars", return_value=reduced) as drop, \
+         patch("src.gradio_ui.analysis.filter_bars_by_legend", wraps=filter_bars_by_legend) as colour:
+        result = analyze_image(object(), path, .25, .7, ocr_backend=object())
+    drop.assert_called_once()
+    assert colour.call_args.args[1] is reduced
+    assert result.detection_frame is reduced
 
 
 @pytest.mark.parametrize("horizontal", [False, True])

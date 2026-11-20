@@ -118,6 +118,8 @@ def test_effective_frame_reaches_all_consumers(image_path, diagnostic, preferenc
         calls = {}
         matcher = stack.enter_context(patch("src.gradio_ui.analysis.filter_bars_by_legend",
                                             side_effect=passthrough_filter))
+        # Isolate orientation propagation from the separate unmatched-bar filter.
+        stack.enter_context(patch("src.gradio_ui.analysis.drop_unmatched_bars", return_value=None))
         for orientation, reconstruct_name in (
             ("vertical", "reconstruct_vbar"),
             ("horizontal", "reconstruct_hbar"),

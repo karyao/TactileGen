@@ -726,7 +726,7 @@ def test_ambiguous_series_exposes_legend_scores_and_unresolved_bars():
                      for k, (text, confidence) in chart.texts.items()))
     diagnostic = AnalysisDiagnostics(settings={})
     mapping = match_legend_to_bars(chart.image, frame, ocr,
-                                   min_margin=1.0, diagnostics=diagnostic)
+                                   min_margin=1.0, diagnostics=diagnostic, resolve_by_colour=False)
     scores = events(diagnostic, 'legend_assignment')
     assert all(e['best_error'] == pytest.approx(0) for e in scores)
     assert all(0 < e['runner_up_error'] < e['min_margin'] for e in scores)

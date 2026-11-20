@@ -100,7 +100,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=_port, default=DEFAULT_PORT)
     parser.add_argument(
         "--ocr",
-        choices=("tesseract", "rapidocr"),
+        choices=("tesseract", "rapidocr", "hybrid"),
         default=DEFAULT_OCR_ENGINE,
         help="Initial OCR engine (default rapidocr; selectable in the browser)",
     )

@@ -24,9 +24,10 @@ Open the local URL printed in the terminal. Upload a chart, analyze it, review
 its text and values, and generate tactile SVGs.
 
 - **OCR:** RapidOCR is the default and may download models on first use. Choose
-  RapidOCR or Tesseract in the **OCR engine** dropdown. Tesseract requires its
-  executable and language packs installed; start with `--ocr tesseract` to select
-  it by default. **Tesseract language** applies only to Tesseract.
+  RapidOCR, Tesseract, or Hybrid in the **OCR engine** dropdown. Hybrid runs both
+  engines. Tesseract and Hybrid require the Tesseract executable and language
+  packs; use `--ocr hybrid` to select Hybrid at startup. **Tesseract language**
+  also applies to Hybrid. The review panel flags potentially hidden bars.
 - **Bar orientation:** leave **Auto** selected, or choose **Vertical** or
   **Horizontal** and analyze again if the direction is unclear. The result shows
   the selected direction, automatic/manual source, and suppressed detection count.

@@ -27,6 +27,15 @@ around elements that break a rule (hover a box for the rule). `--strict`
 exits with status 1 when any rule fails. The three demo charts in
 `tests/fixtures/tactile/` are made-up example data, not PlotQA charts.
 
+## Review flag for hidden bars
+
+A bar that is not drawn may be zero, tiny, or outside the axis range (PlotQA draws no negative bar when
+the y-axis starts at 0), and the picture cannot tell these apart. When a legend entry has no visible bars
+or a bar was read as zero because none was found, the pipeline prints `NEEDS REVIEW: possible_hidden_bars:
+...` and writes `<output>.review.json` (`{"image": ..., "review": [{"code": ..., "detail": ...}]}`) next to
+the SVG so a downstream step can route the chart to a person. It never blocks a chart or changes an exit
+code, the SVG or the printed summary.
+
 ## What the layout does
 
 Page and braille sizes:
@@ -150,7 +159,7 @@ also works on layouts built another way.
 | `bar_width` | Bars 3/8 to 1 inch wide (thick, for horizontal bars) | §6.6.6.7 |
 | `bar_spacing` | Bars in a set do not overlap; at least 1/8 inch between sets | §6.6.6.7, §3.4.3.12 |
 | `label_clearance` | Labels at least 1/8 inch (3 mm) from every other component | §3.4.3.12, §6.6.6.6 |
-| `label_owner_distance` | A label at most 1/4 inch (6 mm) from its component | §3.4.3.12, §5.10.5 |
+| `label_owner_distance` | A label at most 1/4 inch (6 mm) from its component; a series key entry is measured by its first line, since its runovers sit in cell 8 (§5.8.4.3) | §3.4.3.12, §5.10.5 |
 | `fits_page` | Everything inside 40 cells x 25 lines | §3.4.2 |
 | `grid_spacing` | Grid lines at least 3/8 inch apart | §3.4.3.9, §6.6.1.1 |
 | `line_hierarchy` | Grid and lead lines weaker than axis lines | §6.6.6.5, §3.4.3.8 |
