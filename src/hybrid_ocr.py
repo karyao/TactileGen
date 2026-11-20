@@ -3,7 +3,9 @@
 RapidOCR wins on numeric tick text and short names; Tesseract wins on multi-word legend
 labels and on partly-dropped words. Fitted per role on a random sample of PlotQA test charts
 as "take RapidOCR when its confidence beats Tesseract's by at least the role margin".
-Roles without a margin (titles, axis titles) keep RapidOCR's reading.
+Roles without a margin (titles, axis titles) keep RapidOCR's reading. A "$" that only RapidOCR
+(correctly) read always wins. Near-match rules (same length, small edit distance) were tried and rejected:
+they lost 42-139 correct regions to gain 14-20 across all 3041 disagreeing regions.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ def choose(role: str, rapid: OCRBackendResult | None, tess: OCRBackendResult | N
         return rapid or tess
     if rapid.text.strip() == tess.text.strip():
         return rapid
+    if "$" in rapid.text and "$" not in tess.text:
+        return rapid  # Tesseract reads "$" as "S"
     margin = RAPIDOCR_MARGIN.get(role)
     if margin is None:
         return rapid
