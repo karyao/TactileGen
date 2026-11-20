@@ -265,7 +265,7 @@ def create_callbacks(
                     ocr_download_path=download,
                     legend_table=mapping_rows if show_mapping else None,
                     completeness_text=(
-                        completeness_summary(result.completeness)
+                        completeness_summary(result.completeness, result.spec)
                         if result.completeness is not None else None
                     ),
                     review_model=review,
@@ -370,7 +370,7 @@ def create_callbacks(
                 for page in submitted.generation.pages
             ]
             return generation.updates(
-                completeness_output=gr.update(value=completeness_summary(submitted.completeness)),
+                completeness_output=gr.update(value=completeness_summary(submitted.completeness, corrected)),
                 review_state=submitted.review_model,
                 review_fields=gr.update(value=review_text_rows(submitted.review_model)),
                 review_values=gr.update(value=review_value_rows(corrected)),
@@ -391,7 +391,7 @@ def create_callbacks(
         except ManualGenerationBlocked as exc:
             return generation.updates(
                 completeness_output=gr.update(
-                    value=completeness_summary(exc.completeness),
+                    value=completeness_summary(exc.completeness, exc.review_model.spec),
                     visible=True,
                 ),
                 review_state=exc.review_model,

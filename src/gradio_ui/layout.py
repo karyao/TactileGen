@@ -222,7 +222,7 @@ def _build_controls(gr, initial_imgsz: int, initial_ocr_engine: str) -> Controls
             elem_classes="borealis-setting",
         )
         ocr_engine = gr.Dropdown(
-            choices=[("RapidOCR", "rapidocr"), ("Tesseract", "tesseract")],
+            choices=[("RapidOCR", "rapidocr"), ("Tesseract", "tesseract"), ("Hybrid", "hybrid")],
             value=initial_ocr_engine,
             label="OCR engine",
             info="Choose the text recognition engine for the next analysis.",

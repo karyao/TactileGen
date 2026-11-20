@@ -3,7 +3,7 @@
 from src.gradio_ui.settings import DEFAULT_OCR_ENGINE
 
 
-OCR_ENGINES = ("rapidocr", "tesseract")
+OCR_ENGINES = ("rapidocr", "tesseract", "hybrid")
 
 
 class OCRBackendResolver:
@@ -25,6 +25,10 @@ class OCRBackendResolver:
                 from src.ocr.rapidocr import RapidOCRBackend
 
                 backend = RapidOCRBackend()
+            elif engine == "hybrid":
+                from src.ocr.hybrid import HybridBackend
+
+                backend = HybridBackend()
             else:
                 from src.ocr.tesseract import TesseractBackend
 

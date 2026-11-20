@@ -35,7 +35,8 @@ from src.gradio_ui.settings import (
     RECONSTRUCTION_WARNING,
     LOGGER,
 )
-from src.reconstruction.legend_matcher import filter_bars_by_legend
+from src.reconstruction.legend_matcher import filter_bars_by_legend, match_legend_to_bars
+from src.bar_filter import drop_unmatched_bars
 from src.ocr import run_ocr
 from src.presentation import render_detection_overlay, summarize_detections
 from src.reconstruction.vertical import reconstruct_vbar
@@ -282,6 +283,10 @@ def analyze_image(
         selection_error = None
         try:
             with stage("legend_matching"):
+                if not horizontal:
+                    frame = drop_unmatched_bars(
+                        frame, match_legend_to_bars(image, frame, ocr_frame, resolve_by_colour=False)
+                    ) or frame
                 colour_filter = filter_bars_by_legend(
                     image, frame, ocr_frame,
                     bar_role="horizontal_bar" if horizontal else "vertical_bar",
@@ -316,7 +321,7 @@ def analyze_image(
                     if not kept_ids:
                         selection_error = (
                             "No bars could be verified against a detected legend colour. "
-                            "Turn off Keep only legend-matched bars to review all detected bars, "
+                            "Turn off Keep only legend-matched bars to review more detected bars, "
                             "or use an image with a clearer legend."
                         )
                     if diagnostics is not None:
