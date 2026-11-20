@@ -218,3 +218,32 @@ the chart, raw response, SVG pages, and layout findings,
 and record the checkpoint/revision, configuration, timing, and hardware. The
 automated tests do not establish model extraction accuracy. Structural contract
 validation cannot establish that Gemma read the printed chart correctly.
+
+## Full PlotQA baseline
+
+Prepare the cleaned test split as described in [dataset setup](dataset_setup.md),
+then use the VLM environment above. Start with a smoke test:
+
+```bash
+python -m scripts.eval_gemma --limit 8 --output-dir output/gemma-eval-smoke
+python -m scripts.eval_gemma --output-dir output/gemma-eval-test
+```
+
+The default images are `dataset_yolo_vbars_clean/images/test` and annotations
+are `data/plotqa/test/annotations.json`; override them with `--images` and
+`--annotations`. Device, dtype, checkpoint, revision and token budget can also
+be configured; see `--help`. The script loads the model once and saves a JSON
+result per image. Run the identical command again to resume; choose a new output
+directory when settings change. Loading, dependency and device failures stop the
+run so they can be fixed before resuming. Other extraction failures count against
+all-image metrics. `metrics.json` and `report.md` are written when all selected
+images have been attempted.
+
+Category and series labels are compared case-insensitively with whitespace
+normalized; ambiguous duplicate labels are not aligned. Values are matched by
+unique category and series labels, with a single-series positional fallback.
+Value accuracy uses an absolute tolerance of 5% of the largest absolute ground
+truth value in the chart (exact for an all-zero chart). Both alignment coverage
+and accuracy over all ground-truth values are reported. Bar count uses the number
+of non-null annotated values; it is not an object-detection IoU metric. PlotQA
+annotations are imperfect and model values may be sensitive to axis scaling.
