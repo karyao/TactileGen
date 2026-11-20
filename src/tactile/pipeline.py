@@ -29,6 +29,42 @@ OVERVIEW_RULE = "overview_first"
 EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 1, 2, 3, 4
 
 
+def interpret(image, frame, ocr):
+    """Legend matching and reconstruction from detections and OCR.
+
+    Returns ``(spec, error, legend_mapping)``. When some low-confidence bars match no legend
+    swatch they are dropped and the chart is reconstructed again (``src.bar_filter``).
+    """
+    from src.bar_filter import drop_unmatched_bars
+    from src.legend_matcher import match_legend_to_bars
+    from src.reconstruct import reconstruct_vbar
+
+    mapping = None
+    try:
+        mapping = match_legend_to_bars(image, frame, ocr)
+        reduced = drop_unmatched_bars(frame, mapping)
+        if reduced is not None:
+            frame, mapping = reduced, match_legend_to_bars(image, reduced, ocr)
+        return reconstruct_vbar(frame, ocr, image, legend_mapping=mapping), None, mapping
+    except ChartInterpretationError as error:
+        return None, error, mapping
+
+
+def ocr_backend():
+    """OCR backend named by TACTILE_OCR: tesseract (default), rapidocr or hybrid."""
+    import os
+
+    engine = os.environ.get("TACTILE_OCR", "tesseract")
+    if engine == "hybrid":
+        from src.hybrid_ocr import HybridBackend
+        return HybridBackend()
+    if engine == "rapidocr":
+        from src.rapidocr_ocr import RapidOCRBackend
+        return RapidOCRBackend()
+    from src.tesseract_ocr import TesseractBackend
+    return TesseractBackend()
+
+
 def analyse(image_path: Path, weights: Path):
     """Run YOLO, OCR, legend matching and reconstruction.
 
@@ -37,29 +73,17 @@ def analyse(image_path: Path, weights: Path):
     import cv2
 
     from src.detection import load_model, run_detection
-    from src.legend_matcher import match_legend_to_bars
     from src.ocr import run_ocr
-    from src.reconstruct import reconstruct_vbar
-    import os
-
-    if os.environ.get("TACTILE_OCR", "tesseract") == "rapidocr":
-        from src.rapidocr_ocr import RapidOCRBackend as Backend
-    else:
-        from src.tesseract_ocr import TesseractBackend as Backend
 
     image = cv2.imread(str(image_path))
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
     frame = run_detection(load_model(weights), image_path)
-    ocr = run_ocr(image, frame, Backend(), "eng")
-    try:
-        legend_mapping = match_legend_to_bars(image, frame, ocr)
-        spec = reconstruct_vbar(
-            frame, ocr, image, legend_mapping=legend_mapping
-        )
-        return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
-    except ChartInterpretationError as error:
+    ocr = run_ocr(image, frame, ocr_backend(), "eng")
+    spec, error, _ = interpret(image, frame, ocr)
+    if error is not None:
         return None, error, frame
+    return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
 
 
 def _indexed(pairs: list[str], option: str) -> dict[int, str]:
