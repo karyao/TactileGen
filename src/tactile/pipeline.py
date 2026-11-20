@@ -173,6 +173,28 @@ def _print_summary(spec: VerticalBarSpec, out) -> None:
         print(f"  {i}: {shown}" + (" (no visible bars)" if series.no_visible_bars else ""), file=out)
 
 
+REVIEW_CODE = "possible_hidden_bars"
+
+
+def review_reasons(spec: VerticalBarSpec) -> list[dict[str, str]]:
+    """Reasons a person should check the output against the original; never blocks a chart.
+
+    A bar that is not drawn may be zero, tiny, or outside the axis range (PlotQA does not draw a
+    negative bar when the y-axis starts at 0), and the picture cannot tell these apart.
+    """
+    reasons = []
+    hidden = [series.name or "(unnamed)" for series in spec.series if series.no_visible_bars]
+    if hidden:
+        reasons.append({"code": REVIEW_CODE, "detail": "no bars are visible for "
+                        + ", ".join(hidden) + "; their values may be zero, tiny or outside the axis range"})
+    inferred = sum(1 for series in spec.series for value, rescued
+                   in zip(series.values, series.value_rescued) if rescued and value == 0.0)
+    if inferred:
+        reasons.append({"code": REVIEW_CODE, "detail": f"{inferred} bar(s) could not be seen and were "
+                        "read as zero; they may be tiny or outside the axis range"})
+    return reasons
+
+
 def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
         out=None, err=None) -> int:
     out, err = out or sys.stdout, err or sys.stderr
@@ -261,6 +283,14 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
             print(f"NEEDS REVIEW: {reason}", file=out)
         print(format_report(violations), file=out)
 
+    review = review_reasons(spec)
+    for reason in review:
+        print(f"NEEDS REVIEW: {reason['code']}: {reason['detail']}", file=out)
+    if review:
+        sidecar = args.output.with_name(args.output.stem + ".review.json")
+        sidecar.write_text(json.dumps({"image": str(args.image), "review": review}, indent=2) + "\n",
+                           encoding="utf-8")
+        print(f"Review notes written to {sidecar}", file=out)
     if needs_transcriber:
         print("\nNeeds a transcriber: overview page (BANA 3.9.1) not generated", file=out)
     for note in (*result.notes, *adapter_notes):

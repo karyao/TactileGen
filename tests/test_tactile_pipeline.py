@@ -1,6 +1,7 @@
 """Pipeline control flow with a fake analysis step; no detector or OCR runs."""
 
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -229,6 +230,40 @@ class Pipeline(unittest.TestCase):
         code, _, err, _ = self.go(make_spec(), argv=["--category", "oops"])
         self.assertEqual(code, 1)
         self.assertIn("INDEX=TEXT", err)
+
+class ReviewFlag(unittest.TestCase):
+    def test_reasons_for_no_visible_bars_and_inferred_zeros(self):
+        spec = make_spec(series=[
+            SeriesSpec("A", "#112233", [10.0, 0.0, 30.0], value_rescued=[False, True, False]),
+            SeriesSpec("B", "#445566", [None, None, None], no_visible_bars=True)])
+        reasons = pipeline.review_reasons(spec)
+        self.assertEqual([r["code"] for r in reasons], ["possible_hidden_bars"] * 2)
+        self.assertIn("no bars are visible for B", reasons[0]["detail"])
+        self.assertIn("1 bar(s)", reasons[1]["detail"])
+        self.assertEqual(pipeline.review_reasons(make_spec()), [])
+
+    def test_flagged_chart_still_builds_and_writes_a_sidecar(self):
+        spec = make_spec(series=[SeriesSpec("A", "#112233", [10.0, 20.0, 30.0]),
+                                 SeriesSpec("B", "#445566", [None] * 3, no_visible_bars=True)])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            out = io.StringIO()
+            code = pipeline.run(args, analyse_fn=lambda *_: (spec, None, None), stdin_is_tty=False,
+                                out=out, err=io.StringIO())
+            self.assertEqual(code, 0)
+            self.assertIn("NEEDS REVIEW: possible_hidden_bars", out.getvalue())
+            data = json.loads((Path(tmp) / "out.review.json").read_text())
+            self.assertEqual(data["review"][0]["code"], "possible_hidden_bars")
+
+    def test_unflagged_chart_writes_no_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            pipeline.run(args, analyse_fn=lambda *_: (make_spec(), None, None), stdin_is_tty=False,
+                         out=io.StringIO(), err=io.StringIO())
+            self.assertFalse((Path(tmp) / "out.review.json").exists())
+
 
 
 if __name__ == "__main__":
