@@ -55,6 +55,7 @@ class Pipeline(unittest.TestCase):
             mock.patch(
                 "src.legend_matcher.match_legend_to_bars", return_value=mapping
             ) as matcher,
+            mock.patch("src.bar_filter.drop_unmatched_bars", return_value=None),
             mock.patch(
                 "src.reconstruct.reconstruct_vbar", return_value=reconstructed
             ) as reconstruct,

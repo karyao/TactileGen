@@ -188,7 +188,7 @@ class RapidOCRBackendTest(unittest.TestCase):
             bgra, (detection((2, 2, 6, 6)),), language="eng"
         )
 
-        candidate = engine.cls_calls[0][0]
+        candidate = engine.calls[0][0]
         self.assertEqual(candidate.shape, (8, 8, 3))
         self.assertTrue(candidate.flags.c_contiguous)
         self.assertTrue(np.all(candidate == np.array([10, 20, 30])))
@@ -248,8 +248,9 @@ class RapidOCRBackendTest(unittest.TestCase):
             np.zeros((20, 30, 3), dtype=np.uint8), items, language="eng"
         )
         self.assertEqual([item.text for item in results], ["first", "second"])
-        self.assertEqual(len(backend._engine.cls_calls), 1)
-        self.assertEqual(len(backend._engine.rec_calls), 1)
+        # one call per crop: batching pads narrow crops to the widest and misreads them
+        self.assertEqual(len(backend._engine.calls), 2)
+        self.assertEqual(backend._engine.rec_calls, [])
 
     def test_recognize_many_gives_title_all_detection_neighbors(self):
         module, engine, _ = fake_rapidocr([output("title"), output("tick")])
@@ -264,7 +265,7 @@ class RapidOCRBackendTest(unittest.TestCase):
             language="eng",
         )
 
-        self.assertEqual([candidate.shape for candidate in engine.cls_calls[0]], [
+        self.assertEqual([call[0].shape for call in engine.calls], [
             (20, 158, 3), (16, 34, 3),
         ])
 
