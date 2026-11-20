@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from src.contracts import (
     Detection,
@@ -418,6 +418,65 @@ def _classify_legend_scores(
     )
 
 
+# PlotQA draws every series in one flat colour, so a bar's colour equals its swatch's. The template
+# error above works on squared normalised pixels, which reads two similar hues (orange / orange-brown)
+# as ambiguous and a bar with an outline as a weak match. Bars left unresolved there are resolved by
+# comparing median colours instead (3,455 such bars in 679 PlotQA charts all mapped correctly).
+COLOUR_MAX_DISTANCE = 10.0   # RGB distance from the bar to its swatch
+COLOUR_MIN_MARGIN = 26.0     # extra distance to the next-nearest swatch (colours ~25 apart stay unnamed)
+
+
+def _median_colour(image, detection: Detection, fraction: float = 0.25):
+    import numpy as np
+
+    height, width = image.shape[:2]
+    box = detection.box
+    left, right = max(0, math.floor(box.x1)), min(width, math.ceil(box.x2))
+    top, bottom = max(0, math.floor(box.y1)), min(height, math.ceil(box.y2))
+    inset_x = max(1, int((right - left) * fraction))
+    inset_y = max(1, int((bottom - top) * fraction))
+    crop = image[top + inset_y:bottom - inset_y, left + inset_x:right - inset_x]
+    if crop.size == 0:
+        crop = image[top:bottom, left:right]
+    if crop.size == 0:
+        return None
+    return np.median(crop.reshape(-1, 3), axis=0)
+
+
+def _resolve_by_colour(image, detections: DetectionFrame, mapping: LegendMappingFrame):
+    import numpy as np
+
+    unresolved = [a for a in mapping.assignments if a.status in ("weak_match", "ambiguous")]
+    entries = list(mapping.entries)
+    if not unresolved or not any(e.name for e in entries):
+        return mapping
+    by_id = {item.id: item for item in detections.detections}
+    swatches = [_median_colour(image, by_id[e.swatch_id]) for e in entries]
+    if any(colour is None for colour in swatches):
+        return mapping
+    resolved = {}
+    for assignment in unresolved:
+        bar = by_id.get(assignment.bar_id)
+        colour = None if bar is None else _median_colour(image, bar)
+        if colour is None:
+            continue
+        distances = [float(np.linalg.norm(colour - swatch)) for swatch in swatches]
+        order = sorted(range(len(distances)), key=distances.__getitem__)
+        best = order[0]
+        if distances[best] > COLOUR_MAX_DISTANCE or not entries[best].name:
+            continue
+        if len(order) > 1 and distances[order[1]] - distances[best] < COLOUR_MIN_MARGIN:
+            continue
+        entry = entries[best]
+        resolved[assignment.bar_id] = LegendBarAssignment(
+            assignment.bar_id, entry.swatch_id, entry.label_id, entry.name,
+            1.0 - distances[best] / 441.7, "matched")
+    if not resolved:
+        return mapping
+    return replace(mapping, assignments=tuple(
+        resolved.get(a.bar_id, a) for a in mapping.assignments))
+
+
 def match_legend_to_bars(
     image,
     detections: DetectionFrame,
@@ -427,8 +486,9 @@ def match_legend_to_bars(
     min_margin: float = 0.01,
 ) -> LegendMappingFrame:
     """Return one deterministic, in-memory legend assignment per vertical bar."""
-    return _classify_legend_scores(
+    mapping = _classify_legend_scores(
         _score_legend_to_bars(image, detections, ocr),
         max_error=max_error,
         min_margin=min_margin,
     )
+    return _resolve_by_colour(image, detections, mapping)
