@@ -3,6 +3,7 @@
 from contextlib import redirect_stdout
 from dataclasses import replace
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -1267,6 +1268,8 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr) as ocr_call,
             mock.patch("src.ocr.tesseract.TesseractBackend", return_value=backend),
+            mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars"),
+            mock.patch("src.bar_filter.drop_unmatched_bars", return_value=None),
             mock.patch(
                 "src.reconstruction.legend_matcher.filter_bars_by_legend",
                 side_effect=lambda image, frame, ocr, **kwargs: LegendFilterResult(frame, mapping)
@@ -1585,6 +1588,8 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.ocr.run_ocr", return_value=ocr),
             mock.patch("src.ocr.tesseract.TesseractBackend",
                        return_value=mock.sentinel.backend),
+            mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars"),
+            mock.patch("src.bar_filter.drop_unmatched_bars", return_value=None),
             mock.patch("src.reconstruction.legend_matcher.filter_bars_by_legend",
                        side_effect=lambda image, frame, ocr, **kwargs: LegendFilterResult(frame, mapping)) as matcher,
             mock.patch("src.reconstruction.vertical.reconstruct_vbar",
@@ -1689,6 +1694,40 @@ class Pipeline(unittest.TestCase):
         for sample in ("key-sample-0", "key-sample-1", "key-sample-2"):
             self.assertIn(sample, svg)
         self.assertEqual(svg.count('id="bar-'), 3)           # Kenya's three bars only
+
+
+class ReviewFlag(unittest.TestCase):
+    def test_reasons_for_no_visible_bars_and_inferred_zeros(self):
+        spec = make_spec(series=[
+            SeriesSpec("A", "#112233", [10.0, 0.0, 30.0], value_rescued=[False, True, False]),
+            SeriesSpec("B", "#445566", [None, None, None], no_visible_bars=True)])
+        reasons = pipeline.review_reasons(spec)
+        self.assertEqual([r["code"] for r in reasons], ["possible_hidden_bars"] * 2)
+        self.assertIn("no bars are visible for B", reasons[0]["detail"])
+        self.assertIn("1 bar(s)", reasons[1]["detail"])
+        self.assertEqual(pipeline.review_reasons(make_spec()), [])
+
+    def test_flagged_chart_still_builds_and_writes_a_sidecar(self):
+        spec = make_spec(series=[SeriesSpec("A", "#112233", [10.0, 20.0, 30.0]),
+                                 SeriesSpec("B", "#445566", [None] * 3, no_visible_bars=True)])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            out = io.StringIO()
+            code = pipeline.run(args, analyse_fn=lambda *_, **__: (spec, None, None), stdin_is_tty=False,
+                                out=out, err=io.StringIO())
+            self.assertEqual(code, 0)
+            self.assertIn("NEEDS REVIEW: possible_hidden_bars", out.getvalue())
+            data = json.loads((Path(tmp) / "out.review.json").read_text())
+            self.assertEqual(data["review"][0]["code"], "possible_hidden_bars")
+
+    def test_unflagged_chart_writes_no_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.svg"
+            args = pipeline.parse_args(["--image", "a.png", "--output", str(path), "--yes"])
+            pipeline.run(args, analyse_fn=lambda *_, **__: (make_spec(), None, None), stdin_is_tty=False,
+                         out=io.StringIO(), err=io.StringIO())
+            self.assertFalse((Path(tmp) / "out.review.json").exists())
 
 
 if __name__ == "__main__":

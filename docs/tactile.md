@@ -27,6 +27,15 @@ around elements that break a rule (hover a box for the rule). `--strict`
 exits with status 1 when any rule fails. The three demo charts in
 `tests/fixtures/tactile/` are made-up example data, not PlotQA charts.
 
+## Review flag for hidden bars
+
+A bar that is not drawn may be zero, tiny, or outside the axis range (PlotQA draws no negative bar when
+the y-axis starts at 0), and the picture cannot tell these apart. When a legend entry has no visible bars
+or a bar was read as zero because none was found, the pipeline prints `NEEDS REVIEW: possible_hidden_bars:
+...` and writes `<output>.review.json` (`{"image": ..., "review": [{"code": ..., "detail": ...}]}`) next to
+the SVG so a downstream step can route the chart to a person. It never blocks a chart or changes an exit
+code, the SVG or the printed summary.
+
 ## What the layout does
 
 Page and braille sizes:

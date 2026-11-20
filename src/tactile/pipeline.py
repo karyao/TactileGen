@@ -44,11 +44,14 @@ OVERVIEW_RULE = "overview_first"
 EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 1, 2, 3, 4
 
 
-OCR_ENGINES = ("tesseract", "rapidocr")
+OCR_ENGINES = ("tesseract", "rapidocr", "hybrid")
 
 
 def _ocr_backend(name: str):
     """The OCR backend and its language code."""
+    if name == "hybrid":
+        from src.ocr.hybrid import HybridBackend
+        return HybridBackend(), "eng"
     if name == "rapidocr":
         from src.ocr.rapidocr import RapidOCRBackend
         return RapidOCRBackend(), "en"
@@ -84,7 +87,8 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     import cv2
 
     from src.detection import load_model, run_detection
-    from src.reconstruction.legend_matcher import filter_bars_by_legend
+    from src.bar_filter import drop_unmatched_bars
+    from src.reconstruction.legend_matcher import filter_bars_by_legend, match_legend_to_bars
     from src.ocr import run_ocr
     from src.reconstruction.vertical import reconstruct_vbar
     from src.reconstruction.horizontal import reconstruct_hbar
@@ -101,8 +105,14 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     backend, language = _ocr_backend(ocr_engine)
     ocr = run_ocr(image, frame, backend, language)
     try:
+        reduced = frame
+        if resolution.orientation != "horizontal":
+            # Which bars to drop is decided from the template match alone; the colour resolution
+            # that names the series would otherwise keep low-confidence bars this rule removes.
+            reduced = drop_unmatched_bars(
+                frame, match_legend_to_bars(image, frame, ocr, resolve_by_colour=False)) or frame
         colour_filter = filter_bars_by_legend(
-            image, frame, ocr,
+            image, reduced, ocr,
             bar_role="horizontal_bar" if resolution.orientation == "horizontal" else "vertical_bar")
         legend_mapping = colour_filter.mapping
         mismatched_bar_ids = colour_filter.mismatched_bar_ids
@@ -111,7 +121,7 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
                                     mismatched_bar_ids=mismatched_bar_ids)
         else:
             spec = reread_categories(
-                reconstruct_vbar(frame, ocr, image, legend_mapping=legend_mapping,
+                reconstruct_vbar(reduced, ocr, image, legend_mapping=legend_mapping,
                                  mismatched_bar_ids=mismatched_bar_ids),
                 frame, image)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
@@ -211,6 +221,28 @@ def _print_summary(spec: VerticalBarSpec, out) -> None:
         print(f"  {i}: {shown}" + (" (no visible bars)" if series.no_visible_bars else ""), file=out)
 
 
+REVIEW_CODE = "possible_hidden_bars"
+
+
+def review_reasons(spec) -> list[dict[str, str]]:
+    """Reasons a person should check the output against the original; never blocks a chart.
+
+    A bar that is not drawn may be zero, tiny, or outside the axis range (PlotQA does not draw a
+    negative bar when the y-axis starts at 0), and the picture cannot tell these apart.
+    """
+    reasons = []
+    hidden = [series.name or "(unnamed)" for series in spec.series if series.no_visible_bars]
+    if hidden:
+        reasons.append({"code": REVIEW_CODE, "detail": "no bars are visible for "
+                        + ", ".join(hidden) + "; their values may be zero, tiny or outside the axis range"})
+    inferred = sum(1 for series in spec.series for value, rescued
+                   in zip(series.values, series.value_rescued) if rescued and value == 0.0)
+    if inferred:
+        reasons.append({"code": REVIEW_CODE, "detail": f"{inferred} bar(s) could not be seen and were "
+                        "read as zero; they may be tiny or outside the axis range"})
+    return reasons
+
+
 def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
         out=None, err=None) -> int:
     out, err = out or sys.stdout, err or sys.stderr
@@ -303,6 +335,14 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
             print(f"NEEDS REVIEW: {reason}", file=out)
         print(format_report(violations), file=out)
 
+    review = review_reasons(spec)
+    for reason in review:
+        print(f"NEEDS REVIEW: {reason['code']}: {reason['detail']}", file=out)
+    if review:
+        sidecar = args.output.with_name(args.output.stem + ".review.json")
+        sidecar.write_text(json.dumps({"image": str(args.image), "review": review}, indent=2) + "\n",
+                           encoding="utf-8")
+        print(f"Review notes written to {sidecar}", file=out)
     if needs_transcriber:
         print("\nNeeds a transcriber: overview page (BANA 3.9.1) not generated", file=out)
     for note in (*result.notes, *adapter_notes):

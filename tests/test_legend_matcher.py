@@ -506,5 +506,47 @@ class LegendMatchingBaselineTest(unittest.TestCase):
                     evaluate(**common, **{name: value})
 
 
+class ColourResolutionTest(unittest.TestCase):
+    """Bars the template error leaves weak/ambiguous are resolved by median colour."""
+
+    def _chart(self, second):
+        image = np.full((60, 80, 3), 255, dtype=np.uint8)
+        image[6:14, 6:14] = (10, 20, 30)
+        image[21:29, 6:14] = second
+        image[6:44, 41:49] = (10, 20, 30)
+        image[6:44, 56:64] = second
+        detections = frame(
+            detection("s1", "legend_swatch", (5, 5, 15, 15)),
+            detection("l1", "legend_label", (17, 5, 30, 15)),
+            detection("s2", "legend_swatch", (5, 20, 15, 30)),
+            detection("l2", "legend_label", (17, 20, 30, 30)),
+            detection("b1", "vertical_bar", (40, 5, 50, 45)),
+            detection("b2", "vertical_bar", (55, 5, 65, 45)),
+        )
+        ocr = OCRFrame("input/chart.png", (
+            RecognizedText("l1", "North", 1), RecognizedText("l2", "South", 1)))
+        return image, detections, ocr
+
+    def test_similar_hues_over_the_margin_are_named(self):
+        # 30 apart in RGB: the squared template error cannot separate them, the colours can
+        image, detections, ocr = self._chart((10, 50, 30))
+        assignments = match_legend_to_bars(image, detections, ocr).assignments
+        self.assertEqual([(a.series_name, a.status) for a in assignments],
+                         [("North", "matched"), ("South", "matched")])
+
+    def test_hues_inside_the_margin_stay_unnamed(self):
+        image, detections, ocr = self._chart((10, 40, 30))  # 20 apart
+        assignments = match_legend_to_bars(image, detections, ocr).assignments
+        self.assertTrue(all(a.series_name is None for a in assignments))
+
+    def test_one_bar_that_matches_no_swatch_leaves_the_whole_chart_unresolved(self):
+        # a mix of named and unresolved bars would make reconstruct stop rescuing bars
+        image, detections, ocr = self._chart((10, 50, 30))
+        image[6:44, 70:78] = (200, 10, 200)
+        detections = frame(*detections.detections, detection("b3", "vertical_bar", (69, 5, 79, 45)))
+        assignments = match_legend_to_bars(image, detections, ocr).assignments
+        self.assertTrue(all(a.series_name is None for a in assignments[:2]))
+
+
 if __name__ == "__main__":
     unittest.main()
