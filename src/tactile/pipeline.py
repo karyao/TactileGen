@@ -29,6 +29,13 @@ OVERVIEW_RULE = "overview_first"
 EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 1, 2, 3, 4
 
 
+def snap_bar_tops_enabled() -> bool:
+    """On for the PlotQA pipeline; set TACTILE_SNAP_BAR_TOPS=0 (or false/off) to disable for other inputs."""
+    import os
+
+    return os.environ.get("TACTILE_SNAP_BAR_TOPS", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
 def interpret(image, frame, ocr):
     """Legend matching and reconstruction from detections and OCR.
 
@@ -48,7 +55,8 @@ def interpret(image, frame, ocr):
         if reduced is not None:
             frame = reduced
         mapping = match_legend_to_bars(image, frame, ocr)
-        return reconstruct_vbar(frame, ocr, image, legend_mapping=mapping), None, mapping
+        return reconstruct_vbar(frame, ocr, image, legend_mapping=mapping,
+                                snap_bar_tops=snap_bar_tops_enabled()), None, mapping
     except ChartInterpretationError as error:
         return None, error, mapping
 

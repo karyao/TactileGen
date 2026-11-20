@@ -14,7 +14,7 @@ from src.contracts import (
     LegendEntry,
     LegendMappingFrame,
 )
-from src.reconstruct import parse_tick_value, reconstruct_vbar
+from src.reconstruct import SNAP_GATE_PX, _snap_top, parse_tick_value, reconstruct_vbar
 
 W, H = 600, 400
 PLOT = (80, 40, 560, 340)
@@ -740,3 +740,82 @@ def test_a_hand_built_mapping_without_entries_adds_nothing():
     spec = reconstruct_vbar(frame, chart.texts, chart.image, legend_mapping=mapping)
     assert [s.name for s in spec.series] == ["Alpha", "Beta"]
 
+
+# --- bar-top snap ---------------------------------------------------------------
+
+def _short_box_chart(shorten=20):
+    """A chart whose first bar is painted full height but detected ``shorten`` px too short."""
+    chart = base_chart()
+    index = next(i for i, d in enumerate(chart.detections) if d.role == "vertical_bar")
+    d = chart.detections[index]
+    chart.detections[index] = Detection(
+        d.id, d.role, Box(d.box.x1, d.box.y1 + shorten, d.box.x2, d.box.y2), d.confidence)
+    return chart, d
+
+
+def _snap_run(chart):
+    return reconstruct_vbar(chart.frame(), chart.texts, chart.image, snap_bar_tops=True)
+
+
+def test_snap_extends_a_box_that_stops_short_of_a_flat_colour_bar(caplog):
+    chart, true_bar = _short_box_chart(20)
+    plain = chart.run().series[0].values[0]
+    with caplog.at_level("INFO", logger="src.reconstruct"):
+        spec = _snap_run(chart)
+    assert plain < 110                                            # without the snap the value is low
+    assert spec.series[0].values[0] == pytest.approx(120, rel=0.01)  # snapped back to the true top
+    assert "bar_top_snapped:1" in spec.flags
+    assert any("bar top snapped" in r.message for r in caplog.records)  # and it is logged
+
+
+def test_snap_is_off_unless_asked_for():
+    chart, _ = _short_box_chart(20)
+    assert not any(f.startswith("bar_top_snapped") for f in chart.run().flags)
+
+
+def test_snap_leaves_accurate_boxes_alone_even_with_a_dark_outline():
+    chart = base_chart()
+    for d in chart.detections:
+        if d.role == "vertical_bar":                          # 3 px dark outline around each bar
+            x1, y1, x2, y2 = (round(v) for v in (d.box.x1, d.box.y1, d.box.x2, d.box.y2))
+            chart.image[y1:y1 + 3, x1:x2] = (20, 20, 20)
+            chart.image[y1:y2, x1:x1 + 3] = (20, 20, 20)
+            chart.image[y1:y2, x2 - 3:x2] = (20, 20, 20)
+    assert [s.values for s in _snap_run(chart).series] == [s.values for s in chart.run().series]
+    assert not any(f.startswith("bar_top_snapped") for f in _snap_run(chart).flags)
+
+
+def _unreliable_bar(kind):
+    """A 60 x 150 px bar with the box 20 px short of its painted top, in a colour that cannot be trusted."""
+    image = np.full((400, 600, 3), 255, np.uint8)
+    top, bottom = 150, 300
+    if kind == "gradient":      # fill colour drifts about 1.5 levels per row, as in a shaded bar
+        for y in range(top, bottom):
+            image[y, 100:160] = (200 - (y - top), 100, 30 + (y - top))
+    elif kind == "hatched":     # alternating 2-row stripes in two clearly different colours
+        for y in range(top, bottom):
+            image[y, 100:160] = (200, 100, 30) if (y // 2) % 2 else (60, 200, 220)
+    elif kind == "thick outline":  # a 6 px dark frame; the box already sits on its outer edge
+        image[top:bottom, 100:160] = (20, 20, 20)
+        image[top + 6:bottom - 6, 106:154] = (200, 100, 30)
+    return image, Box(100, top if kind == "thick outline" else top + 20, 160, bottom)
+
+
+def test_snap_does_not_move_a_bar_whose_own_colour_edge_is_unreliable():
+    for kind in ("gradient", "hatched", "thick outline"):
+        image, box = _unreliable_bar(kind)
+        snapped = _snap_top(image, box)
+        assert snapped is None or box.y1 - snapped <= SNAP_GATE_PX, kind
+
+
+def test_snap_stays_inside_the_plot_area_and_never_shrinks_a_bar():
+    chart, d = _short_box_chart(20)
+    # fill the rows above the plot with the same colour: the run must not leave the plot area
+    x1, x2 = round(d.box.x1), round(d.box.x2)
+    chart.image[: round(PLOT[1]) + 100, x1:x2] = (200, 100, 30)
+    spec = _snap_run(chart)
+    assert spec.series[0].values[0] <= 200 * 1.01
+    for kind in ("gradient", "hatched", "thick outline"):
+        image, box = _unreliable_bar(kind)
+        top = _snap_top(image, box)
+        assert top is None or top <= box.y1 + 3          # starts 3 px inside, so it can only extend

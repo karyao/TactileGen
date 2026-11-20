@@ -7,6 +7,7 @@ sample bar and legend colours. All geometry comes from the ``DetectionFrame``.
 from __future__ import annotations
 
 import itertools
+import logging
 import math
 import re
 import statistics
@@ -27,6 +28,8 @@ from src.contracts import (
     join_legend_assignments,
 )
 from src.legend_matcher import match_legend_to_bars
+
+logger = logging.getLogger(__name__)
 
 MIN_CONFIDENCE = 0.3
 DUPLICATE_IOU = 0.5
@@ -321,6 +324,47 @@ def _rescue_value(rgb: np.ndarray, centre_x: float, width: float, baseline: floa
     return -slope * up if up >= down else slope * down
 
 
+# --- bar-top snap ----------------------------------------------------------------
+# YOLO's bar ends are within 2 px of the ground truth for 99.4% of PlotQA bars. A few crowded charts
+# (adjacent bars overlapping) get a box that stops short of the bar, which puts the value off by 1-8% of
+# the axis. When a bar's own flat colour keeps going above its box, the top moves up to where it stops.
+# It only ever extends: the scan starts SNAP_START_PX inside the box, so a bar can move down by at most
+# that much, which is under the gate. Gradient and hatched bars fail the own-colour test and are skipped.
+SNAP_GATE_PX = 4.0          # move only when the own-colour edge is further than this from the box top
+SNAP_RANGE_PX = 25          # how far above the box top the scan may look
+SNAP_COLOUR_TOLERANCE = 22.0  # BGR distance from the bar's fill colour that still counts as fill
+SNAP_FILL_FRACTION = 0.6    # share of the centre strip that must be fill for a row to count
+SNAP_START_PX = 3           # rows inside the box where the fill colour is sampled
+
+
+def _snap_top(image: np.ndarray, box) -> float | None:
+    """Top edge of the bar's own-colour run, or None when its colour cannot be trusted."""
+    height, width = image.shape[:2]
+    cx, half = (box.x1 + box.x2) / 2, (box.x2 - box.x1) / 4
+    left = max(0, int(round(cx - half)))
+    right = min(width, max(left + 1, int(round(cx + half))))
+    start = int(max(box.y1, min(box.y2 - 2, int(box.y1) + SNAP_START_PX)))
+    if not 0 <= start < height or right <= left:
+        return None
+    sample = image[start:start + max(1, int((box.y2 - start) * 0.5)), left:right]
+    colour = np.median(sample.reshape(-1, 3), axis=0)
+
+    def is_fill(y: int) -> float:
+        distances = np.linalg.norm(image[y, left:right].astype(np.float32) - colour, axis=1)
+        return float((distances <= SNAP_COLOUR_TOLERANCE).mean()) >= SNAP_FILL_FRACTION
+
+    if not is_fill(start):
+        return None
+    top, y = start, start
+    while y > 0 and start - y < SNAP_RANGE_PX + (start - int(box.y1)):
+        y -= 1
+        if is_fill(y):
+            top = y
+        elif y < top - 2:  # tolerate a 2 px outline
+            break
+    return float(top)
+
+
 # --- main ----------------------------------------------------------------------
 
 def _title(role: str, roles, texts, flags, confidence, key: str, missing_flag: str):
@@ -390,7 +434,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      min_confidence: float = MIN_CONFIDENCE,
                      rescue_bars: bool = True,
                      category_guard: bool = True, *,
-                     legend_mapping: LegendMappingFrame | None = None
+                     legend_mapping: LegendMappingFrame | None = None,
+                     snap_bar_tops: bool = False
                      ) -> VerticalBarSpec:
     """Turn detections plus OCR into a ``VerticalBarSpec``.
 
@@ -401,6 +446,10 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     Raises ``ChartInterpretationError`` when there are no bars, no x tick
     labels, or fewer than two consistent y ticks. Everything else unresolved is
     reported through ``flags``.
+
+    ``snap_bar_tops`` moves a bar's top up to where its own flat colour stops when that is more than
+    ``SNAP_GATE_PX`` above the detected box (PlotQA charts only; off by default for other inputs). Each
+    move is logged and counted in a ``bar_top_snapped:N`` flag.
     """
     texts = _text_table(ocr_texts)
     if legend_mapping is None:
@@ -478,6 +527,7 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     values = []
     free_ends = []
     offsets = []
+    snapped_bars = 0
     for bar in bars:
         box = bar.box
         if baseline_inside and abs(box.y2 - baseline) > abs(box.y1 - baseline):
@@ -486,9 +536,19 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
             free, anchor = box.y1, box.y2
         else:
             free, anchor = box.y1, box.y2
+        if snap_bar_tops and free == box.y1:
+            snapped = _snap_top(image, box)
+            if (snapped is not None and free - snapped > SNAP_GATE_PX
+                    and (plot is None or snapped >= plot.box.y1 - 2)):
+                logger.info("bar top snapped: %s y1 %.1f -> %.1f (own colour continues above the box)",
+                            bar.id, free, snapped)
+                free = snapped
+                snapped_bars += 1
         values.append(a * free + b)
         free_ends.append(free)
         offsets.append(abs(anchor - baseline))
+    if snapped_bars:
+        flags.append(f"bar_top_snapped:{snapped_bars}")
     if baseline_inside and plot and statistics.median(offsets) > 0.03 * (plot.box.y2 - plot.box.y1):
         flags.append("bar_baseline_offset")
     if plot is not None:

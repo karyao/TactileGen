@@ -68,7 +68,7 @@ class Pipeline(unittest.TestCase):
         matcher.assert_has_calls([
             mock.call(image, frame, ocr, resolve_by_colour=False), mock.call(image, frame, ocr)])
         reconstruct.assert_called_once_with(
-            frame, ocr, image, legend_mapping=mapping
+            frame, ocr, image, legend_mapping=mapping, snap_bar_tops=True
         )
         self.assertEqual(result, (reconstructed, None, frame))
 
@@ -263,6 +263,17 @@ class ReviewFlag(unittest.TestCase):
             pipeline.run(args, analyse_fn=lambda *_: (make_spec(), None, None), stdin_is_tty=False,
                          out=io.StringIO(), err=io.StringIO())
             self.assertFalse((Path(tmp) / "out.review.json").exists())
+
+class SnapSetting(unittest.TestCase):
+    def test_bar_top_snap_is_on_for_the_pipeline_and_can_be_switched_off(self):
+        with mock.patch.dict("os.environ", {}, clear=False) as env:
+            env.pop("TACTILE_SNAP_BAR_TOPS", None)
+            self.assertTrue(pipeline.snap_bar_tops_enabled())
+            for off in ("0", "false", "OFF", "no"):
+                env["TACTILE_SNAP_BAR_TOPS"] = off
+                self.assertFalse(pipeline.snap_bar_tops_enabled(), off)
+            env["TACTILE_SNAP_BAR_TOPS"] = "1"
+            self.assertTrue(pipeline.snap_bar_tops_enabled())
 
 
 
