@@ -59,7 +59,7 @@ def write_json(path, data):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--images', type=Path, default=Path('dataset_yolo_vbars_clean/images/test'))
+    p.add_argument('--images', type=Path, default=Path.home() / 'Desktop/TactileGen/dataset_plotqa_bars_eval/images/test')
     p.add_argument('--annotations', type=Path, default=Path('data/plotqa/test/annotations.json'))
     p.add_argument('--output-dir', type=Path, required=True)
     p.add_argument('--limit', type=int)
