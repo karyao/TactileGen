@@ -5,7 +5,8 @@ labels and on partly-dropped words. Fitted per role on a random sample of PlotQA
 as "take RapidOCR when its confidence beats Tesseract's by at least the role margin".
 Roles without a margin (titles, axis titles) keep RapidOCR's reading. A "$" that only RapidOCR
 (correctly) read always wins. Near-match rules (same length, small edit distance) were tried and rejected:
-they lost 42-139 correct regions to gain 14-20 across all 3041 disagreeing regions.
+they lost 42-139 correct regions to gain 14-20 across all 3041 disagreeing regions. Word roles take
+Tesseract's reading when RapidOCR only lost 1-2 letters or added a space (+20 regions, 0 lost).
 """
 
 from __future__ import annotations
@@ -20,6 +21,28 @@ from src.rapidocr_ocr import RapidOCRBackend
 from src.tesseract_ocr import TesseractBackend
 
 RAPIDOCR_MARGIN = {"x_tick_label": 0.0, "y_tick_label": 0.05, "legend_label": 0.05}
+# Text roles where RapidOCR drops letters ("ferility") or adds a space ("Age 65 (male)").
+WORD_ROLES = ("x_tick_label", "legend_label")
+
+
+def _leftover(short: str, long: str) -> list[str] | None:
+    """Characters of ``long`` not used when matching ``short`` as a subsequence, else None."""
+    matched, leftover = 0, []
+    for char in long:
+        if matched < len(short) and short[matched] == char:
+            matched += 1
+        else:
+            leftover.append(char)
+    return leftover if matched == len(short) else None
+
+
+def _rapid_slipped(rapid: str, tess: str) -> bool:
+    """RapidOCR lost 1-2 letters that Tesseract kept, or added 1-2 spaces Tesseract did not."""
+    lost = _leftover(rapid, tess)
+    if lost is not None and 1 <= len(lost) <= 2 and all(c.isalnum() for c in lost):
+        return any(c.isalpha() for c in tess)
+    added = _leftover(tess, rapid)
+    return added is not None and 1 <= len(added) <= 2 and all(c == " " for c in added)
 
 
 def choose(role: str, rapid: OCRBackendResult | None, tess: OCRBackendResult | None):
@@ -29,6 +52,8 @@ def choose(role: str, rapid: OCRBackendResult | None, tess: OCRBackendResult | N
         return rapid
     if "$" in rapid.text and "$" not in tess.text:
         return rapid  # Tesseract reads "$" as "S"
+    if role in WORD_ROLES and _rapid_slipped(rapid.text, tess.text):
+        return tess
     margin = RAPIDOCR_MARGIN.get(role)
     if margin is None:
         return rapid
