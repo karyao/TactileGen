@@ -32,6 +32,12 @@ LABEL_MIN_GAP = 1 / 8 * MM_PER_INCH   # labels to any component, minimum, §3.4.
 LABEL_MAX_GAP = 1 / 4 * MM_PER_INCH   # label to its own component, maximum, §3.4.3.12, §5.10.5
 # Labels are placed at the minimum distance; anything between the two is allowed.
 LABEL_GAP = LABEL_MIN_GAP
+# A label that cannot sit within the maximum distance of its component is placed
+# "far enough away to allow a 3/4 inch (2 centimeter) lead line" (§3.4.3.12); used
+# for staggered bar value labels.
+LEAD_LINE_LENGTH = 3 / 4 * MM_PER_INCH
+# Bar value labels show at least this many significant digits, more if the y ticks do.
+VALUE_LABEL_SIG_DIGITS = 3
 # Clearance between the vertical heading and the top value label: the 1/8
 # inch label-to-component minimum (§3.4.3.12). §6.6.6.6 needs no blank line
 # after the heading.
@@ -52,12 +58,13 @@ GROUP_GAP = LABEL_MIN_GAP
 BAR_MIN_WIDTH = 3 / 8 * MM_PER_INCH     # §6.6.6.7 ("3/8 inch (1 centimeter)")
 BAR_MAX_WIDTH = 1.0 * MM_PER_INCH       # §6.6.6.7
 GRID_MIN_SPACING = 3 / 8 * MM_PER_INCH  # §3.4.3.9, §6.6.1.1
-# Smallest plot (axis to top grid line) worth keeping beside a series key: room for
+# Preferred minimum plot for extra value-label headroom: room for
 # 5 grid intervals at the minimum spacing, i.e. 6 labelled values, so a bar can be
 # read to a fifth of the axis. Not from BANA. A page holds at most ~137 mm of plot
 # (title and headings only); a long key, notes and a category key can take it
 # down to 35 mm (24811: 3 intervals), where small bars fall under the line widths.
 # This only guarantees room for 5 intervals; _nice_step may still use fewer.
+# Vertical page selection uses actual exposed bar height instead of this cutoff.
 MIN_PLOT_HEIGHT = 5 * GRID_MIN_SPACING
 PRIMARY_LINE_MIN_LENGTH = 1 / 2 * MM_PER_INCH   # §3.4.3.2
 TICK_HALF_LENGTH = 1 / 4 * MM_PER_INCH          # each side of the axis, §6.6.6.5
@@ -75,6 +82,9 @@ MAX_AREA_TEXTURES = 5                   # §3.2.2
 
 # --- Labels --------------------------------------------------------------------------
 Y_HEADING_MAX_CELLS = 20                # §6.6.6.6
+# Horizontal bars: one blank cell, then at least two unspaced guide dots
+# (dot 5s) between a descriptive label and the vertical axis, §6.6.6.6.
+GUIDE_DOTS_MIN = 2
 TN_FIRST_CELL = 7                       # transcriber's note starts in cell 7, §5.6.2
 TN_RUNOVER_CELL = 5                     # and runs over in cell 5, §5.6.2
 
@@ -97,5 +107,9 @@ DOT_TEXTURE_DIAMETER = 0.8
 # Upper limit on grid intervals, to keep the grid sparse. A count, not a
 # spacing; BANA only says some grid lines may be omitted (§6.6.1.1).
 MAX_GRID_INTERVALS = 8
+# Horizontal bars: widest category-label column (label, blank cell and guide
+# dots), so at least 24 of the 40 cells stay for the bars. A count, not a
+# spacing; BANA only says long labels run over (§6.6.6.6) or are keyed (§5.8).
+CATEGORY_COLUMN_MAX_CELLS = 16
 
 TEXTURES = ("diagonal", "dots", "horizontal", "crosshatch", "vertical")

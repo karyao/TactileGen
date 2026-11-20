@@ -1,107 +1,67 @@
-"""Local Gradio application for inspecting one chart detection at a time."""
+"""Start TactileGen: parse options, load the model, build the page, and launch.
+
+The implementation lives in src.gradio_ui. Imports below preserve the original
+Python API so existing scripts can still import its helpers from this module.
+"""
 
 from __future__ import annotations
 
 import argparse
-import atexit
-import logging
-import re
-import tempfile
-import uuid
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 from src.borealis import BOREALIS_CSS, borealis_theme
-from src.contract_io import write_ocr_frame
-from src.contracts import DetectionFrame, LegendMappingFrame, OCRFrame
-from src.detection import DEFAULT_CONFIDENCE, DEFAULT_NMS_IOU, load_model, run_detection
-from src.legend_matcher import match_legend_to_bars
-from src.ocr import run_ocr
-from src.presentation import (
-    LEGEND_TABLE_HEADERS,
-    OCR_TABLE_HEADERS,
-    legend_rows,
-    ocr_rows,
-    render_detection_overlay,
-    summarize_detections,
+from src.detection import (
+    DEFAULT_CONFIDENCE,
+    DEFAULT_IMGSZ,
+    DEFAULT_NMS_IOU,
+    MAX_IMGSZ,
+    load_model,
+    validate_imgsz,
 )
-from src.tesseract_ocr import TesseractBackend
-
-
-DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 7860
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-MAX_IMAGE_PIXELS = 40_000_000
-SUPPORTED_FORMATS = frozenset({"PNG", "JPEG", "WEBP"})
-EXAMPLE_IMAGE = Path(__file__).parents[1] / "tests/fixtures/contracts/val/example.png"
-DEFAULT_OCR_LANGUAGE = "eng"
-OCR_WARNING = (
-    "Text recognition was unavailable. Detection results are still shown. "
-    "Check the terminal for details."
+from src.gradio_ui.analysis import (
+    UploadValidationError,
+    AnalysisResult,
+    decode_upload,
+    analyze_image,
 )
-LEGEND_WARNING = (
-    "Legend matching was unavailable. Detection and OCR results are still shown. "
-    "Check the terminal for details."
+from src.gradio_ui.dependencies import import_gradio as _import_gradio, launch_app
+from src.gradio_ui.formatting import (
+    generation_report,
+    ready_status,
+    analyzing_status,
+    complete_status,
+    alert_message,
+    completeness_summary,
 )
-
-LOGGER = logging.getLogger(__name__)
-
-
-class UploadValidationError(ValueError):
-    """An upload problem that is safe to explain in the browser."""
-
-
-@dataclass(frozen=True)
-class AnalysisResult:
-    summary: str
-    overlay_rgb: Any
-    detection_count: int
-    detection_frame: DetectionFrame
-    ocr_frame: OCRFrame | None
-    ocr_warning: str | None
-    legend_mapping: LegendMappingFrame | None = None
-    legend_warning: str | None = None
-
-
-def ready_status() -> str:
-    return '<div role="status" aria-live="polite">Ready for a chart image.</div>'
-
-
-def analyzing_status() -> str:
-    return '<div role="status" aria-live="polite">Analyzing chart.</div>'
-
-
-def complete_status(detection_count: int, ocr_count: int | None = None) -> str:
-    if detection_count == 0:
-        message = "Analysis complete. No detections found."
-    elif detection_count == 1:
-        message = "Analysis complete. 1 detection found."
-    else:
-        message = f"Analysis complete. {detection_count} detections found."
-    if ocr_count is not None:
-        message += (
-            f" OCR attempted {ocr_count} text region"
-            f"{'s' if ocr_count != 1 else ''}."
-        )
-    return f'<div role="status" aria-live="polite">{message}</div>'
-
-
-def alert_message(message: str) -> str:
-    return f'<div role="alert">{message}</div>'
-
-
-def _import_gradio():
-    try:
-        import gradio as gr
-    except ImportError as exc:
-        raise RuntimeError(
-            "Install the application dependencies: "
-            "python -m pip install -r requirements-app.txt"
-        ) from exc
-    return gr
+from src.gradio_ui.layout import build_app
+from src.gradio_ui.review import (
+    ReviewFieldBinding,
+    ReviewModel,
+    ManualGenerationResult,
+    ManualGenerationBlocked,
+    build_review_model,
+    review_text_rows,
+    review_value_rows,
+    update_review_draft,
+    review_overrides,
+    generate_review_submission,
+)
+from src.gradio_ui.settings import (
+    DEFAULT_WEIGHTS,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    MAX_UPLOAD_BYTES,
+    MAX_IMAGE_PIXELS,
+    SUPPORTED_FORMATS,
+    EXAMPLE_IMAGE,
+    DEFAULT_OCR_LANGUAGE,
+    DEFAULT_OCR_ENGINE,
+    OCR_WARNING,
+    LEGEND_WARNING,
+    RECONSTRUCTION_WARNING,
+    LOGGER,
+)
 
 
 def _port(value: str) -> int:
@@ -114,462 +74,37 @@ def _port(value: str) -> int:
     return port
 
 
+def _imgsz(value: str) -> int:
+    try:
+        return validate_imgsz(int(value))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"imgsz must be a positive integer between 1 and {MAX_IMGSZ}"
+        ) from exc
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--device", help="Ultralytics device, e.g. cpu or mps")
+    parser.add_argument(
+        "--imgsz",
+        type=_imgsz,
+        default=DEFAULT_IMGSZ,
+        help=(
+            f"Initial YOLO inference size in pixels "
+            f"(1–{MAX_IMGSZ}; default: {DEFAULT_IMGSZ})"
+        ),
+    )
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=_port, default=DEFAULT_PORT)
+    parser.add_argument(
+        "--ocr",
+        choices=("tesseract", "rapidocr"),
+        default=DEFAULT_OCR_ENGINE,
+        help="Initial OCR engine (default rapidocr; selectable in the browser)",
+    )
     return parser.parse_args(argv)
-
-
-def _report_progress(progress, fraction: float, description: str) -> None:
-    if progress is not None:
-        progress(fraction, desc=description)
-
-
-def decode_upload(image_path: str | Path):
-    """Validate uploaded content and return its server path and BGR pixels."""
-    import cv2
-    from PIL import Image, UnidentifiedImageError
-
-    if image_path is None:
-        raise UploadValidationError("Choose a chart image before analyzing it.")
-    path = Path(image_path)
-    if not path.is_file():
-        raise UploadValidationError("Choose a chart image before analyzing it.")
-    if path.stat().st_size > MAX_UPLOAD_BYTES:
-        raise UploadValidationError("The image must be 20 MB or smaller.")
-    try:
-        with Image.open(path) as source:
-            if source.format not in SUPPORTED_FORMATS:
-                raise UploadValidationError("Upload a PNG, JPEG, or WebP image.")
-            width, height = source.size
-            if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
-                raise UploadValidationError(
-                    "The decoded image must contain no more than 40 megapixels."
-                )
-            source.verify()
-    except UploadValidationError:
-        raise
-    except Image.DecompressionBombError as exc:
-        raise UploadValidationError(
-            "The decoded image must contain no more than 40 megapixels."
-        ) from exc
-    except (OSError, UnidentifiedImageError, ValueError) as exc:
-        raise UploadValidationError(
-            "The uploaded image could not be read. Try exporting it again."
-        ) from exc
-
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is None or image.ndim != 3 or image.shape[2] != 3:
-        raise UploadValidationError(
-            "The uploaded image could not be read. Try exporting it again."
-        )
-    return path, image
-
-
-def analyze_image(
-    model,
-    image_path: str | Path,
-    confidence: float,
-    nms_iou: float,
-    *,
-    language: str = DEFAULT_OCR_LANGUAGE,
-    ocr_backend=None,
-    device: str | None = None,
-    progress: Callable[..., None] | None = None,
-) -> AnalysisResult:
-    """Validate, detect, recognize text, summarize, and annotate one chart."""
-    import cv2
-
-    _report_progress(progress, 0.05, "Validating image")
-    path, image = decode_upload(image_path)
-    _report_progress(progress, 0.20, "Detecting chart elements")
-    frame = run_detection(
-        model, path, confidence=confidence, nms_iou=nms_iou, device=device
-    )
-    if image.shape[:2] != (frame.height, frame.width):
-        raise ValueError("image dimensions do not match the detection frame")
-    _report_progress(progress, 0.60, "Reading detected text")
-    ocr_frame = None
-    ocr_warning = None
-    try:
-        backend = ocr_backend if ocr_backend is not None else TesseractBackend()
-        ocr_frame = run_ocr(image, frame, backend, language)
-    except Exception:
-        LOGGER.exception("Chart text recognition failed")
-        ocr_warning = OCR_WARNING
-    _report_progress(progress, 0.80, "Matching legend series")
-    legend_mapping = None
-    legend_warning = None
-    try:
-        legend_mapping = match_legend_to_bars(image, frame, ocr_frame)
-    except Exception:
-        LOGGER.exception("Legend-to-bar matching failed")
-        legend_warning = LEGEND_WARNING
-    _report_progress(progress, 0.90, "Rendering annotations")
-    overlay = render_detection_overlay(image, frame, legend_mapping=legend_mapping)
-    rgb_overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-    _report_progress(progress, 1.0, "Analysis complete")
-    return AnalysisResult(
-        summary=summarize_detections(
-            frame, ocr=ocr_frame, legend_mapping=legend_mapping
-        ),
-        overlay_rgb=rgb_overlay,
-        detection_count=len(frame.detections),
-        detection_frame=frame,
-        ocr_frame=ocr_frame,
-        ocr_warning=ocr_warning,
-        legend_mapping=legend_mapping,
-        legend_warning=legend_warning,
-    )
-
-
-def _download_path(root: Path, image_path: str | Path, ocr: OCRFrame) -> Path:
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(image_path).stem).strip("._-")
-    path = root / f"{stem or 'chart'}_ocr_{uuid.uuid4().hex}.json"
-    write_ocr_frame(path, ocr)
-    return path
-
-
-def build_app(model, *, ocr_backend=None, device: str | None = None):
-    """Build the interface around an already-loaded model without launching it."""
-    gr = _import_gradio()
-    backend = ocr_backend if ocr_backend is not None else TesseractBackend()
-    artifacts = tempfile.TemporaryDirectory(prefix="tactilegen-gradio-ocr-")
-    atexit.register(artifacts.cleanup)
-    artifact_root = Path(artifacts.name)
-
-    def result_updates(
-        status: str,
-        *,
-        empty_message: str = "",
-        summary: str | None = None,
-        overlay=None,
-        ocr_table: list[list[Any]] | None = None,
-        ocr_download_path: Path | None = None,
-        legend_table: list[list[Any]] | None = None,
-        ocr_warning: str | None = None,
-        legend_warning: str | None = None,
-        error_message: str | None = None,
-    ):
-        return (
-            gr.update(value=status),
-            gr.update(value=empty_message, visible=bool(empty_message)),
-            gr.update(value=summary or "", visible=summary is not None),
-            gr.update(value=overlay, visible=overlay is not None),
-            gr.update(value=ocr_table or [], visible=ocr_table is not None),
-            gr.update(
-                value=ocr_download_path,
-                visible=ocr_download_path is not None,
-            ),
-            gr.update(value=legend_table or [], visible=legend_table is not None),
-            gr.update(
-                value=alert_message(ocr_warning) if ocr_warning else "",
-                visible=ocr_warning is not None,
-            ),
-            gr.update(
-                value=alert_message(legend_warning) if legend_warning else "",
-                visible=legend_warning is not None,
-            ),
-            gr.update(
-                value=alert_message(error_message) if error_message else "",
-                visible=error_message is not None,
-            ),
-        )
-
-    def ready_results():
-        return result_updates(
-            ready_status(),
-            empty_message="Upload a chart and choose Analyze chart.",
-        )
-
-    def begin_analysis():
-        return (
-            *(gr.update(interactive=False) for _ in range(6)),
-            *result_updates(analyzing_status()),
-        )
-
-    def analyze_event(image_path, confidence, nms_iou, language, progress=gr.Progress()):
-        try:
-            result = analyze_image(
-                model,
-                image_path,
-                confidence,
-                nms_iou,
-                language=language,
-                ocr_backend=backend,
-                device=device,
-                progress=progress,
-            )
-            ocr_count = len(result.ocr_frame.regions) if result.ocr_frame is not None else None
-            rows = (
-                ocr_rows(result.detection_frame, result.ocr_frame)
-                if result.ocr_frame is not None else []
-            )
-            download = (
-                _download_path(artifact_root, image_path, result.ocr_frame)
-                if result.ocr_frame is not None else None
-            )
-            mapping_rows = (
-                legend_rows(result.detection_frame, result.legend_mapping)
-                if result.legend_mapping is not None else []
-            )
-            show_mapping = result.legend_mapping is not None and bool(mapping_rows)
-            return result_updates(
-                complete_status(result.detection_count, ocr_count),
-                summary=result.summary,
-                overlay=result.overlay_rgb,
-                ocr_table=rows if result.ocr_frame is not None else None,
-                ocr_download_path=download,
-                legend_table=mapping_rows if show_mapping else None,
-                ocr_warning=result.ocr_warning,
-                legend_warning=result.legend_warning,
-            )
-        except UploadValidationError as exc:
-            LOGGER.info("Rejected upload: %s", exc)
-            message = str(exc)
-        except Exception:
-            LOGGER.exception("Chart analysis failed")
-            message = "Analysis failed. Check the terminal and try another image."
-        return result_updates(ready_status(), error_message=message)
-
-    def finish_analysis():
-        return tuple(gr.update(interactive=True) for _ in range(6))
-
-    def clear_all():
-        return (
-            gr.update(value=None, interactive=True),
-            gr.update(value=DEFAULT_CONFIDENCE, interactive=True),
-            gr.update(value=DEFAULT_NMS_IOU, interactive=True),
-            gr.update(value=DEFAULT_OCR_LANGUAGE, interactive=True),
-            gr.update(interactive=True),
-            gr.update(interactive=True),
-            *ready_results(),
-        )
-
-    with gr.Blocks(
-        title="TactileGen — Statistical Chart Element Detector",
-        analytics_enabled=False,
-        fill_width=False,
-    ) as demo:
-        with gr.Column(elem_classes="borealis-app"):
-            with gr.Column(elem_classes="borealis-header"):
-                gr.Markdown(
-                    "**Statistical chart element detector**\n\n"
-                    "# TactileGen\n\n"
-                    "Inspect the regions detected by YOLO in a vertical categorical "
-                    "bar chart, read detected text, and associate legend series "
-                    "with bars."
-                )
-                gr.Markdown(
-                    "**Scope:** Vertical categorical bar charts only. The detector "
-                    "returns chart elements, bounding boxes, OCR text, and provisional "
-                    "legend-to-bar matches. It does not reconstruct numeric values "
-                    "or trends.",
-                    elem_classes="borealis-scope",
-                )
-
-            with gr.Row(elem_classes="borealis-workspace-grid"):
-                with gr.Column(elem_classes="borealis-control-rail"):
-                    gr.Markdown("## Input", elem_classes="borealis-section-title")
-                    image_input = gr.Image(
-                        type="filepath",
-                        sources=["upload"],
-                        image_mode=None,
-                        format="png",
-                        label="Vertical bar chart image",
-                        placeholder="Upload a chart image",
-                        buttons=["fullscreen"],
-                        alt_text="Preview of the uploaded chart",
-                        elem_classes="borealis-upload-image",
-                    )
-                    gr.Markdown(
-                        "PNG, JPEG, or WebP · up to 20 MB and 40 megapixels.",
-                        elem_classes="borealis-helper",
-                    )
-                    gr.Examples(
-                        examples=[[str(EXAMPLE_IMAGE)]],
-                        inputs=[image_input],
-                        label="Example chart",
-                        run_on_click=False,
-                        cache_examples=False,
-                    )
-                    confidence = gr.Slider(
-                        0.05,
-                        1.0,
-                        value=DEFAULT_CONFIDENCE,
-                        step=0.05,
-                        label="Minimum detection confidence",
-                        info="Hide detections below this confidence score.",
-                        elem_classes="borealis-setting",
-                    )
-                    with gr.Accordion(
-                        "Advanced settings",
-                        open=False,
-                        elem_classes="borealis-advanced",
-                    ):
-                        nms_iou = gr.Slider(
-                            0.10,
-                            0.95,
-                            value=DEFAULT_NMS_IOU,
-                            step=0.05,
-                            label="NMS IoU for duplicate suppression",
-                            info=(
-                                "Controls duplicate suppression during inference. "
-                                "This is not evaluation or box-matching IoU."
-                            ),
-                            elem_classes="borealis-setting",
-                        )
-                        language = gr.Textbox(
-                            value=DEFAULT_OCR_LANGUAGE,
-                            label="OCR language",
-                            info="Tesseract language code, such as eng or eng+fra.",
-                            elem_classes="borealis-setting",
-                        )
-                    with gr.Row(elem_classes="borealis-actions"):
-                        analyze_button = gr.Button("Analyze chart", variant="primary")
-                        clear_button = gr.Button("Clear", variant="secondary")
-
-                with gr.Column(elem_classes="borealis-workspace"):
-                    gr.Markdown(
-                        "## Analysis result",
-                        elem_classes=[
-                            "borealis-section-title",
-                            "borealis-workspace-heading",
-                        ],
-                    )
-                    status_output = gr.HTML(
-                        ready_status(), elem_classes="borealis-status"
-                    )
-                    empty_output = gr.Markdown(
-                        "Upload a chart and choose Analyze chart.",
-                        visible=True,
-                        elem_classes="borealis-empty",
-                    )
-                    summary_output = gr.Markdown(
-                        "",
-                        label="Detection summary",
-                        visible=False,
-                        elem_classes="borealis-summary",
-                    )
-                    annotated_output = gr.Image(
-                        type="numpy",
-                        format="png",
-                        label="Annotated detections",
-                        interactive=False,
-                        visible=False,
-                        buttons=["download", "fullscreen"],
-                        alt_text="Uploaded chart with labeled detection boxes",
-                        elem_classes="borealis-result-image",
-                    )
-                    ocr_output = gr.Dataframe(
-                        value=[],
-                        headers=list(OCR_TABLE_HEADERS),
-                        datatype=["str", "str", "str", "number",
-                                  "number", "number", "number", "number"],
-                        type="array",
-                        label="Recognized text",
-                        interactive=False,
-                        visible=False,
-                        wrap=True,
-                        elem_classes="borealis-ocr-table",
-                    )
-                    ocr_download = gr.DownloadButton(
-                        "Download OCR JSON",
-                        value=None,
-                        visible=False,
-                        variant="secondary",
-                        elem_classes="borealis-ocr-download",
-                    )
-                    legend_output = gr.Dataframe(
-                        value=[],
-                        headers=list(LEGEND_TABLE_HEADERS),
-                        datatype=["str", "str", "number", "str", "str", "str"],
-                        type="array",
-                        label="Legend mappings",
-                        interactive=False,
-                        visible=False,
-                        wrap=True,
-                        elem_classes="borealis-legend-table",
-                    )
-                    ocr_warning_output = gr.HTML(
-                        "", visible=False, elem_classes="borealis-error"
-                    )
-                    legend_warning_output = gr.HTML(
-                        "", visible=False, elem_classes="borealis-error"
-                    )
-                    error_output = gr.HTML(
-                        "", visible=False, elem_classes="borealis-error"
-                    )
-
-        image_input.change(
-            ready_results,
-            outputs=[
-                status_output,
-                empty_output,
-                summary_output,
-                annotated_output,
-                ocr_output,
-                ocr_download,
-                legend_output,
-                ocr_warning_output,
-                legend_warning_output,
-                error_output,
-            ],
-            queue=False,
-            api_visibility="private",
-        )
-
-        controls = [
-            image_input, confidence, nms_iou, language, analyze_button, clear_button
-        ]
-        result_components = [
-            status_output,
-            empty_output,
-            summary_output,
-            annotated_output,
-            ocr_output,
-            ocr_download,
-            legend_output,
-            ocr_warning_output,
-            legend_warning_output,
-            error_output,
-        ]
-        start = analyze_button.click(
-            begin_analysis,
-            outputs=[*controls, *result_components],
-            queue=False,
-            trigger_mode="once",
-            api_visibility="private",
-        )
-        analysis = start.then(
-            analyze_event,
-            inputs=[image_input, confidence, nms_iou, language],
-            outputs=result_components,
-            show_progress="full",
-            show_progress_on=annotated_output,
-            concurrency_limit=1,
-            concurrency_id="tactilegen-inference",
-            api_name="analyze",
-            api_description="Detect and annotate chart elements in one uploaded image.",
-            api_visibility="private",
-        )
-        analysis.then(
-            finish_analysis,
-            outputs=controls,
-            queue=False,
-            api_visibility="private",
-        )
-        clear_button.click(
-            clear_all,
-            outputs=[*controls, *result_components],
-            queue=False,
-            api_visibility="private",
-        )
-
-    return demo.queue(default_concurrency_limit=1, max_size=4)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -578,12 +113,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         _import_gradio()
         model = load_model(args.weights)
-        ocr_backend = TesseractBackend()
-        demo = build_app(model, ocr_backend=ocr_backend, device=args.device)
+        demo = build_app(
+            model,
+            ocr_engine=args.ocr,
+            device=args.device,
+            imgsz=args.imgsz,
+        )
         theme = borealis_theme()
     except Exception as exc:
         parser.error(f"Could not start TactileGen: {exc}")
-    demo.launch(
+    launch_app(
+        demo,
         server_name=args.host,
         server_port=args.port,
         share=False,
@@ -591,8 +131,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_file_size=MAX_UPLOAD_BYTES,
         theme=theme,
         css=BOREALIS_CSS,
-        run_history=False,
-        enable_monitoring=False,
     )
 
 

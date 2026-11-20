@@ -58,7 +58,7 @@ def borealis_theme():
     secondary = gr.themes.Color(*_GLOW_RAMP, name="borealis_glow")
     neutral = gr.themes.Color(*_NAVY_RAMP, name="borealis_navy")
     spacing = gr.themes.Size("2px", "4px", "8px", "16px", "24px", "32px", "48px")
-    radius = gr.themes.Size("2px", "4px", "8px", "10px", "12px", "16px", "20px")
+    radius = gr.themes.Size("0px", "2px", "4px", "4px", "4px", "4px", "4px")
     colors = BOREALIS_COLORS
     return gr.themes.Base(
         primary_hue=primary,
@@ -82,9 +82,9 @@ def borealis_theme():
         block_background_fill_dark=colors["panel"],
         block_border_color=colors["deep_sky"],
         block_border_color_dark=colors["deep_sky"],
-        block_radius="12px",
-        block_shadow="0 6px 18px rgba(0, 19, 34, 0.18)",
-        block_shadow_dark="0 6px 18px rgba(0, 19, 34, 0.18)",
+        block_radius="4px",
+        block_shadow="none",
+        block_shadow_dark="none",
         panel_background_fill=colors["panel"],
         panel_background_fill_dark=colors["panel"],
         panel_border_color=colors["deep_sky"],
@@ -99,11 +99,11 @@ def borealis_theme():
         input_border_color_focus_dark=colors["sun"],
         input_placeholder_color=colors["muted"],
         input_placeholder_color_dark=colors["muted"],
-        input_radius="10px",
+        input_radius="4px",
         accordion_text_color=colors["text"],
         accordion_text_color_dark=colors["text"],
-        slider_color=colors["sun"],
-        slider_color_dark=colors["sun"],
+        slider_color=colors["aurora"],
+        slider_color_dark=colors["aurora"],
         table_text_color=colors["text"],
         table_text_color_dark=colors["text"],
         table_border_color=colors["deep_sky"],
@@ -142,12 +142,12 @@ def borealis_theme():
         error_text_color_dark=colors["text"],
         error_icon_color=colors["glow"],
         error_icon_color_dark=colors["glow"],
-        loader_color=colors["sun"],
-        loader_color_dark=colors["sun"],
+        loader_color=colors["glow"],
+        loader_color_dark=colors["glow"],
     )
 
 
-BOREALIS_CSS = """
+_BOREALIS_CSS_TEMPLATE = """
 :root {
   --borealis-midnight: #001322;
   --borealis-deep-sky: #003866;
@@ -162,11 +162,11 @@ BOREALIS_CSS = """
   --borealis-space-2: 16px;
   --borealis-space-3: 24px;
   --borealis-space-4: 32px;
-  --borealis-radius-sm: 10px;
-  --borealis-radius-md: 12px;
+  --borealis-radius-sm: 4px;
+  --borealis-radius-md: 4px;
   --borealis-content-width: 1200px;
   --borealis-font: Inter, Arial, system-ui, sans-serif;
-  --borealis-shadow: 0 10px 30px rgba(0, 12, 22, 0.22);
+  --borealis-shadow: none;
   --borealis-focus-width: 3px;
   --borealis-focus-offset: 3px;
 }
@@ -190,8 +190,10 @@ body,
 .borealis-scope,
 .borealis-control-rail,
 .borealis-upload-image,
+.borealis-image-view,
 .borealis-summary,
 .borealis-workspace,
+.borealis-review,
 .borealis-error,
 .borealis-empty {
   box-sizing: border-box;
@@ -201,14 +203,15 @@ body,
   width: 100%;
   max-width: var(--borealis-content-width);
   margin-inline: auto;
-  padding: var(--borealis-space-2) var(--borealis-space-3) 40px;
-  gap: var(--borealis-space-2) !important;
+  padding: 40px var(--borealis-space-3) 64px;
+  gap: var(--borealis-space-4) !important;
 }
 
 .borealis-header {
-  padding: 0;
+  padding: 0 0 32px;
+  border-bottom: 1px solid var(--borealis-deep-sky);
   color: var(--borealis-text);
-  gap: 6px !important;
+  gap: 8px !important;
 }
 
 .borealis-header .borealis-header {
@@ -221,17 +224,17 @@ body,
 }
 
 .borealis-header h1 {
-  margin-block: 12px !important;
-  font-size: clamp(2rem, 4vw, 3rem);
-  line-height: 1;
-  letter-spacing: -0.04em;
+  margin-block: 0 16px !important;
+  font-size: 40px;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
 }
 
 .borealis-header strong {
-  color: var(--borealis-sun);
-  font-size: 0.75rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  color: var(--borealis-text);
+  font-size: 1rem;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .borealis-actions {
@@ -248,6 +251,53 @@ body,
   box-shadow: var(--borealis-shadow);
 }
 
+.borealis-review {
+  padding-top: var(--borealis-space-2);
+  border-top: 1px solid var(--borealis-deep-sky);
+  gap: var(--borealis-space-2) !important;
+}
+
+.borealis-review-heading h2 {
+  margin: 0 0 8px !important;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.borealis-review-heading p {
+  color: var(--borealis-muted);
+  line-height: 1.5;
+}
+
+.borealis-legend-option {
+  padding: 16px 20px !important;
+  gap: 6px !important;
+  background: var(--borealis-elevated);
+  border: 1px solid var(--borealis-deep-sky);
+  border-radius: var(--borealis-radius-md);
+}
+
+.borealis-legend-checkbox label {
+  font-weight: 600;
+  color: var(--borealis-text);
+  cursor: pointer;
+}
+
+.borealis-legend-checkbox input {
+  accent-color: var(--borealis-sun);
+  width: 20px;
+  height: 20px;
+}
+
+.borealis-legend-checkbox input:focus-visible {
+  outline: 2px solid var(--borealis-sun);
+  outline-offset: 3px;
+}
+
+.borealis-legend-help {
+  max-width: 60ch;
+  line-height: 1.5;
+}
+
 .borealis-control-rail {
   min-width: 0;
   padding-block: 2px;
@@ -256,8 +306,9 @@ body,
 
 .borealis-section-title h2 {
   margin: 0 !important;
-  font-size: 1rem;
-  letter-spacing: 0.02em;
+  font-size: 18px;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
 }
 
 .borealis-upload-image {
@@ -274,8 +325,7 @@ body,
 }
 
 .borealis-scope {
-  border-left: 2px solid var(--borealis-sun);
-  padding-left: 12px;
+  padding: 0;
   max-width: 850px;
 }
 
@@ -309,7 +359,8 @@ body,
   border: 0;
   background: transparent;
   box-shadow: none;
-  line-height: 1.6;
+  line-height: 1.5;
+  font-size: 14px;
 }
 
 .borealis-setting,
@@ -321,17 +372,51 @@ body,
 
 .borealis-setting {
   min-height: 0 !important;
-  padding: 20px 16px !important;
+  padding: 16px !important;
 }
 
-.borealis-setting > div,
-.borealis-setting .wrap {
-  padding-block: 0 !important;
+.borealis-setting .head {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.borealis-setting .head > label,
+.borealis-setting > label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.borealis-setting input[type="text"],
+.borealis-setting textarea {
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 12px !important;
 }
 
 .borealis-advanced {
+  padding: 0 !important;
   border-block: 1px solid var(--borealis-deep-sky) !important;
   border-radius: 0 !important;
+}
+
+.borealis-advanced > .label-wrap {
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 16px !important;
+  margin-bottom: 0 !important;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Controls supply the inset; the accordion body must not add another one. */
+.borealis-advanced > [data-testid="accordion-content"],
+.borealis-advanced > [data-testid="accordion-content"] > .form,
+.borealis-advanced > [data-testid="accordion-content"] > .column,
+.borealis-advanced > [data-testid="accordion-content"] > .column > .form {
+  padding: 0 !important;
+  gap: 0 !important;
 }
 
 .borealis-result-image {
@@ -339,15 +424,36 @@ body,
   box-shadow: none !important;
 }
 
+.borealis-image-view {
+  width: fit-content !important;
+  min-width: 240px;
+  margin-top: calc(-1 * var(--borealis-space-1));
+  padding: 4px !important;
+  background: var(--borealis-elevated) !important;
+  border: 1px solid var(--borealis-deep-sky) !important;
+  border-radius: var(--borealis-radius-sm) !important;
+}
+
+.borealis-image-view .wrap {
+  gap: 4px !important;
+}
+
+.borealis-image-view label {
+  margin: 0 !important;
+  padding: 7px 12px !important;
+  border-radius: 4px !important;
+  font-weight: 600;
+}
+
 .borealis-error {
-  border-left: 3px solid var(--borealis-sun);
+  border-left: 3px solid var(--borealis-aurora);
   padding: 12px 14px;
   background: var(--borealis-elevated);
   border-radius: 0 var(--borealis-radius-sm) var(--borealis-radius-sm) 0;
 }
 
 .borealis-status {
-  color: var(--borealis-sun);
+  color: var(--borealis-muted);
   font-size: 0.875rem;
   font-weight: 600;
 }
@@ -372,6 +478,122 @@ body,
   gap: var(--borealis-space-4) !important;
 }
 
+/* Section rules and spacing establish hierarchy without nested cards. */
+.borealis-app {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.borealis-header p {
+  max-width: 680px;
+  color: var(--borealis-muted);
+}
+
+.borealis-header p + p {
+  margin-top: 8px !important;
+}
+
+.borealis-workspace-heading {
+  padding-bottom: 16px !important;
+  border-bottom: 1px solid var(--borealis-deep-sky) !important;
+}
+
+.borealis-workspace-heading .borealis-workspace-heading {
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+.borealis-empty {
+  padding: 48px 0;
+  max-width: 420px;
+}
+
+.borealis-empty h3 {
+  color: var(--borealis-text);
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+
+.borealis-app button {
+  min-height: 44px;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+
+/* Keep slider reset arrows centred inside their compact numeric control. */
+.borealis-app .borealis-setting button[data-testid="reset-button"] {
+  min-height: 0;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.borealis-details {
+  padding: 0 !important;
+  border: 0 !important;
+  border-top: 1px solid var(--borealis-deep-sky) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.borealis-details > .label-wrap {
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 8px 12px !important;
+  margin-bottom: 0 !important;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Apply the inset once; Gradio's inner layout supplies only the item gap. */
+.borealis-details > [data-testid="accordion-content"] {
+  box-sizing: border-box;
+  padding: 8px 12px !important;
+}
+
+.borealis-details > [data-testid="accordion-content"] > .column,
+.borealis-details > [data-testid="accordion-content"] > .column > .form {
+  padding: 0 !important;
+  gap: 8px !important;
+}
+
+/* Centre the disclosure glyph's line box alongside the title in either state. */
+.borealis-details > .label-wrap > .icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+}
+
+.borealis-details .borealis-helper,
+.borealis-details .borealis-summary {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.borealis-details .prose > :first-child {
+  margin-top: 0 !important;
+}
+
+.borealis-details .prose > :last-child {
+  margin-bottom: 0 !important;
+}
+
+.borealis-workspace > *,
+.borealis-review > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.borealis-app .prose a {
+  color: var(--borealis-glow);
+}
+
 @media (max-width: 900px) {
   .borealis-workspace-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -387,16 +609,16 @@ body,
     padding: var(--borealis-space-2);
   }
 
-  .borealis-header {
-    padding-top: var(--borealis-space-2);
-  }
+  .borealis-header { padding-top: 8px; padding-bottom: 24px; }
+  .borealis-header h1 { font-size: 32px; }
 
   .borealis-workspace {
     min-height: 360px;
     padding: var(--borealis-space-2);
   }
 
-  .borealis-setting {
+  .borealis-setting,
+  .borealis-advanced > .label-wrap {
     padding: 16px 12px !important;
   }
 
@@ -409,3 +631,6 @@ body,
   }
 }
 """.strip()
+
+
+BOREALIS_CSS = _BOREALIS_CSS_TEMPLATE

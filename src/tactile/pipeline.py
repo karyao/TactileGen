@@ -1,6 +1,13 @@
-"""PlotQA vertical-bar chart image in, tactile SVG out.
+"""PlotQA bar chart image (vertical or horizontal bars) in, tactile SVG out.
 
     python -m src.tactile.pipeline --image chart.png --output output/tactile/chart.svg
+
+Bar orientation comes from the shared resolver (``src.bar_orientation``),
+the same policy as the Gradio app: automatic selection needs enough
+consistent bar evidence, otherwise the chart cannot be built and you can
+retry with ``--bar-orientation vertical`` or ``--bar-orientation
+horizontal``. Detecting horizontal bars needs a checkpoint trained on them
+(``--weights``).
 
 Exit status: 0 written, 1 error, 2 text still needed, 3 chart cannot be
 built, 4 categories not confirmed.
@@ -12,89 +19,114 @@ import argparse
 import json
 import sys
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
-from src.contracts import ChartInterpretationError, VerticalBarSpec
+from src.bar_orientation import BarOrientationResult, resolve_bar_orientation
+from src.contracts import (
+    ChartInterpretationError,
+    VerticalBarSpec,
+)
 from src.tactile.completeness import (
     CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Completeness, Overrides,
     apply_overrides, check_completeness, completeness_from_error, cut_off_flags,
     spec_to_chart_with_notes,
 )
+from src.tactile.category_reread import reread_categories
 from src.tactile.layout import X_LABEL_MODES, layout_vertical_bar_chart_pages
+from src.tactile.layout_hbar import layout_horizontal_bar_chart_pages
 from src.tactile.rules import check_layout, format_report
 from src.tactile.svg import render_svg
 
-DEFAULT_WEIGHTS = Path("models/yolo_vbars/best.pt")
+# Fine-tuned on vertical and horizontal bars (notebooks/kaggle_train_bars.ipynb).
+DEFAULT_WEIGHTS = Path("models/yolo_bars_hv/best.pt")
 OVERVIEW_RULE = "overview_first"
 EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 1, 2, 3, 4
 
 
-def snap_bar_tops_enabled() -> bool:
-    """On for the PlotQA pipeline; set TACTILE_SNAP_BAR_TOPS=0 (or false/off) to disable for other inputs."""
-    import os
-
-    return os.environ.get("TACTILE_SNAP_BAR_TOPS", "1").strip().lower() not in ("0", "false", "off", "no")
+OCR_ENGINES = ("tesseract", "rapidocr", "hybrid")
 
 
-def interpret(image, frame, ocr):
-    """Legend matching and reconstruction from detections and OCR.
-
-    Returns ``(spec, error, legend_mapping)``. When some low-confidence bars match no legend
-    swatch they are dropped and the chart is reconstructed again (``src.bar_filter``).
-    """
-    from src.bar_filter import drop_unmatched_bars
-    from src.legend_matcher import match_legend_to_bars
-    from src.reconstruct import reconstruct_vbar
-
-    mapping = None
-    try:
-        # Which bars to drop is decided from the template match alone; the colour resolution
-        # that names the series would otherwise keep low-confidence bars this rule removes.
-        reduced = drop_unmatched_bars(
-            frame, match_legend_to_bars(image, frame, ocr, resolve_by_colour=False))
-        if reduced is not None:
-            frame = reduced
-        mapping = match_legend_to_bars(image, frame, ocr)
-        return reconstruct_vbar(frame, ocr, image, legend_mapping=mapping,
-                                snap_bar_tops=snap_bar_tops_enabled()), None, mapping
-    except ChartInterpretationError as error:
-        return None, error, mapping
+def _ocr_backend(name: str):
+    """The OCR backend and its language code."""
+    if name == "hybrid":
+        from src.ocr.hybrid import HybridBackend
+        return HybridBackend(), "eng"
+    if name == "rapidocr":
+        from src.ocr.rapidocr import RapidOCRBackend
+        return RapidOCRBackend(), "en"
+    from src.ocr.tesseract import TesseractBackend
+    return TesseractBackend(), "eng"
 
 
-def ocr_backend():
-    """OCR backend named by TACTILE_OCR: tesseract (default), rapidocr or hybrid."""
-    import os
+def _orientation_error(result: BarOrientationResult) -> ChartInterpretationError:
+    """Explain an uncertain orientation decision, with a retry hint."""
+    if result.reason == "requested_orientation_unavailable":
+        reason = f"No usable {result.preference} bars were detected."
+    else:
+        reason = {
+            "no_qualifying_bars": "No usable bars were detected.",
+            "insufficient_evidence": "The detected bars provide too little evidence.",
+            "ambiguous_orientation":
+                "The detected bars provide conflicting orientation evidence.",
+        }[result.reason]
+    return ChartInterpretationError(
+        f"Bar orientation is unclear. {reason} "
+        "Pass --bar-orientation vertical or --bar-orientation horizontal to choose."
+    )
 
-    engine = os.environ.get("TACTILE_OCR", "tesseract")
-    if engine == "hybrid":
-        from src.hybrid_ocr import HybridBackend
-        return HybridBackend()
-    if engine == "rapidocr":
-        from src.rapidocr_ocr import RapidOCRBackend
-        return RapidOCRBackend()
-    from src.tesseract_ocr import TesseractBackend
-    return TesseractBackend()
 
+def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
+            *, bar_orientation: str = "auto"):
+    """Run YOLO, resolve bar orientation, then OCR and reconstruction.
 
-def analyse(image_path: Path, weights: Path):
-    """Run YOLO, OCR, legend matching and reconstruction.
-
-    Returns ``(spec, None, frame)`` or ``(None, error, frame)``.
+    Returns ``(spec, None, frame)`` or ``(None, error, frame)``. On success the
+    frame is the resolver's effective frame with opposite-orientation bars
+    removed. On uncertainty it is the raw detection frame.
     """
     import cv2
 
     from src.detection import load_model, run_detection
+    from src.bar_filter import drop_unmatched_bars
+    from src.reconstruction.legend_matcher import filter_bars_by_legend, match_legend_to_bars
     from src.ocr import run_ocr
+    from src.reconstruction.vertical import reconstruct_vbar
+    from src.reconstruction.horizontal import reconstruct_hbar
 
     image = cv2.imread(str(image_path))
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
-    frame = run_detection(load_model(weights), image_path)
-    ocr = run_ocr(image, frame, ocr_backend(), "eng")
-    spec, error, _ = interpret(image, frame, ocr)
-    if error is not None:
+    raw_frame = run_detection(load_model(weights), image_path)
+    resolution = resolve_bar_orientation(raw_frame, bar_orientation)
+    if resolution.status != "resolved":
+        return None, _orientation_error(resolution), raw_frame
+    frame = resolution.effective_frame
+    assert frame is not None
+    backend, language = _ocr_backend(ocr_engine)
+    ocr = run_ocr(image, frame, backend, language)
+    try:
+        reduced = frame
+        if resolution.orientation != "horizontal":
+            # Which bars to drop is decided from the template match alone; the colour resolution
+            # that names the series would otherwise keep low-confidence bars this rule removes.
+            reduced = drop_unmatched_bars(
+                frame, match_legend_to_bars(image, frame, ocr, resolve_by_colour=False)) or frame
+        colour_filter = filter_bars_by_legend(
+            image, reduced, ocr,
+            bar_role="horizontal_bar" if resolution.orientation == "horizontal" else "vertical_bar")
+        legend_mapping = colour_filter.mapping
+        mismatched_bar_ids = colour_filter.mismatched_bar_ids
+        if resolution.orientation == "horizontal":
+            spec = reconstruct_hbar(frame, ocr, image, legend_mapping=legend_mapping,
+                                    mismatched_bar_ids=mismatched_bar_ids)
+        else:
+            spec = reread_categories(
+                reconstruct_vbar(reduced, ocr, image, legend_mapping=legend_mapping,
+                                 mismatched_bar_ids=mismatched_bar_ids),
+                frame, image)
+        return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
+    except ChartInterpretationError as error:
         return None, error, frame
-    return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
 
 
 def _indexed(pairs: list[str], option: str) -> dict[int, str]:
@@ -161,12 +193,16 @@ def _print_missing(result: Completeness, out) -> None:
     for item in result.missing:
         print(f"  {item.field}: {item.reason} Supply it with {item.cli_flag}", file=out)
     print("Or put the same fields in a JSON file and pass --overrides FILE.", file=out)
+    for note in result.notes:
+        print(f"Note: {note}", file=out)
 
 
 def _print_blockers(result: Completeness, out, *, forceable_hint: bool) -> None:
     print("This chart cannot be turned into a tactile graphic:", file=out)
     for blocker in result.blockers:
         print(f"  - {blocker}", file=out)
+    for note in result.notes:
+        print(f"Note: {note}", file=out)
     if forceable_hint and result.forceable:
         print("  --force continues past these ambiguity warnings at your own risk.", file=out)
 
@@ -175,6 +211,10 @@ def _print_summary(spec: VerticalBarSpec, out) -> None:
     print("\nCategories as read:", file=out)
     for j, name in enumerate(spec.categories):
         print(f"  {j}: {name}", file=out)
+    reread = sorted(int(f.split(":", 1)[1]) for f in spec.flags if f.startswith("category_reread_index:"))
+    if reread:
+        print("re-read by fallback: " + ", ".join(f"{j}: {spec.categories[j]!r}" for j in reread),
+              file=out)
     print("Series:", file=out)
     for i, series in enumerate(spec.series):
         shown = series.name or '(single series, unnamed)'
@@ -184,7 +224,7 @@ def _print_summary(spec: VerticalBarSpec, out) -> None:
 REVIEW_CODE = "possible_hidden_bars"
 
 
-def review_reasons(spec: VerticalBarSpec) -> list[dict[str, str]]:
+def review_reasons(spec) -> list[dict[str, str]]:
     """Reasons a person should check the output against the original; never blocks a chart.
 
     A bar that is not drawn may be zero, tiny, or outside the axis range (PlotQA does not draw a
@@ -214,7 +254,8 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
         return EXIT_ERROR
 
     try:
-        spec, error, frame = analyse_fn(args.image, args.weights)
+        spec, error, frame = analyse_fn(args.image, args.weights,
+                                        bar_orientation=args.bar_orientation)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=err)
         return EXIT_ERROR
@@ -268,7 +309,10 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
 
     try:
         chart, adapter_notes = spec_to_chart_with_notes(spec)
-        pages = layout_vertical_bar_chart_pages(chart, x_labels=args.x_labels)
+        if spec.orientation == "horizontal":
+            pages = layout_horizontal_bar_chart_pages(chart, labels=args.x_labels)
+        else:
+            pages = layout_vertical_bar_chart_pages(chart, x_labels=args.x_labels)
     except ValueError as exc:
         print(f"The tactile layout rejected this chart: {exc}", file=err)
         return EXIT_ERROR
@@ -316,7 +360,8 @@ def run(args, *, analyse_fn=analyse, input_fn=input, stdin_is_tty=None,
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--image", type=Path, required=True, help="PlotQA vertical-bar chart image")
+    parser.add_argument("--image", type=Path, required=True,
+                        help="PlotQA bar chart image, vertical or horizontal bars")
     parser.add_argument("--output", type=Path, required=True, help="SVG file to write")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS,
                         help=f"YOLO checkpoint (default {DEFAULT_WEIGHTS})")
@@ -338,12 +383,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "is reported separately and does not count)")
     parser.add_argument("--show-print", action="store_true",
                         help="add small print text under each braille label")
-    parser.add_argument("--x-labels", choices=("auto", *X_LABEL_MODES), default="auto")
+    parser.add_argument("--x-labels", choices=("auto", *X_LABEL_MODES), default="auto",
+                        help="category labels (beside the bars for horizontal charts)")
+    parser.add_argument("--ocr", choices=OCR_ENGINES, default="tesseract",
+                        help="OCR engine (default tesseract)")
+    parser.add_argument("--bar-orientation", choices=("auto", "vertical", "horizontal"),
+                        default="auto",
+                        help="bar direction: auto picks it from the detections when "
+                             "the evidence is clear; vertical or horizontal forces "
+                             "that direction (default auto)")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    return run(parse_args(argv))
+    args = parse_args(argv)
+    return run(args, analyse_fn=partial(analyse, ocr_engine=args.ocr))
 
 
 if __name__ == "__main__":

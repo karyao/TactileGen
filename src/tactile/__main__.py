@@ -1,4 +1,7 @@
-"""Render a vertical bar chart JSON file as a tactile SVG and check BANA rules.
+"""Render a bar chart JSON file as a tactile SVG and check BANA rules.
+
+``chart_type`` ``vbar_categorical`` gives vertical bars, ``hbar_categorical``
+horizontal bars (see tests/fixtures/tactile/rainfall_hbar.json).
 
     python -m src.tactile --chart tests/fixtures/tactile/rainfall.json \
         --output output/tactile/rainfall.svg --show-print
@@ -10,11 +13,16 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.contract_io import load_vertical_bar_chart
+from src.contract_io import load_bar_chart
+from src.contracts import HorizontalBarChart
 from src.tactile.layout import (
     X_LABEL_MODES,
     layout_vertical_bar_chart,
     layout_vertical_bar_chart_pages,
+)
+from src.tactile.layout_hbar import (
+    layout_horizontal_bar_chart,
+    layout_horizontal_bar_chart_pages,
 )
 from src.tactile.rules import check_layout, format_report
 from src.tactile.svg import render_svg
@@ -24,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--chart", type=Path, required=True,
-                        help="VerticalBarChart JSON (schema_version 1)")
+                        help="bar chart JSON (schema_version 1, vbar_ or hbar_categorical)")
     parser.add_argument("--output", type=Path, required=True, help="SVG file to write")
     parser.add_argument("--show-print", action="store_true",
                         help="add small print text under each braille label")
@@ -39,8 +47,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="exit with status 1 when any rule fails")
     args = parser.parse_args(argv)
 
-    chart = load_vertical_bar_chart(args.chart)
-    if args.one_page:
+    chart = load_bar_chart(args.chart)
+    if isinstance(chart, HorizontalBarChart):
+        pages = ([layout_horizontal_bar_chart(chart, labels=args.x_labels)] if args.one_page
+                 else layout_horizontal_bar_chart_pages(chart, labels=args.x_labels))
+    elif args.one_page:
         pages = [layout_vertical_bar_chart(chart, x_labels=args.x_labels)]
     else:
         pages = layout_vertical_bar_chart_pages(chart, x_labels=args.x_labels)

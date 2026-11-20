@@ -1,6 +1,7 @@
-# Tactile output (vertical bar charts)
+# Tactile output (bar charts)
 
-`src/tactile/` turns a `VerticalBarChart` (see [contracts](contracts.md)) into a
+`src/tactile/` turns a `VerticalBarChart` or `HorizontalBarChart` (see
+[contracts](contracts.md)) into a
 one-page tactile graphic and checks it against BANA rules. This is the last
 stage of the pipeline: chart image → YOLO → OCR → chart data → **tactile page**.
 
@@ -58,6 +59,7 @@ Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 | Textures | At most five area textures; the dot fill uses 0.8 mm dots, smaller than braille dots | §3.2.2, §6.8.3.3 |
 | Vertical values | Right-justified, numeric indicator, dots 2-5 level with the grid line, 4 mm from the axis | §6.6.6.2, §6.6.6.6 |
 | Grid | Horizontal grid lines (least distinct, dashed) instead of tick marks; at least 3/8 inch apart | §6.6.6.3, §6.6.6.5, §3.4.3.9 |
+| Bar values | Braille value centred above each bar, 1/8 inch above it (§3.4.3.12); decimals of the y tick step, at most 3 significant digits (more if the ticks need them); may extend beyond the bar’s sides when surrounding clearance permits; insufficient space: fewer decimals (the same for every label on the page, never turning a nonzero value into 0), then a 3/4 inch lead line, then omitted and named in a transcriber's note. Not shown for series with no visible bars or for bars whose height was rescued from pixels (`BarSeries.rescued`). Grid lines are cut around labels. Transcriber's note: "Bar values are estimated from the print." Labels are the layout's choice, not a BANA requirement for graphs that I could verify (§6.6 text not read) | §3.4.3.12 |
 | Bars | 3/8 to 1 inch wide, sized from the number of categories and series; bars in a set are joined (as in print); 1/8 inch between sets (BANA gives no number for this gap, so the §3.4.3.12 spacing is reused); distinct textures per series | §6.6.6.7, §3.4.3.12 |
 | Category labels | Centred under each set of bars. Overflow order when they do not fit: (1) full names; (2) alphabetic keys of 2-3 letters from the name, with a dot 3 or 6 letter, never aa/ac/cc/ca; (3) numeric keys with the numeric indicator and no period; (4) flag the page for review. Keyed names are listed in the key in left-to-right order: symbol in cell 1, a blank cell, the name, runovers in cell 3 | §6.6.6.6, §5.8.1, §5.7.3, §5.8.4.5 |
 | Headings | Vertical heading above the values (≤ 20 cells per line), at least 1/8 inch above the top value label (`Y_HEADING_CLEARANCE`; no blank line needed); horizontal heading below the values, left-justified with the first one | §6.6.6.6, §3.4.3.12 |
@@ -65,10 +67,20 @@ Placement, following BANA *Guidelines and Standards for Tactile Graphics, 2022*:
 A legend entry with no visible bars (`BarSeries.has_bars` false) is keyed like any other series
 and takes no bar slot. The page gets a transcriber's note before the key, "No bars are visible for:
 <names>." (never "zero": the data may be below the axis), on the page that carries the key. Because the key and
-note take space, the plot is shorter than for the same chart without them. When that leaves less than
-`MIN_PLOT_HEIGHT` (5 × `GRID_MIN_SPACING`, 47.6 mm: room for 5 grid intervals; not from BANA), the title, notes and
-series key go on a key page before the graph page, the same key page a divided graph uses, and the
-graph page keeps the height. A single graph page with a short plot and no series key is unchanged.
+note take space, the plot is shorter than for the same chart without them. Vertical charts prefer
+one page when all implemented checks pass and every positive bar has at least one `TEXTURE_TILE`
+of exposed height above its bottom outline/baseline. Zero values and absent series are ignored.
+Exposed height is `bar.height - max(BAR_OUTLINE_WIDTH, (AXIS_WIDTH + BAR_OUTLINE_WIDTH) / 2)`.
+This is an application readability heuristic, not a BANA requirement or a guarantee of tactile
+readability; embossed output still needs physical review.
+
+Otherwise the title, notes and series key are tried on a preceding key page. Both pages must
+pass the checks, and the change must resolve the original violations or increase the smallest
+positive bar's exposed height. Remaining small bars receive an advisory layout note requesting
+tactile review. If no acceptable complete-chart arrangement exists, category splitting is tried
+for rule violations; otherwise the original one-page layout is retained with the advisory.
+`MIN_PLOT_HEIGHT` (47.6 mm, not from BANA) remains a preference for value-label placement, not
+a trigger for moving the vertical chart's key by itself.
 
 The layout never drops content to make a chart fit. If a chart breaks a
 limit (for example 36 bars on one page), the page is still produced and the
@@ -92,6 +104,50 @@ are chosen across the whole graph so they match between pages. The CLI writes
 graph pages of six months each. §3.9.1 calls for an overview of the
 whole graph first; none is generated, so part 1 reports `overview_first`.
 
+## Horizontal bars
+
+`src/reconstruction/horizontal.py` and `src/tactile/layout_hbar.py` handle charts whose
+bars run left to right.
+
+- **Which way the bars run.** The shared resolver `resolve_bar_orientation`
+  (`src/bar_orientation.py`) sums qualifying `vertical_bar` and
+  `horizontal_bar` confidences and picks the side that clearly wins; the image
+  pipeline and the Gradio app use it to pick the reconstruction and the layout.
+  Ambiguous or missing evidence stops with an error asking for
+  `--bar-orientation vertical` or `--bar-orientation horizontal` (the app
+  offers the same manual choice). The score and share thresholds are
+  heuristics, not calibrated probabilities: they enforce a consistent
+  direction, not detection correctness. Only a detector trained on horizontal
+  bars finds them: the default
+  checkpoint `models/yolo_bars_hv/best.pt`, fine-tuned from
+  `models/yolo_vbars/best.pt` with `notebooks/kaggle_train_bars.ipynb`, scored F1 0.947 on horizontal bars
+  and 0.965 on vertical bars (old model 0.966) on the PlotQA test split, IoU 0.5.
+- **Reconstruction.** The detections and image are transposed so the bars
+  stand upright, and `reconstruct_vbar` reads them; legend matching runs on
+  the original image (it compares colours only). The spec has
+  `orientation="horizontal"`, categories top to bottom as printed, and titles
+  on their printed axes (`x_axis_title` is the value heading below the chart).
+- **Layout** (BANA §6.6.6.6 unless noted):
+
+| Element | Placement | BANA |
+| --- | --- | --- |
+| Bars | Run right from the vertical axis; 3/8 to 1 inch thick; sets 1/8 inch apart; key top to bottom | §6.6.6.7, §6.6.6.4 |
+| Grid | Vertical grid lines, perpendicular to the bars, instead of tick marks | §6.6.6.3 |
+| Category labels | Left-aligned, centred on their set of bars; one blank cell and at least two guide dots (dot 5) before the axis; runovers left-justified, guide dots on the last line; same key fallback as vertical bars | §6.6.6.6, §5.8 |
+| Values | Below the axis, numeric indicator, dots 4-5-6 of the first cell on the grid line; the grid step grows until the values fit on one line | §6.6.6.6 |
+| Headings | Horizontal heading below the values, left-justified with the first one; vertical heading aligned with the first cell of the category labels, at most 20 cells a line | §6.6.6.6 |
+
+```bash
+python -m src.tactile --chart tests/fixtures/tactile/rainfall_hbar.json \
+  --output output/tactile/rainfall_hbar.svg --show-print
+python -m src.tactile.pipeline --image chart.png --output out.svg --ocr rapidocr
+python -m src.gradio_app --ocr rapidocr
+```
+
+Not done for horizontal bars yet: staggering values onto extra lines with lead
+lines, dividing a graph into sections (§3.9), and place-value alignment for
+numeric category labels.
+
 ## Rule checker
 
 `src.tactile.check_layout(layout)` returns a list of violations, each with the
@@ -100,10 +156,10 @@ also works on layouts built another way.
 
 | Rule | Checks | BANA |
 | --- | --- | --- |
-| `bar_width` | Bars 3/8 to 1 inch wide | §6.6.6.7 |
+| `bar_width` | Bars 3/8 to 1 inch wide (thick, for horizontal bars) | §6.6.6.7 |
 | `bar_spacing` | Bars in a set do not overlap; at least 1/8 inch between sets | §6.6.6.7, §3.4.3.12 |
 | `label_clearance` | Labels at least 1/8 inch (3 mm) from every other component | §3.4.3.12, §6.6.6.6 |
-| `label_owner_distance` | A label at most 1/4 inch (6 mm) from its component; a series key entry is measured by its first line, since its runovers sit in cell 8 (§5.8.4.3) | §3.4.3.12, §5.10.5 |
+| `label_owner_distance` | A label at most 1/4 inch (6 mm) from its component | §3.4.3.12, §5.10.5 |
 | `fits_page` | Everything inside 40 cells x 25 lines | §3.4.2 |
 | `grid_spacing` | Grid lines at least 3/8 inch apart | §3.4.3.9, §6.6.1.1 |
 | `line_hierarchy` | Grid and lead lines weaker than axis lines | §6.6.6.5, §3.4.3.8 |
@@ -111,6 +167,7 @@ also works on layouts built another way.
 | `tick_length` | Tick marks cross the axis 1/4 inch each side | §6.6.6.5 |
 | `numeric_indicator` | Numeric values use the numeric indicator | §6.6.6.2 |
 | `all_bars_labeled` | No bar label omitted | §6.6.1.3 |
+| `value_label_clearance` | Value label centred on its bar, 1/8 to 1/4 inch above it, or on a 3/4 inch lead line | §3.4.3.12 |
 | `key_before_graph`, `key_order` | Key above the graph, in bar order | §6.6.6.4 |
 | `distinct_textures` | One texture per series, matching its key sample | §6.6.6.7 |
 | `key_sample_size` | Key samples 1 x 1/2 inch | §3.4.3.14 |
@@ -121,6 +178,8 @@ also works on layouts built another way.
 | `overview_first` | A divided graph needs an overview first (always reported on part 1; not generated) | §3.9.1 |
 | `heading_placement` | Horizontal heading left-justified with the first value; vertical heading aligned with the first cell of the values (not centred on the plot) | §6.6.6.6 |
 | `key_format` | Key explanation in cell 6, level with its sample | §5.8.4.3, §5.8.4.4 |
+| `value_alignment` | Vertical values: dots 2-5 on the grid line; horizontal values: dots 4-5-6 of the first cell on it | §6.6.6.6 |
+| `guide_dots` | Horizontal-bar labels left-aligned, one blank cell and at least two guide dots before the axis | §6.6.6.6 |
 
 Passing every rule means these checks passed, not that the page is fully
 BANA compliant. Many guidelines (texture choice, whether a graph needs to be
@@ -138,8 +197,7 @@ Two liblouis checks in `tests/test_tactile.py` use the UEB grade 1 table
 for the demo labels, and a round-trip check that back-translating the braille
 of every label (demos plus abbreviation- and number-keyed layouts, about 70
 labels) gives the original text. Both skip when the `louis` Python bindings
-are not installed. **Neither has been run yet**: liblouis was not available
-on the development machine.
+are not installed. Both passed with liblouis 3.36 (WSL Ubuntu, November 2026).
 
 ## Not done yet
 
@@ -154,7 +212,7 @@ on the development machine.
   transcriber-made key (§5.8.4.2).
 - Texture designs from BANA's texture palettes (Appendices E and H), and a
   test that the dot fill is distinguishable from braille by touch.
-- Negative values, horizontal bars, stacked bars, line graphs and histograms.
+- Negative values, stacked bars, line graphs and histograms.
 - Reading `VerticalBarSpec` from `feat/reconstruct-vbar`, and the transcriber's
   notes BANA requires in some cases (for example omitted numeric indicators).
 - Review by a certified transcriber, and testing with braille readers.
@@ -165,3 +223,27 @@ on the development machine.
   <https://www.brailleauthority.org/guidelines-and-standards-tactile-graphics>
 - BANA, Size and Spacing of Braille Characters (quoting Library of Congress
   Specification 800): <https://www.brailleauthority.org/node/63>
+
+## Bar value labels
+
+`layout_vertical_bar_chart(chart, value_labels=True)` (default) labels every bar. The headroom for the tallest
+bar's label (9 mm, or 29 mm when some label needs a lead line) comes off the plot, so plots are shorter than
+without labels; a chart with no room for it keeps the layout it had before and the layout notes say so.
+Labels may be wider than their bars; placement depends on clearance from surrounding elements and page boundaries.
+Omitted labels are named in a note explaining that space is insufficient.
+Negative values are formatted (`-13`) but not placed: the layout still rejects negative bars.
+
+
+Horizontal charts also enable bar values by default:
+`layout_horizontal_bar_chart(chart, value_labels=True)` and
+`layout_horizontal_bar_chart_pages(chart, value_labels=True)`. Each braille value
+is centred vertically to the right of its bar, with 1/8 inch clearance. The plot
+reserves space on the right for the widest value; the x-axis tick step controls
+precision. The same precision reduction, 3/4 inch lead-line, rescued-value and
+omission-note behavior applies, with lead lines extending right. Vertical grid
+lines are interrupted around value labels to preserve clearance. When labels
+cannot fit without compromising bar thickness or plot width, the original
+unlabelled layout is retained with a no-room note. Set `value_labels=False` on
+either entry point to preserve the original horizontal layout. The pages entry point can move the key and value notes onto a preceding page
+when this allows more values to fit while passing the layout rules. The graph
+itself remains on one page; category sections and negative bars are not supported.

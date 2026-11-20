@@ -233,6 +233,10 @@ charts. Vertical-bar mAP50–95 was **0.9317**. Its machine-readable report is
 `output/yolo_map_test/metrics.json`.
 
 ## Set up
+
+Start with the [dataset setup guide](dataset_setup.md) for repeatable downloads,
+source versions, licenses, and a fresh-clone preparation/evaluation walkthrough.
+
 1. Download images and train annotations from [PlotQA Dataset](https://github.com/NiteshMethani/PlotQA/blob/master/PlotQA_Dataset.md)
 2. Run `python3 src/dataset/prepare_plotqa.py` from the repository root to get data ready for YOLO.
 

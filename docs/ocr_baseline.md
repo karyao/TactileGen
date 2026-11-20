@@ -102,7 +102,7 @@ oracle track was clipped too, so this is not a YOLO or Tesseract fault alone.
 YOLO was trained on those boxes and inherits the short ones; end-to-end also
 clipped the left end ("Amount spent" read as "unt spent").
 
-**Fix.** For `chart_title` only, the shared helper in `src/ocr_crop.py` returns
+**Fix.** For `chart_title` only, the shared helper in `src/ocr/crop.py` returns
 a full-width strip: x from 0 to the image width, y from the box top to the box
 bottom plus vertical padding. Text detected in the same vertical band is
 skipped: the strip starts after text to the left of the title (y tick labels,

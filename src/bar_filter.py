@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from src.contracts import DetectionFrame, LegendMappingFrame
-from src.reconstruct import MIN_CONFIDENCE, _centre, _dedupe, _inside
+from src.reconstruction.vertical import MIN_CONFIDENCE, _centre, _dedupe, _inside
 
 UNMATCHED_BAR_CONFIDENCE = 0.85
 

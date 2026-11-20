@@ -1,6 +1,6 @@
 """Per-region choice between the RapidOCR and Tesseract readings."""
 
-from src.hybrid_ocr import choose
+from src.ocr.hybrid import choose
 from src.ocr import OCRBackendResult
 
 
