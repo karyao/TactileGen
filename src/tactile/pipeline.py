@@ -40,13 +40,18 @@ def analyse(image_path: Path, weights: Path):
     from src.legend_matcher import match_legend_to_bars
     from src.ocr import run_ocr
     from src.reconstruct import reconstruct_vbar
-    from src.tesseract_ocr import TesseractBackend
+    import os
+
+    if os.environ.get("TACTILE_OCR", "tesseract") == "rapidocr":
+        from src.rapidocr_ocr import RapidOCRBackend as Backend
+    else:
+        from src.tesseract_ocr import TesseractBackend as Backend
 
     image = cv2.imread(str(image_path))
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
     frame = run_detection(load_model(weights), image_path)
-    ocr = run_ocr(image, frame, TesseractBackend(), "eng")
+    ocr = run_ocr(image, frame, Backend(), "eng")
     try:
         legend_mapping = match_legend_to_bars(image, frame, ocr)
         spec = reconstruct_vbar(

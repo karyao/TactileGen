@@ -133,29 +133,9 @@ class RapidOCRBackend:
         *,
         language: str,
     ) -> tuple[OCRBackendResult | None, ...]:
-        if not detections:
-            return ()
-        candidates = []
-        owners = []
-        for detection_index, detection in enumerate(detections):
-            current = _recognition_candidates(image, detection, detections)
-            candidates.extend(current)
-            owners.extend([detection_index] * len(current))
-
-        oriented, _ = self._engine.cls_and_rotate(candidates)
-        output = self._engine.recognize_txt(oriented)
-        texts = getattr(output, "txts", None)
-        scores = getattr(output, "scores", None)
-        if not isinstance(texts, (tuple, list)) or not isinstance(scores, (tuple, list)):
-            raise RuntimeError("RapidOCR returned malformed batched recognition output")
-        if len(texts) != len(candidates) or len(scores) != len(candidates):
-            raise RuntimeError("RapidOCR batched output differs from its input crops")
-
-        best: list[OCRBackendResult | None] = [None] * len(detections)
-        for owner, text, score in zip(owners, texts, scores, strict=True):
-            result = _result(type("Output", (), {"txts": (text,), "scores": (score,)})())
-            if result is not None and (
-                best[owner] is None or result.confidence > best[owner].confidence
-            ):
-                best[owner] = result
-        return tuple(best)
+        # Batched recognition pads every crop to the widest one in the batch and
+        # misreads narrow legend labels, so recognise each crop on its own.
+        return tuple(
+            self.recognize(image, detection, language=language, neighbors=detections)
+            for detection in detections
+        )
