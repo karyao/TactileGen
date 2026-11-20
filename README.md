@@ -114,6 +114,7 @@ the test scope and details.
 ### Documentation
 
 - [Dataset setup](docs/dataset_setup.md) — repeatable PlotQA and ChartQA downloads.
+- [End-to-end audit](docs/e2e_audit.md) — how many PlotQA charts come out right, and why the rest fail.
 - [Experiments and reproduction](docs/experiments.md) — datasets, detection results,
   training, and evaluation commands.
 - [YOLO ablation benchmark](docs/ablation_benchmark.md) — model comparisons.
