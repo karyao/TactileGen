@@ -67,7 +67,8 @@ class AppSession:
         if name in ("generate_tactile", "update_review", "update_legend", "admit_generation") and isinstance(inputs[1], list):
             inputs[1] = {"data": inputs[1], "headers": ["Field", "Text"]}
         return await self.app.process_api(self.find_callback(name), inputs, state=self.state,
-                                         request=self.request, session_hash=self.key, iterator=iterator)
+                                         request=self.request, session_hash=self.key, iterator=iterator,
+                                         simple_format=True)
 
     async def analyze(self):
         inputs = [None, .25, .7, "eng", 640, "rapidocr", "auto"]
