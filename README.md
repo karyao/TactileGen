@@ -96,6 +96,23 @@ Experiments use [PlotQA](https://github.com/NiteshMethani/PlotQA/blob/master/Plo
 which must be downloaded separately. Detection and OCR scores measure individual
 stages, not the accuracy or tactile readability of the final graphic.
 
+### Braille translation validation
+
+TactileGen's uncontracted UEB encoder was checked against Liblouis 3.39.0
+using the `en-ueb-g1.ctb` table on commit `f996418b972fea350fef71f51a6ab62099ca3dfb`.
+
+| Check | Comparison | Result |
+| --- | --- | --- |
+| Forward translation | TactileGen and Liblouis produce the same braille cells for demo chart labels. | 63 of 63 unique labels matched |
+| Round trip | Liblouis back-translates TactileGen's braille to the original label, with whitespace normalized. | 83 of 83 unique labels matched |
+
+These results cover the tested labels. They do not measure OCR accuracy, chart
+reconstruction accuracy, or physical tactile readability. See the
+[tactile output guide](docs/tactile.md#braille-translation-validation) for
+the test scope and details.
+
+### Documentation
+
 - [Dataset setup](docs/dataset_setup.md) — repeatable PlotQA and ChartQA downloads.
 - [Experiments and reproduction](docs/experiments.md) — datasets, detection results,
   training, and evaluation commands.

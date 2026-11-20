@@ -183,12 +183,29 @@ capitals (single and word), digits with the numeric indicator, decimal point
 and numeric comma, the grade 1 indicator after a digit, minus sign and common
 punctuation. Anything else raises `ValueError` rather than guessing.
 
+### Braille translation validation
+
 Two liblouis checks in `tests/test_tactile.py` use the UEB grade 1 table
 (`en-ueb-g1.ctb`): a forward check that liblouis produces the same braille
 for the demo labels, and a round-trip check that back-translating the braille
-of every label (demos plus abbreviation- and number-keyed layouts, about 70
-labels) gives the original text. Both skip when the `louis` Python bindings
-are not installed. Both passed with liblouis 3.36 (WSL Ubuntu, November 2026).
+of every label (demos plus abbreviation- and number-keyed layouts) gives the
+original text, with whitespace normalized. Both skip when the
+`louis` Python bindings are not installed.
+
+In November 2026, both checks passed on commit
+`f996418b972fea350fef71f51a6ab62099ca3dfb` with Liblouis 3.39.0 and
+Python 3.12 on macOS. The forward check matched 63 of 63 unique labels; the
+round-trip check matched 83 of 83 unique labels. The checks count their inputs
+separately.
+
+An earlier documented run passed both checks with Liblouis 3.36 on WSL Ubuntu
+in November 2026; it covered approximately 70 unique round-trip labels. Its
+exact counts and commit were not recorded. Both checks use `unicode.dis` with
+`en-ueb-g1.ctb`.
+
+These checks measure translation agreement on the tested labels. They do not
+measure OCR accuracy, chart reconstruction accuracy, or the physical readability
+of tactile output.
 
 ## Not done yet
 
