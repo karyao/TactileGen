@@ -3,10 +3,11 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from src.baseline.gemma import DEFAULT_MODEL_ID, PROMPT_VERSION, GemmaChartExtractor, GemmaExtractionError
-from src.contracts import VerticalBarChart
+from src.contracts import HorizontalBarChart, VerticalBarChart
 
 
 def norm(value):
@@ -18,19 +19,45 @@ def unique_matches(truth, predicted):
     return {i: b.index(x) for i, x in enumerate(a) if x and a.count(x) == 1 and b.count(x) == 1}
 
 
-def score(record, chart):
+def truth_axes(record):
+    chart_type = record.get('type')
+    if chart_type == 'vbar_categorical':
+        return 'x', 'y', VerticalBarChart
+    if chart_type == 'hbar_categorical':
+        return 'y', 'x', HorizontalBarChart
+    raise ValueError(f'unsupported chart type {chart_type!r}')
+
+
+def validate_record(record):
+    category_axis, value_axis, _ = truth_axes(record)
     models = record['models']
-    axis = record['general_figure_info']['x_axis']
+    if not models:
+        raise ValueError('no series')
+    axis = record['general_figure_info'][category_axis + '_axis']
+    axis['major_labels']['values'], axis['major_ticks']['values']
+    for model in models:
+        if len(model[category_axis]) != len(model[value_axis]):
+            raise ValueError('category and value counts differ')
+        for value in model[value_axis]:
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value)):
+                raise ValueError(f'invalid numeric value {value!r}')
+
+
+def score(record, chart):
+    category_axis, value_axis, chart_class = truth_axes(record)
+    models = record['models']
+    axis = record['general_figure_info'][category_axis + '_axis']
     labels, ticks = axis['major_labels']['values'], axis['major_ticks']['values']
     lookup = {}
     for tick, label in zip(ticks, labels):
         lookup.setdefault(str(tick), str(label))
-    categories = [lookup.get(str(x), str(x)) for x in models[0]['x']]
+    categories = [lookup.get(str(x), str(x)) for x in models[0][category_axis]]
     names = [m.get('label') or m.get('name') or '' for m in models]
-    values = [v for m in models for v in m['y'] if v is not None]
+    values = [v for m in models for v in m[value_axis] if v is not None]
     out = dict(category_total=len(categories), series_total=len(names), value_total=len(values),
                category_correct=0, series_correct=0, value_aligned=0, value_correct=0, bar_count_correct=0)
-    if not isinstance(chart, VerticalBarChart):
+    if not isinstance(chart, chart_class):
         return out
     cm = unique_matches(categories, chart.categories)
     sm = unique_matches(names, [s.name or '' for s in chart.series])
@@ -44,10 +71,10 @@ def score(record, chart):
         if not series.has_bars:
             continue
         for k, l in cm.items():
-            if k >= len(models[i]['y']) or models[i]['y'][k] is None:
+            if k >= len(models[i][value_axis]) or models[i][value_axis][k] is None:
                 continue
             out['value_aligned'] += 1
-            out['value_correct'] += int(abs(series.values[l] - models[i]['y'][k]) <= 0.05 * scale)
+            out['value_correct'] += int(abs(series.values[l] - models[i][value_axis][k]) <= 0.05 * scale)
     return out
 
 
@@ -88,10 +115,18 @@ def main():
             records[key] = r
     if wanted - records.keys():
         p.error(f'Missing annotations: {sorted(wanted - records.keys())[:10]}')
+    invalid = []
+    for image_id, record in records.items():
+        try:
+            validate_record(record)
+        except (ValueError, KeyError, TypeError) as exc:
+            invalid.append(f'{image_id}: {exc}')
+    if invalid:
+        p.error('Invalid annotations: ' + '; '.join(invalid))
     digest = hashlib.sha256(a.annotations.read_bytes()).hexdigest()
     config = dict(images=str(a.images.resolve()), ids=ids, annotations=str(a.annotations.resolve()), annotation_sha256=digest,
                   model_id=a.model_id, revision=a.revision, device=a.device, dtype=a.dtype,
-                  max_new_tokens=a.max_new_tokens, prompt_version=PROMPT_VERSION)
+                  max_new_tokens=a.max_new_tokens, prompt_version=PROMPT_VERSION, scoring_version=2)
     a.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = a.output_dir / 'manifest.json'
     if manifest.exists():

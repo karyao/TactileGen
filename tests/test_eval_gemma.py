@@ -1,7 +1,7 @@
 import unittest
 
-from scripts.eval_gemma import score, unique_matches
-from src.contracts import BarSeries, VerticalBarChart
+from scripts.eval_gemma import score, unique_matches, validate_record
+from src.contracts import BarSeries, HorizontalBarChart, VerticalBarChart
 
 
 class GemmaEvaluationTests(unittest.TestCase):
@@ -9,7 +9,7 @@ class GemmaEvaluationTests(unittest.TestCase):
         self.assertEqual(unique_matches([' A ', 'b', 'b'], ['a', 'b']), {0: 0})
 
     def test_values_and_failures(self):
-        record = {'models': [{'x': [0, 1], 'y': [100, 0], 'name': 'sales'}],
+        record = {'type': 'vbar_categorical', 'models': [{'x': [0, 1], 'y': [100, 0], 'name': 'sales'}],
                   'general_figure_info': {'x_axis': {'major_ticks': {'values': [0, 1]},
                                                         'major_labels': {'values': ['A', 'B']}}}}
         chart = VerticalBarChart('test/a', 'title', 'x', 'y', ('B', 'A'),
@@ -21,11 +21,35 @@ class GemmaEvaluationTests(unittest.TestCase):
         self.assertEqual(score(record, None)['value_correct'], 0)
 
     def test_zero_scale_requires_exact(self):
-        record = {'models': [{'x': [0], 'y': [0], 'name': 's'}],
+        record = {'type': 'vbar_categorical', 'models': [{'x': [0], 'y': [0], 'name': 's'}],
                   'general_figure_info': {'x_axis': {'major_ticks': {'values': [0]},
                                                         'major_labels': {'values': ['A']}}}}
         chart = VerticalBarChart('test/a', 't', 'x', 'y', ('A',), (BarSeries('s', (0.01,)),))
         self.assertEqual(score(record, chart)['value_correct'], 0)
+
+    def test_horizontal_grouped_and_orientation_mismatch(self):
+        record = {'type': 'hbar_categorical', 'models': [
+            {'y': ['A', 'B'], 'x': [10, None], 'name': 'one'},
+            {'y': ['A', 'B'], 'x': [20, 30], 'name': 'two'}],
+            'general_figure_info': {'y_axis': {'major_ticks': {'values': []},
+                                                 'major_labels': {'values': []}}}}
+        validate_record(record)
+        series = (BarSeries('one', (10, 0)), BarSeries('two', (20, 30)))
+        chart = HorizontalBarChart('test/a', 't', 'x', 'y', ('A', 'B'), series)
+        result = score(record, chart)
+        self.assertEqual((result['value_total'], result['value_aligned'], result['value_correct']), (3, 3, 3))
+        wrong = VerticalBarChart('test/a', 't', 'x', 'y', ('A', 'B'), series)
+        self.assertEqual(score(record, wrong)['value_correct'], 0)
+        self.assertEqual(score(record, wrong)['value_total'], 3)
+
+    def test_invalid_annotations(self):
+        with self.assertRaises(ValueError):
+            validate_record({'type': 'line'})
+        record = {'type': 'vbar_categorical', 'models': [{'x': [0], 'y': ['bad']}],
+                  'general_figure_info': {'x_axis': {'major_ticks': {'values': []},
+                                                       'major_labels': {'values': []}}}}
+        with self.assertRaises(ValueError):
+            validate_record(record)
 
 
 if __name__ == '__main__':
