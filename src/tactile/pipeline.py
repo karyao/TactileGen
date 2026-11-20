@@ -104,6 +104,8 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     assert frame is not None
     backend, language = _ocr_backend(ocr_engine)
     ocr = run_ocr(image, frame, backend, language)
+    from src.reconstruction.axis_titles import resolve_axis_titles
+    frame = resolve_axis_titles(frame, ocr, orientation=resolution.orientation)
     try:
         reduced = frame
         if resolution.orientation != "horizontal":

@@ -356,6 +356,10 @@ def analyze_image(
         else:
             try:
                 with stage("reconstruction", blocked_errors=(ChartInterpretationError,)):
+                    from src.reconstruction.axis_titles import resolve_axis_titles
+                    frame = resolve_axis_titles(frame, ocr_frame,
+                                                orientation="horizontal" if horizontal else "vertical",
+                                                diagnostics=diagnostics)
                     reconstruct = reconstruct_hbar if horizontal else reconstruct_vbar
                     reconstructed = reconstruct(
                         frame, ocr_frame, image, legend_mapping=legend_mapping,
