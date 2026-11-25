@@ -65,8 +65,10 @@ def render_svg(layout: TactileLayout, *, show_print: bool = False,
     out += [line_svg(l, ' stroke-dasharray="1.5 1.5"') for l in layout.lines if l.kind == "grid"]
     out.append('</g><g id="bars">')
     for bar in layout.bars:
-        rect = (f'x="{bar.x:.2f}" y="{bar.y:.2f}" width="{bar.width:.2f}" '
-                f'height="{bar.height:.2f}"')
+        # A zero (or sub-outline) value lies inside the axis line, so the layout gives it a
+        # negative extent; SVG rejects a negative width or height, so draw it as zero.
+        rect = (f'x="{bar.x:.2f}" y="{bar.y:.2f}" width="{max(bar.width, 0.0):.2f}" '
+                f'height="{max(bar.height, 0.0):.2f}"')
         # A white base hides grid lines inside bars so the texture stays clean.
         out.append(f'<rect {rect} fill="#fff"/>')
         out.append(f'<rect id="{bar.id}" {rect} fill="{_fill(bar.texture)}" stroke="#000" '
