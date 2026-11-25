@@ -766,26 +766,58 @@ def _missed(spec):
     return [f for f in spec.flags if f.startswith("bars_mostly_missed")]
 
 
-def test_chart_with_most_bars_undetected_is_flagged():
+def _hide_bar(chart, index):
+    """Remove the index-th detection and paint its bar out: nothing is left for the pixel probe to find,
+    as for a bar that is not drawn (a negative value on an axis that starts at zero)."""
+    bar = [d for d in chart.detections if d.role == "vertical_bar"][index]
+    chart.detections.remove(bar)
+    chart.paint((bar.box.x1, bar.box.y1, bar.box.x2, bar.box.y2), (255, 255, 255))
+
+
+def test_chart_with_most_bars_hidden_is_flagged():
     chart = base_chart(values=(120, 60, 180))
-    _drop_detection(chart, 2)
-    _drop_detection(chart, 1)
+    _hide_bar(chart, 2)
+    _hide_bar(chart, 1)
     spec = chart.run()
-    assert "bars_mostly_missed:67" in spec.flags  # 1 of 3 slots detected
+    assert "bars_mostly_missed:67" in spec.flags  # 1 of 3 slots detected, the probe finds nothing
 
 
 def test_bars_mostly_missed_needs_fewer_than_sixty_percent():
     two_of_three = base_chart(values=(120, 60, 180))
-    _drop_detection(two_of_three, 2)
+    _hide_bar(two_of_three, 2)
     assert not _missed(two_of_three.run())
     three_of_five = base_chart(values=(120, 60, 90, 70, 100))
-    _drop_detection(three_of_five, 4)
-    _drop_detection(three_of_five, 3)
+    _hide_bar(three_of_five, 4)
+    _hide_bar(three_of_five, 3)
     assert not _missed(three_of_five.run())  # exactly 0.6
     two_of_five = base_chart(values=(120, 60, 90, 70, 100))
     for index in (4, 3, 2):
-        _drop_detection(two_of_five, index)
+        _hide_bar(two_of_five, index)
     assert "bars_mostly_missed:60" in two_of_five.run().flags
+
+
+def test_undetected_bars_the_probe_measures_do_not_raise_bars_mostly_missed():
+    # 1 of 5 slots detected, the other four are drawn but undetected: the probe reads them from pixels.
+    chart = base_chart(values=(120, 60, 90, 70, 100))
+    for index in (4, 3, 2, 1):
+        _drop_detection(chart, index)
+    spec = chart.run()
+    assert not _missed(spec)
+    assert_values(spec, [120, 60, 90, 70, 100])
+    assert "bars_rescued:4" in spec.flags
+
+
+def test_bars_mostly_missed_threshold_is_forty_percent_of_slots_measured_nonzero():
+    def chart_with_visible(n_visible):
+        chart = base_chart(values=(120, 60, 90, 70, 100))
+        for index in (4, 3, 2, 1):                      # only the first bar stays detected
+            _drop_detection(chart, index)
+        for index in range(1, 5 - n_visible):           # the others the probe cannot find
+            bar = [d for d in base_chart(values=(120, 60, 90, 70, 100)).detections if d.role == "vertical_bar"][index]
+            chart.paint((bar.box.x1, bar.box.y1, bar.box.x2, bar.box.y2), (255, 255, 255))
+        return chart
+    assert not _missed(chart_with_visible(2).run())     # 2 of 5 = 0.4 measured nonzero: released
+    assert "bars_mostly_missed:80" in chart_with_visible(1).run().flags   # 1 of 5 = 0.2: still blocked
 
 
 def test_short_detected_bars_count_as_detected():

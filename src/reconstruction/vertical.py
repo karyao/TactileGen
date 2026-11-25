@@ -36,6 +36,7 @@ DUPLICATE_IOU = 0.5
 COLOR_DISTANCE = 40.0
 UNREADABLE_CATEGORY_CONFIDENCE = 0.1
 MIN_DETECTED_BAR_FRACTION = 0.6  # below this share of detected slots, most values are guesses
+PROBE_FOUND_BARS_FRACTION = 0.4  # ... unless the pixel probe found a bar in at least this share of slots
 BAR_EDGE_TOLERANCE_PX = 5     # a pixel-measured top edge this far from the box edge wins
 SHORT_BAR_MIN_PX = 6          # detected bars shorter than this are re-measured from pixels
 SHORT_BAR_PLOT_FRACTION = 0.03  # ... or shorter than this share of the plot height
@@ -1014,8 +1015,13 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
               value=measured, inferred_zero=measured == 0.0, bar_id=bar_id)
     # Share of category x series slots (for series with at least one detected
     # bar) that had a detected bar; very short bars were detected, just re-measured.
+    # The block exists because bars below an axis that starts at zero are invisible to the
+    # pixel probe and read as 0. When the probe did find a bar in a good share of the slots,
+    # the undetected bars were visible slivers it measured, not hidden ones.
     slots = len(categories) * len(clusters)
-    if slots and (detected_slots + short_bars) / slots < MIN_DETECTED_BAR_FRACTION:
+    probe_found = sum(1 for *_, measured in rescue_measurements if measured != 0.0)
+    if (slots and (detected_slots + short_bars) / slots < MIN_DETECTED_BAR_FRACTION
+            and probe_found / slots < PROBE_FOUND_BARS_FRACTION):
         flags.append(f"bars_mostly_missed:{round(100 * (1 - (detected_slots + short_bars) / slots))}")
     if edges_corrected:
         flags.append(f"bar_edge_corrected:{edges_corrected}")
