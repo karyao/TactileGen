@@ -1367,7 +1367,8 @@ class OCRTraceTest(unittest.TestCase):
                 self.assertEqual(fields["txts"]["presence"], "present" if hasattr(raw, "txts") else "absent")
                 if hasattr(raw, "txts"):
                     self.assertEqual(fields["txts"]["value"], snapshot(raw.txts))
-                self.assertEqual(trace["attempts"][0]["output_availability"], "unavailable")
+                self.assertEqual(trace["attempts"][0]["output_availability"], "available")
+                self.assertEqual(set(trace["attempts"][0]["raw_output"]), {"txts", "scores"})
 
     def test_invalid_rapid_confidences_preserve_error_and_raw_value(self):
         for score in (True, -.1, 1.1, "90", float("nan"), float("inf"),
@@ -1459,6 +1460,34 @@ class OCRTraceTest(unittest.TestCase):
                     self.assertNotIn("error", attempt)
                     self.assertEqual(attempt["recognition_submission"],
                                      "not_submitted" if engine == "classifier" else "submitted")
+
+    def test_rapid_midway_failure_keeps_each_crops_submission_and_response(self):
+        third = Detection("third", "legend_label", Box(32, 2, 45, 10), .9)
+        items = (SHORT, Detection("second", "legend_label", Box(20, 2, 31, 10), .9), third)
+        module, engine, _ = fake_rapidocr([])
+        failure = RuntimeError("crop two failed")
+        engine.recognize_txt = Mock(side_effect=[output(" first ", .75), failure])
+        diagnostics = collector()
+        with patch("src.ocr.rapidocr._load_rapidocr", return_value=module):
+            with self.assertRaises(RuntimeError) as caught:
+                recognize(RapidOCRBackend(), items, diagnostics)
+
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(engine.recognize_txt.call_count, 2)
+        trace = diagnostics.record["ocr_trace"]
+        attempts = trace["attempts"]
+        self.assertEqual([a["detection_id"] for a in attempts], [d.id for d in items])
+        self.assertEqual([a["recognition_submission"] for a in attempts],
+                         ["submitted", "submitted", "not_submitted"])
+        self.assertEqual([a["output_availability"] for a in attempts],
+                         ["available", "unavailable", "unavailable"])
+        self.assertEqual(attempts[0]["raw_output"],
+                         {"text": " first ", "text_state": "text", "confidence": .75})
+        self.assertEqual([r["submission"] for r in trace["results"]],
+                         ["submitted", "submitted", "not_submitted"])
+        self.assertEqual(trace["batches"][0]["outcome"], "failed")
+        self.assertEqual(trace["batches"][0]["operation"], "recognize_txt")
+        json.dumps(trace, allow_nan=False)
 
     def test_preprocessing_failure_leaves_attempts_unsubmitted(self):
         diagnostics = collector()

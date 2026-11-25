@@ -195,11 +195,22 @@ class RapidOCRBackend:
                 trace.input_image(index, candidate, channel_layout="BGR")
                 if have_labels:
                     trace.attempts[index]["preprocessing"]["classifier_orientation"] = snapshot(labels[index])
-            trace.submit("recognize_txt")
-        for turned in oriented:
+        for index, turned in enumerate(oriented):
+            if trace is not None:
+                trace.submit("recognize_txt", index=index)
             output = self._engine.recognize_txt([turned])
             one_texts = getattr(output, "txts", None)
             one_scores = getattr(output, "scores", None)
+            if trace is not None:
+                if (isinstance(one_texts, (tuple, list)) and isinstance(one_scores, (tuple, list))
+                        and len(one_texts) == len(one_scores) == 1):
+                    trace.output(index, {"text": one_texts[0],
+                                         "text_state": text_state(one_texts[0]),
+                                         "confidence": one_scores[0]})
+                else:
+                    fields = {key: getattr(output, key) for key in ("txts", "scores")
+                              if hasattr(output, key)}
+                    trace.output(index, {key: field(fields, key) for key in ("txts", "scores")})
             if (not isinstance(one_texts, (tuple, list)) or not isinstance(one_scores, (tuple, list))
                     or len(one_texts) != 1 or len(one_scores) != 1):
                 if malformed is None:
@@ -217,10 +228,6 @@ class RapidOCRBackend:
         if len(texts) != len(candidates) or len(scores) != len(candidates):
             raise RuntimeError("RapidOCR batched output differs from its input crops")
 
-        if trace is not None:
-            # Capture every response before any candidate can fail conversion.
-            for index, (text, score) in enumerate(zip(texts, scores, strict=True)):
-                trace.output(index, {"text": text, "text_state": text_state(text), "confidence": score})
         best: list[OCRBackendResult | None] = [None] * len(detections)
         winners = {}
         for index, (owner, text, score) in enumerate(zip(owners, texts, scores, strict=True)):

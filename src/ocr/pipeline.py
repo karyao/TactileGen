@@ -125,7 +125,7 @@ def run_ocr(
                 attempts = [a for a in trace["attempts"]
                             if a["batch_id"] in item["batch_ids"]
                             and a["detection_id"] == item["detection_id"]]
-                if any(a["submission"] == "submitted" for a in attempts):
+                if any(a["recognition_submission"] == "submitted" for a in attempts):
                     item["submission"] = "submitted"
                 selected = next((a for a in attempts if a["selection"] == "selected"), None)
                 item["selected_attempt_id"] = selected["attempt_id"] if selected else None
