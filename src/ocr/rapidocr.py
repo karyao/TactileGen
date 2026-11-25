@@ -171,37 +171,63 @@ class RapidOCRBackend:
 
         if trace is not None:
             trace.submit("cls_and_rotate")
-        oriented, orientation = self._engine.cls_and_rotate(candidates)
+        # One crop at a time. Batched recognition pads every crop to the widest one in the
+        # batch, which misreads narrow legend and tick labels (154 of 259 legend labels right
+        # batched vs 238 one at a time); classification and recognition are called per crop,
+        # exactly as ``recognize`` does, and the outputs are merged in candidate order.
+        oriented, labels, texts, scores, malformed = [], [], [], [], None
+        for candidate in candidates:
+            turned, orientation = self._engine.cls_and_rotate([candidate])
+            oriented.extend(turned)
+            cls_res = getattr(orientation, "cls_res", None)
+            labels.append(cls_res[0] if isinstance(cls_res, (list, tuple)) and cls_res else None)
         if trace is not None:
             from src.ocr.trace import snapshot
-            labels = getattr(orientation, "cls_res", None)
+            have_labels = all(label is not None for label in labels)
             trace.batch["classifier_output"] = {
-                "cls_res": snapshot(labels),
-                "availability": "available" if labels is not None else "unavailable",
-                "elapse": snapshot(getattr(orientation, "elapse", None)),
+                "cls_res": snapshot(labels if have_labels else None),
+                "availability": "available" if have_labels else "unavailable",
+                "elapse": snapshot(None),
             }
             for index, candidate in enumerate(oriented):
                 if index >= len(trace.attempts):
                     break
                 trace.input_image(index, candidate, channel_layout="BGR")
-                if isinstance(labels, (list, tuple)) and index < len(labels):
+                if have_labels:
                     trace.attempts[index]["preprocessing"]["classifier_orientation"] = snapshot(labels[index])
-            trace.submit("recognize_txt")
-        output = self._engine.recognize_txt(oriented)
-        texts = getattr(output, "txts", None)
-        scores = getattr(output, "scores", None)
+        for index, turned in enumerate(oriented):
+            if trace is not None:
+                trace.submit("recognize_txt", index=index)
+            output = self._engine.recognize_txt([turned])
+            one_texts = getattr(output, "txts", None)
+            one_scores = getattr(output, "scores", None)
+            if trace is not None:
+                if (isinstance(one_texts, (tuple, list)) and isinstance(one_scores, (tuple, list))
+                        and len(one_texts) == len(one_scores) == 1):
+                    trace.output(index, {"text": one_texts[0],
+                                         "text_state": text_state(one_texts[0]),
+                                         "confidence": one_scores[0]})
+                else:
+                    fields = {key: getattr(output, key) for key in ("txts", "scores")
+                              if hasattr(output, key)}
+                    trace.output(index, {key: field(fields, key) for key in ("txts", "scores")})
+            if (not isinstance(one_texts, (tuple, list)) or not isinstance(one_scores, (tuple, list))
+                    or len(one_texts) != 1 or len(one_scores) != 1):
+                if malformed is None:
+                    malformed = output  # raised below, after the evidence is recorded
+                continue
+            texts.extend(one_texts)
+            scores.extend(one_scores)
         if trace is not None:
-            fields = {key: getattr(output, key) for key in ("txts", "scores") if hasattr(output, key)}
+            source = malformed if malformed is not None else type(
+                "Output", (), {"txts": tuple(texts), "scores": tuple(scores)})()
+            fields = {key: getattr(source, key) for key in ("txts", "scores") if hasattr(source, key)}
             trace.raw({key: field(fields, key) for key in ("txts", "scores")})
-        if not isinstance(texts, (tuple, list)) or not isinstance(scores, (tuple, list)):
+        if malformed is not None:
             raise RuntimeError("RapidOCR returned malformed batched recognition output")
         if len(texts) != len(candidates) or len(scores) != len(candidates):
             raise RuntimeError("RapidOCR batched output differs from its input crops")
 
-        if trace is not None:
-            # Capture every response before any candidate can fail conversion.
-            for index, (text, score) in enumerate(zip(texts, scores, strict=True)):
-                trace.output(index, {"text": text, "text_state": text_state(text), "confidence": score})
         best: list[OCRBackendResult | None] = [None] * len(detections)
         winners = {}
         for index, (owner, text, score) in enumerate(zip(owners, texts, scores, strict=True)):

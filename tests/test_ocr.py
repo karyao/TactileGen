@@ -47,7 +47,7 @@ from src.ocr import OCRBackendResult, run_ocr
 from src.ocr.pipeline import _run_command, parse_args
 from src.ocr.crop import _title_strip_bounds, crop_text_bounds, crop_text_region
 from src.ocr.trace import adapter_evidence, snapshot
-from src.ocr.rapidocr import RapidOCRBackend, _load_rapidocr
+from src.ocr.rapidocr import RapidOCRBackend, _candidate_rotations, _load_rapidocr
 from src.ocr.tesseract import TesseractBackend, _load_pytesseract
 
 
@@ -1154,8 +1154,34 @@ class RapidOCRBackendTest(unittest.TestCase):
             np.zeros((20, 30, 3), dtype=np.uint8), items, language="eng"
         )
         self.assertEqual([item.text for item in results], ["first", "second"])
-        self.assertEqual(len(backend._engine.cls_calls), 1)
-        self.assertEqual(len(backend._engine.rec_calls), 1)
+        # one crop at a time: batched recognition pads narrow crops to the widest and misreads them
+        self.assertEqual([len(call) for call in backend._engine.cls_calls], [1, 1])
+        self.assertEqual([len(call) for call in backend._engine.rec_calls], [1, 1])
+
+    def test_recognize_many_reads_each_crop_alone(self):
+        """A batch pads narrow crops to the widest and misreads them; every crop must be its own call."""
+        class PaddingEngine(FakeEngine):
+            def recognize_txt(self, images):
+                self.rec_calls.append(images)
+                widest = max(image.shape[1] for image in images)
+                texts = tuple("wide" if image.shape[1] == widest else "garbled" for image in images)
+                return types.SimpleNamespace(txts=texts, scores=(0.9,) * len(images))
+
+        engine = PaddingEngine([])
+        module = types.SimpleNamespace(
+            RapidOCR=lambda **kwargs: engine,
+            EngineType=types.SimpleNamespace(ONNXRUNTIME="onnxruntime"),
+            ModelType=types.SimpleNamespace(SMALL="small"),
+            OCRVersion=types.SimpleNamespace(PPOCRV6="PP-OCRv6"),
+        )
+        with patch("src.ocr.rapidocr._load_rapidocr", return_value=module):
+            backend = RapidOCRBackend()
+        image = np.zeros((40, 120, 3), dtype=np.uint8)
+        items = (text_detection((5, 5, 60, 15), "legend_label", "wide"),
+                 Detection("narrow", "legend_label", Box(70, 5, 80, 15), 0.9))
+        many = backend.recognize_many(image, items, language="eng")
+        self.assertEqual([item.text for item in many], ["wide", "wide"])  # each crop was the widest in its own call
+        self.assertTrue(all(len(call) == 1 for call in engine.rec_calls))
 
     def test_recognize_many_gives_title_all_detection_neighbors(self):
         module, engine, _ = fake_rapidocr([output("title"), output("tick")])
@@ -1170,7 +1196,7 @@ class RapidOCRBackendTest(unittest.TestCase):
             language="eng",
         )
 
-        self.assertEqual([candidate.shape for candidate in engine.cls_calls[0]], [
+        self.assertEqual([candidate.shape for call in engine.cls_calls for candidate in call], [
             (20, 158, 3), (16, 34, 3),
         ])
 
@@ -1216,10 +1242,22 @@ def tesseract_data(pages):
 def recognize_with_fake_rapidocr(raw, items=(SHORT,), *, diagnostics=None, cls_error=None):
     """Run OCR with a fake RapidOCR engine and return its result and engine."""
     module, engine, _ = fake_rapidocr([])
-    engine.recognize_txt = Mock(
-        side_effect=raw if isinstance(raw, Exception) else None,
-        return_value=raw,
-    )
+    total = sum(len(_candidate_rotations(item)) for item in items)
+    texts, scores = getattr(raw, "txts", None), getattr(raw, "scores", None)
+    aligned = (isinstance(texts, (tuple, list)) and isinstance(scores, (tuple, list))
+               and len(texts) == len(scores) == total > 1)
+    sliced = iter(range(total))
+
+    def respond(images):
+        # The engine is called once per crop; a batch-shaped fake response is handed out one item at a time.
+        if isinstance(raw, Exception):
+            raise raw
+        if not aligned:
+            return raw
+        index = next(sliced)
+        return types.SimpleNamespace(txts=(texts[index],), scores=(scores[index],))
+
+    engine.recognize_txt = Mock(side_effect=respond)
     if cls_error:
         engine.cls_and_rotate = Mock(side_effect=cls_error)
     with patch("src.ocr.rapidocr._load_rapidocr", return_value=module):
@@ -1264,10 +1302,11 @@ class OCRTraceTest(unittest.TestCase):
         self.assertEqual(trace["results"][1]["application_result"], {"text": "", "confidence": 0.0})
         self.assertEqual([a["preprocessing"]["rotation_degrees_clockwise"] for a in trace["attempts"]],
                          [0, 90, -90, 0])
-        self.assertEqual(engine.recognize_txt.call_count, 1)
-        self.assertEqual(len(engine.cls_calls), 1)
-        for left, right in zip(plain_engine.recognize_txt.call_args.args[0], engine.recognize_txt.call_args.args[0]):
-            np.testing.assert_array_equal(left, right)
+        self.assertEqual(engine.recognize_txt.call_count, 4)
+        self.assertEqual([len(call) for call in engine.cls_calls], [1, 1, 1, 1])
+        for left, right in zip(plain_engine.recognize_txt.call_args_list, engine.recognize_txt.call_args_list):
+            for left_image, right_image in zip(left.args[0], right.args[0]):
+                np.testing.assert_array_equal(left_image, right_image)
         json.dumps(trace, allow_nan=False)
 
     def test_tesseract_raw_tokens_confidences_and_derived_text(self):
@@ -1328,7 +1367,8 @@ class OCRTraceTest(unittest.TestCase):
                 self.assertEqual(fields["txts"]["presence"], "present" if hasattr(raw, "txts") else "absent")
                 if hasattr(raw, "txts"):
                     self.assertEqual(fields["txts"]["value"], snapshot(raw.txts))
-                self.assertEqual(trace["attempts"][0]["output_availability"], "unavailable")
+                self.assertEqual(trace["attempts"][0]["output_availability"], "available")
+                self.assertEqual(set(trace["attempts"][0]["raw_output"]), {"txts", "scores"})
 
     def test_invalid_rapid_confidences_preserve_error_and_raw_value(self):
         for score in (True, -.1, 1.1, "90", float("nan"), float("inf"),
@@ -1420,6 +1460,34 @@ class OCRTraceTest(unittest.TestCase):
                     self.assertNotIn("error", attempt)
                     self.assertEqual(attempt["recognition_submission"],
                                      "not_submitted" if engine == "classifier" else "submitted")
+
+    def test_rapid_midway_failure_keeps_each_crops_submission_and_response(self):
+        third = Detection("third", "legend_label", Box(32, 2, 45, 10), .9)
+        items = (SHORT, Detection("second", "legend_label", Box(20, 2, 31, 10), .9), third)
+        module, engine, _ = fake_rapidocr([])
+        failure = RuntimeError("crop two failed")
+        engine.recognize_txt = Mock(side_effect=[output(" first ", .75), failure])
+        diagnostics = collector()
+        with patch("src.ocr.rapidocr._load_rapidocr", return_value=module):
+            with self.assertRaises(RuntimeError) as caught:
+                recognize(RapidOCRBackend(), items, diagnostics)
+
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(engine.recognize_txt.call_count, 2)
+        trace = diagnostics.record["ocr_trace"]
+        attempts = trace["attempts"]
+        self.assertEqual([a["detection_id"] for a in attempts], [d.id for d in items])
+        self.assertEqual([a["recognition_submission"] for a in attempts],
+                         ["submitted", "submitted", "not_submitted"])
+        self.assertEqual([a["output_availability"] for a in attempts],
+                         ["available", "unavailable", "unavailable"])
+        self.assertEqual(attempts[0]["raw_output"],
+                         {"text": " first ", "text_state": "text", "confidence": .75})
+        self.assertEqual([r["submission"] for r in trace["results"]],
+                         ["submitted", "submitted", "not_submitted"])
+        self.assertEqual(trace["batches"][0]["outcome"], "failed")
+        self.assertEqual(trace["batches"][0]["operation"], "recognize_txt")
+        json.dumps(trace, allow_nan=False)
 
     def test_preprocessing_failure_leaves_attempts_unsubmitted(self):
         diagnostics = collector()
@@ -1686,12 +1754,14 @@ class OCRImageEvidenceTest(unittest.TestCase):
         run_ocr(IMAGE, frame, backend, 'eng', diagnostics=diagnostics)
         attempts = diagnostics.record['ocr_trace']['attempts']
         self.assertEqual(len(attempts), 4)
-        for attempt, submitted in zip(attempts, engine.rec_calls[0]):
+        submitted_images = [image for call in engine.rec_calls for image in call]
+        for attempt, submitted in zip(attempts, submitted_images):
             np.testing.assert_array_equal(decode(diagnostics, attempt['recognition_image']), submitted)
             self.assertEqual(attempt['preprocessing']['classifier_orientation'], ['180', .99])
             self.assertIsNotNone(attempt['source_crop_id'])
-        self.assertEqual(engine.cls_and_rotate.call_count, 1)
-        self.assertEqual(len(engine.rec_calls), 1)
+        self.assertEqual(engine.cls_and_rotate.call_count, 4)
+        self.assertEqual(len(engine.rec_calls), 4)
+        self.assertTrue(all(len(call) == 1 for call in engine.rec_calls))
         with tempfile.TemporaryDirectory() as temporary:
             diagnostics.finish()
             path = diagnostics.export_zip(Path(temporary))

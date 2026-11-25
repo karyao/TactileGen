@@ -101,9 +101,10 @@ class BatchTrace:
         item["recognition_image"] = self.diagnostics.image_evidence(
             f"ocr_inputs/{number}.png", image, channel_layout=channel_layout)
 
-    def submit(self, operation):
+    def submit(self, operation, *, index=None):
         self.batch["operation"] = operation
-        for item in self.attempts:
+        attempts = self.attempts if index is None else (self.attempts[index],)
+        for item in attempts:
             item["submission"] = "submitted"
             item["submitted_operations"].append(operation)
             item["output_unavailability_reason"] = "recognition_not_submitted"
@@ -116,7 +117,8 @@ class BatchTrace:
         self.batch["raw_output_availability"] = "available"
         self.batch["operation"] = "interpret_output"
         for item in self.attempts:
-            item["output_unavailability_reason"] = "batch_response_not_mapped"
+            if item["output_availability"] == "unavailable":
+                item["output_unavailability_reason"] = "batch_response_not_mapped"
 
     def output(self, index, value):
         self.attempts[index].update(raw_output=snapshot(value), output_availability="available",

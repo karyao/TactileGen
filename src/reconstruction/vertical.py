@@ -810,6 +810,15 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     short = {k for k, bar in enumerate(bars) if bar.box.y2 - bar.box.y1 < short_limit}
     if not (rescue_bars and baseline_inside) or len(short) == len(bars):
         short = set()
+    # The rescue measures a slot from the offset of the series' own kept bars. A legend-matched series
+    # made only of short bars has none, so it keeps its bars. An unmatched group made only of short
+    # bars is the outline-colour series that leaving them out is meant to remove. A colour-mismatched
+    # bar stays out either way: it needs the unaccounted-bar check.
+    if short:
+        for members, _, identity in group_bars(set())[3]:
+            if (identity is not None and all(k in short for k in members)
+                    and not any(bars[k].id in mismatched for k in members)):
+                short -= set(members)
     matched_groups, unresolved, conflicting_swatches, grouped = group_bars(short)
     # Rescue is safe when group membership is settled. With a mixture of
     # semantic and fallback groups (or conflicting semantic identities), the

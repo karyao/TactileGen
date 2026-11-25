@@ -678,6 +678,39 @@ def test_short_bar_colour_does_not_create_an_extra_series():
     assert "short_bars_remeasured:1" in spec.flags
 
 
+def test_series_made_only_of_short_bars_is_not_emitted_without_values():
+    # Every bar of series 1 is 3-4 px tall. With nothing else in the series to measure the group
+    # offset from, remeasuring them used to leave the series with all-None values.
+    chart = grouped_chart((RED, GREEN), [(100, 2), (150, 2), (40, 2)])
+    spec = chart.run()
+    assert len(spec.series) == 2
+    assert_values(spec, [100, 150, 40], series=0)
+    assert all(v is not None for v in spec.series[1].values)
+    assert_values(spec, [2, 2, 2], series=1)
+    assert not any(f.startswith("short_bars_remeasured") for f in spec.flags)
+
+
+def test_short_bars_are_still_remeasured_when_the_series_has_a_normal_bar():
+    chart = grouped_chart((RED, GREEN), [(100, 2), (150, 60), (40, 2)])
+    spec = chart.run()
+    assert_values(spec, [100, 150, 40], series=0)
+    assert_values(spec, [2, 60, 2], series=1)
+    assert spec.series[1].value_rescued == [True, False, True]
+    assert "short_bars_remeasured:2" in spec.flags
+
+
+def test_unmatched_group_of_short_bars_is_still_removed():
+    # The outline colour of short boxes forms a "series" with no legend entry; leaving the boxes out of
+    # grouping is what removes it (charts 22448, 24105, 29012, 30059, 30724 depend on this).
+    chart = grouped_chart((RED, GREEN), [(100, 2), (150, 2), (40, 2)])
+    chart.detections[:] = [d for d in chart.detections
+                           if d.role not in ("legend_swatch", "legend_label") or d.box.y1 < 370]
+    spec = chart.run()
+    assert len(spec.series) == 1 and spec.series[0].name == "S0"
+    assert_values(spec, [100, 150, 40])
+    assert "short_bars_remeasured:3" in spec.flags
+
+
 def _shift_top(chart, index, dy):
     """Move the detector's top edge of one bar down by ``dy`` px; the painted bar stays put."""
     bars = [d for d in chart.detections if d.role == "vertical_bar"]
