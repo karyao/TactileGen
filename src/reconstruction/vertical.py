@@ -506,7 +506,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
                      category_guard: bool = True, *,
                      legend_mapping: LegendMappingFrame | None = None,
                      diagnostics: AnalysisDiagnostics | None = None,
-                     mismatched_bar_ids: Iterable[str] = ()
+                     mismatched_bar_ids: Iterable[str] = (),
+                     provisional_baseline: float | None = None,
                      ) -> VerticalBarSpec:
     """Turn detections plus OCR into a ``VerticalBarSpec``.
 
@@ -686,6 +687,8 @@ def reconstruct_vbar(frame: DetectionFrame, ocr_texts, image: np.ndarray,
     baseline = -b / a
     tick_ys = [_centre(d)[1] for d, _, _ in good]
     lo, hi = (plot.box.y1 - my, plot.box.y2 + my) if plot else (min(tick_ys), max(tick_ys))
+    if plot is None and provisional_baseline is not None:
+        hi = max(hi, provisional_baseline + max(2.0, 0.005 * frame.height))
     baseline_inside = lo <= baseline <= hi
     trace("baseline_outside_plot" if not baseline_inside else "baseline",
           zero_y=baseline, accepted_bounds=[lo, hi], a=a, b=b, margin_y=my)

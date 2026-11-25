@@ -36,6 +36,7 @@ from src.gradio_ui.settings import (
     LOGGER,
 )
 from src.reconstruction.legend_matcher import filter_bars_by_legend, match_legend_to_bars
+from src.reconstruction.bottom_boundary import filter_vertical_bottom
 from src.bar_filter import drop_unmatched_bars
 from src.ocr import run_ocr
 from src.presentation import render_detection_overlay, summarize_detections
@@ -73,6 +74,11 @@ class AnalysisResult:
     reconstruction_warning: str | None = None
     diagnostics: AnalysisDiagnostics | None = None
     orientation_result: BarOrientationResult | None = None
+    ocr_detection_frame: DetectionFrame | None = None
+
+    def __post_init__(self) -> None:
+        if (self.ocr_frame is None) != (self.ocr_detection_frame is None):
+            raise ValueError("OCR results and their detection frame must be supplied together")
 
 
 def orientation_summary(result: BarOrientationResult) -> str:
@@ -241,6 +247,7 @@ def analyze_image(
         assert frame is not None
         _report_progress(progress, 0.60, "Reading detected text")
         ocr_frame = None
+        ocr_detection_frame = None
         ocr_warning = None
         try:
             with stage("ocr"):
@@ -254,6 +261,7 @@ def analyze_image(
                     image, frame, backend, language,
                     **diagnostic_options,
                 )
+                ocr_detection_frame = frame
                 if diagnostics is not None:
                     diagnostics.snapshot("ocr", ocr_frame)
                     readable = sum(bool(r.text.strip()) for r in ocr_frame.regions)
@@ -274,8 +282,25 @@ def analyze_image(
             ocr_warning = OCR_WARNING
         _report_progress(progress, 0.80, "Matching legend series")
         horizontal = orientation_result.orientation == "horizontal"
+        bottom_boundary = None if horizontal else filter_vertical_bottom(frame)
+        if bottom_boundary is not None:
+            frame = bottom_boundary.frame
+            if diagnostics is not None:
+                diagnostics.event(
+                    "reconstruction", "vertical_bottom_boundary",
+                    baseline_y=bottom_boundary.baseline_y,
+                    confidence_share=bottom_boundary.confidence_share,
+                    retained_bar_ids=list(bottom_boundary.retained_bar_ids),
+                    rejected_bar_ids=list(bottom_boundary.rejected_bar_ids),
+                    rejected_tick_ids=list(bottom_boundary.rejected_tick_ids),
+                )
+                diagnostics.snapshot("bottom_filtered_detections", frame)
         # The horizontal reconstructor does not accept a diagnostics collector.
-        reconstruction_options = {} if horizontal else diagnostic_options
+        reconstruction_options = {} if horizontal else {
+            **diagnostic_options,
+            **({"provisional_baseline": bottom_boundary.baseline_y}
+               if bottom_boundary is not None else {}),
+        }
         legend_mapping = None
         legend_warning = None
         mismatched_bar_ids = ()
@@ -405,6 +430,7 @@ def analyze_image(
             if d.role not in ("vertical_bar", "horizontal_bar")
         ))
         ocr_frame = legend_mapping = spec = completeness = None
+        ocr_detection_frame = None
         ocr_warning = legend_warning = reconstruction_warning = None
         if diagnostics is not None:
             reason = "bar_orientation_uncertain: " + orientation_result.reason
@@ -432,6 +458,7 @@ def analyze_image(
         detection_count=len(frame.detections),
         detection_frame=frame,
         ocr_frame=ocr_frame,
+        ocr_detection_frame=ocr_detection_frame,
         ocr_warning=ocr_warning,
         legend_mapping=legend_mapping,
         legend_warning=legend_warning,

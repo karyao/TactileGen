@@ -39,3 +39,41 @@ def test_absent_title_stays_absent():
         Detection('plot', 'plot_area', Box(25, 10, 85, 75), .9),
     ))
     assert resolve_axis_titles(frame, OCRFrame(frame.source_key, ())) == frame
+
+
+def test_printed_side_wins_over_box_shape_and_detector_role():
+    frame = DetectionFrame('test/chart.png', 130, 130, (
+        Detection('plot', 'plot_area', Box(30, 15, 110, 90), .9),
+        # A tall title below the plot belongs to the x axis.
+        Detection('bottom', 'y_axis_title', Box(60, 91, 75, 128), .9),
+        # A wide title left of the plot belongs to the y axis.
+        Detection('left', 'x_axis_title', Box(1, 45, 29, 57), .9),
+    ))
+    ocr = OCRFrame(frame.source_key, (
+        RecognizedText('bottom', 'Year', .9),
+        RecognizedText('left', 'Revenue', .9),
+    ))
+    result = resolve_axis_titles(frame, ocr)
+    assert {d.id: d.role for d in result.detections if d.id != 'plot'} == {
+        'bottom': 'x_axis_title', 'left': 'y_axis_title'}
+
+
+def test_unclear_titles_are_removed_for_missing_title_review():
+    frame = DetectionFrame('test/chart.png', 130, 130, (
+        Detection('plot', 'plot_area', Box(30, 15, 110, 90), .9),
+        Detection('corner', 'x_axis_title', Box(1, 94, 20, 120), .9),
+        Detection('inside', 'y_axis_title', Box(50, 40, 80, 52), .9),
+    ))
+    ocr = OCRFrame(frame.source_key, (
+        RecognizedText('corner', 'Maybe', .9),
+        RecognizedText('inside', 'Other', .9),
+    ))
+    assert [d.id for d in resolve_axis_titles(frame, ocr).detections] == ['plot']
+
+
+def test_missing_axis_geometry_does_not_keep_detector_guess():
+    frame = DetectionFrame('test/chart.png', 100, 100, (
+        Detection('title', 'y_axis_title', Box(1, 20, 15, 70), .9),
+    ))
+    ocr = OCRFrame(frame.source_key, (RecognizedText('title', 'Revenue', .9),))
+    assert resolve_axis_titles(frame, ocr).detections == ()

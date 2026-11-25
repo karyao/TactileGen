@@ -60,7 +60,8 @@ def _orientations(crop: np.ndarray, detection: Detection) -> tuple[np.ndarray, .
 
 def _candidate_rotations(detection: Detection) -> tuple[int, ...]:
     box = detection.box
-    return ((0, 90, -90) if box.y2 - box.y1 > _TALL_ASPECT_RATIO * (box.x2 - box.x1)
+    return ((0, 90, -90) if detection.role in ("x_axis_title", "y_axis_title")
+            or box.y2 - box.y1 > _TALL_ASPECT_RATIO * (box.x2 - box.x1)
             else (0,))
 
 

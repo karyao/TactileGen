@@ -104,6 +104,11 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     assert frame is not None
     backend, language = _ocr_backend(ocr_engine)
     ocr = run_ocr(image, frame, backend, language)
+    from src.reconstruction.bottom_boundary import filter_vertical_bottom
+    bottom_boundary = (filter_vertical_bottom(frame)
+                       if resolution.orientation == "vertical" else None)
+    if bottom_boundary is not None:
+        frame = bottom_boundary.frame
     from src.reconstruction.axis_titles import resolve_axis_titles
     frame = resolve_axis_titles(frame, ocr, orientation=resolution.orientation)
     try:
@@ -124,7 +129,9 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
         else:
             spec = reread_categories(
                 reconstruct_vbar(reduced, ocr, image, legend_mapping=legend_mapping,
-                                 mismatched_bar_ids=mismatched_bar_ids),
+                                 mismatched_bar_ids=mismatched_bar_ids,
+                                 **({"provisional_baseline": bottom_boundary.baseline_y}
+                                    if bottom_boundary is not None else {})),
                 frame, image)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:

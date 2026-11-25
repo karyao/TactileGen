@@ -112,6 +112,18 @@ def test_clean_three_bar_chart():
     assert spec.schema_version == "0.2"
 
 
+def test_provisional_bottom_accepts_fitted_zero_below_last_tick():
+    chart = base_chart(ticks=(50, 100, 150, 200))
+    chart.detections = [d for d in chart.detections if d.role != "plot_area"]
+    plain = reconstruct_vbar(chart.frame(), chart.texts, chart.image)
+    bounded = reconstruct_vbar(chart.frame(), chart.texts, chart.image,
+                               provisional_baseline=ZERO_Y - 0.4)
+    assert "baseline_outside_plot" in plain.flags
+    assert "baseline_outside_plot" not in bounded.flags
+    assert "plot_area_missing" in bounded.flags
+    assert_values(bounded, [120, 60, 180])
+
+
 def test_spurious_y_tick_is_dropped():
     chart = base_chart()
     chart.add("y_tick_label", (40, y_of(75) - 6, 75, y_of(75) + 6), text="900")

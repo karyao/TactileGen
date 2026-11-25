@@ -881,6 +881,7 @@ class GradioUiTest(GradioTestCase):
         success = AnalysisResult(
             "summary", np.zeros((2, 2, 3), dtype=np.uint8), 1,
             display_frame, display_ocr, None,
+            ocr_detection_frame=display_frame,
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=success):
             success_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
@@ -906,6 +907,30 @@ class GradioUiTest(GradioTestCase):
         self.assertTrue(Path(success_updates[24]["value"]).is_file())
         self.assertTrue(success_updates[25]["visible"])
         self.assertIn("Analysis run:", success_updates[25]["value"])
+
+        ocr_detections = DetectionFrame("input/chart.png", 20, 20, (
+            Detection("accepted", "y_axis_title", Box(2, 12, 10, 18), .9),
+            Detection("removed", "x_axis_title", Box(0, 0, 5, 5), .9),
+        ))
+        resolved_detections = DetectionFrame("input/chart.png", 20, 20, (
+            Detection("accepted", "x_axis_title", Box(2, 12, 10, 18), .9),
+        ))
+        title_result = AnalysisResult(
+            "summary", np.zeros((20, 20, 3), dtype=np.uint8), 1,
+            resolved_detections,
+            OCRFrame("input/chart.png", (
+                RecognizedText("accepted", "Year", .9),
+                RecognizedText("removed", "Maybe", .7),
+            )),
+            None,
+            ocr_detection_frame=ocr_detections,
+        )
+        with patch("src.gradio_ui.callbacks.analyze_image", return_value=title_result):
+            title_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")
+        self.assertEqual([row[:3] for row in title_updates[4]["value"]], [
+            ["accepted", "y axis title", "Year"],
+            ["removed", "x axis title", "Maybe"],
+        ])
 
         mapped_frame = DetectionFrame("input/chart.png", 20, 20, (
             Detection("bar", "vertical_bar", Box(0, 5, 5, 20), 0.9),
@@ -981,6 +1006,7 @@ class GradioUiTest(GradioTestCase):
                 blockers=["No x tick labels were found. Try a clearer image."],
             ),
             None,
+            ocr_detection_frame=mapped_frame,
         )
         with patch("src.gradio_ui.callbacks.analyze_image", return_value=blocked_result):
             blocked_updates = invoke(analyze, "chart.png", 0.25, 0.70, "eng")

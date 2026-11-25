@@ -10,10 +10,10 @@ import pytest
 
 from tests.legend_filter_helpers import passthrough_filter
 from src.contract_io import load_detection_frame
-from src.contracts import Box, Detection, DetectionFrame, OCRFrame
+from src.contracts import Box, Detection, DetectionFrame, OCRFrame, RecognizedText
 from src.diagnostics.tracking import AnalysisDiagnostics
 from src.gradio_ui.analysis import analyze_image
-from src.presentation import render_detection_overlay, summarize_detections
+from src.presentation import ocr_rows, render_detection_overlay, summarize_detections
 from src.tactile.completeness import Completeness, READY
 from tests.gradio.session_helpers import make_spec
 from tests.test_diagnostics import assert_links
@@ -183,6 +183,43 @@ def test_invalid_preference_is_not_an_ocr_failure(image_path):
         with pytest.raises(ValueError, match="preference"):
             analyze_image(object(), image_path, .25, .7, bar_orientation=[], ocr_backend_factory=factory)
     factory.assert_not_called()
+
+
+def test_ocr_frame_retains_titles_changed_by_reconstruction(image_path):
+    raw = DetectionFrame("input/chart.png", 100, 80, (
+        bar("bar", "vertical", .9),
+        Detection("plot", "plot_area", Box(20, 10, 80, 60), .9),
+        Detection("bottom", "y_axis_title", Box(30, 62, 60, 75), .9),
+        Detection("corner", "x_axis_title", Box(2, 65, 15, 75), .9),
+    ))
+    ocr = OCRFrame(raw.source_key, (
+        RecognizedText("bottom", "Year", .9),
+        RecognizedText("corner", "Maybe", .8),
+    ))
+    with ExitStack() as stack:
+        stack.enter_context(patch("src.gradio_ui.analysis.run_detection", return_value=raw))
+        stack.enter_context(patch("src.gradio_ui.analysis.run_ocr", return_value=ocr))
+        stack.enter_context(patch("src.gradio_ui.analysis.drop_unmatched_bars", return_value=None))
+        stack.enter_context(patch("src.gradio_ui.analysis.filter_bars_by_legend",
+                                  side_effect=passthrough_filter))
+        stack.enter_context(patch("src.gradio_ui.analysis.reconstruct_vbar",
+                                  return_value=make_spec()))
+        stack.enter_context(patch("src.gradio_ui.analysis.cut_off_flags", return_value=[]))
+        stack.enter_context(patch("src.gradio_ui.analysis.check_completeness",
+                                  return_value=Completeness(READY)))
+        result = analyze_image(object(), image_path, .25, .7, ocr_backend=object())
+
+    assert result.ocr_detection_frame is result.orientation_result.effective_frame
+    assert {d.id: d.role for d in result.detection_frame.detections}.get("bottom") == "x_axis_title"
+    assert "corner" not in {d.id for d in result.detection_frame.detections}
+    assert ocr_rows(result.ocr_detection_frame, result.ocr_frame) == [
+        ["bottom", "y axis title", "Year", .9, 30, 62, 60, 75],
+        ["corner", "x axis title", "Maybe", .8, 2, 65, 15, 75],
+    ]
+    with pytest.raises(ValueError, match="OCR references unknown detection: other"):
+        ocr_rows(result.ocr_detection_frame, OCRFrame(raw.source_key, (
+            RecognizedText("other", "Wrong", .9),
+        )))
 
 
 def _run_with_diagnostics(image_path, raw, diagnostics, *, preference="auto", resolved=True):

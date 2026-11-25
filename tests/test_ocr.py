@@ -1192,6 +1192,7 @@ class RapidOCRBackendTest(unittest.TestCase):
 IMAGE = np.arange(40 * 60 * 3, dtype=np.uint8).reshape(40, 60, 3)
 SHORT = Detection("short", "x_tick_label", Box(2, 2, 20, 10), .9)
 TALL = Detection("tall", "y_axis_title", Box(25, 2, 29, 30), .9)
+WIDE_AXIS_TITLE = Detection("wide-axis", "y_axis_title", Box(2, 12, 20, 22), .9)
 
 
 def collector():
@@ -1242,6 +1243,24 @@ def recognize_with_fake_tesseract(raw, items=(SHORT,), *, diagnostics=None):
     with patch("src.ocr.tesseract._load_pytesseract", return_value=module):
         result = recognize(TesseractBackend(), items, diagnostics)
     return result, module
+
+
+def test_wide_axis_title_tries_rotations_in_both_ocr_backends():
+    rapid_raw = types.SimpleNamespace(
+        txts=("", "Revenue", "Other"), scores=(.0, .9, .5))
+    rapid_result, rapid_engine = recognize_with_fake_rapidocr(
+        rapid_raw, (WIDE_AXIS_TITLE,))
+    assert rapid_result.regions[0].text == "Revenue"
+    assert len(rapid_engine.recognize_txt.call_args.args[0]) == 3
+
+    tess_raw = tesseract_data([
+        [("", -1)], [("", -1)], [("Revenue", 90)],
+        [("", -1)], [("Other", 50)], [("", -1)],
+    ])
+    tess_result, module = recognize_with_fake_tesseract(
+        tess_raw, (WIDE_AXIS_TITLE,))
+    assert tess_result.regions[0].text == "Revenue"
+    assert len(module.submitted_pages) == 6
 
 
 class OCRTraceTest(unittest.TestCase):

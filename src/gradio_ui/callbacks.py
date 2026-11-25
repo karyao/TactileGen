@@ -227,8 +227,10 @@ def create_callbacks(
             )
             with diagnostics.stage("result_preparation"):
                 ocr_count = len(result.ocr_frame.regions) if result.ocr_frame is not None else None
+                if result.ocr_frame is not None:
+                    assert result.ocr_detection_frame is not None
                 rows = (
-                    ocr_rows(result.detection_frame, result.ocr_frame)
+                    ocr_rows(result.ocr_detection_frame, result.ocr_frame)
                     if result.ocr_frame is not None else []
                 )
                 download = (
