@@ -57,15 +57,9 @@ def analyse():
     return run
 
 
-@pytest.mark.parametrize("chart_id", RELEASED)
-def test_chart_with_measured_slivers_is_no_longer_blocked_and_is_correct(chart_id, annotations, analyse):
-    from src.tactile.completeness import check_completeness
-
-    record = annotations[chart_id]
+def assert_matches_ground_truth(record, spec):
+    """The full-run audit's definition of correct: categories, series names and every value within 1% of the axis max."""
     models = record["models"]
-    spec = analyse(chart_id)
-    assert not any(f.startswith("bars_mostly_missed") for f in spec.flags)
-    assert not check_completeness(spec).blockers
     ticks = sorted({float(t) for t in record["general_figure_info"]["y_axis"]["major_ticks"]["values"]})
     limit = VALUE_TOLERANCE * max(ticks)
     by_name = {_norm(m["name"]): m for m in models}
@@ -75,6 +69,16 @@ def test_chart_with_measured_slivers_is_no_longer_blocked_and_is_correct(chart_i
         for got, want in zip(series.values, by_name[_norm(series.name)]["y"]):
             if want is not None:
                 assert got is not None and abs(got - want) <= limit, f"{series.name}: {got} vs {want}"
+
+
+@pytest.mark.parametrize("chart_id", RELEASED)
+def test_chart_with_measured_slivers_is_no_longer_blocked_and_is_correct(chart_id, annotations, analyse):
+    from src.tactile.completeness import check_completeness
+
+    spec = analyse(chart_id)
+    assert not any(f.startswith("bars_mostly_missed") for f in spec.flags)
+    assert not check_completeness(spec).blockers
+    assert_matches_ground_truth(annotations[chart_id], spec)
 
 
 @pytest.mark.parametrize("chart_id", STILL_BLOCKED)
