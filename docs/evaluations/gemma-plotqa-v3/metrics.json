@@ -1,0 +1,26 @@
+{
+  "images": 22534,
+  "successes": 10378,
+  "totals": {
+    "category_total": 96508,
+    "series_total": 62475,
+    "value_total": 263276,
+    "category_correct": 21815,
+    "series_correct": 10478,
+    "value_aligned": 44862,
+    "value_correct": 20550,
+    "bar_count_correct": 4563,
+    "bar_count_eligible": 22532,
+    "missing_value_count": 5,
+    "charts_with_missing_values": 2
+  },
+  "bar_count_eligible": 22532,
+  "charts_with_missing_values": 2,
+  "missing_value_count": 5,
+  "bar_count_accuracy": 0.20251198295757145,
+  "category_accuracy": 0.22604343681352843,
+  "series_label_accuracy": 0.16771508603441376,
+  "value_alignment_coverage": 0.1703991248727571,
+  "value_accuracy_aligned": 0.4580714190183229,
+  "value_accuracy_all": 0.07805496892994424
+}
