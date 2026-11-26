@@ -1050,6 +1050,31 @@ def test_low_confidence_bars_do_not_decide_the_orientation():
     assert bar_orientation(chart.frame()) == "vertical"
 
 
+def _shorten_hbar(chart, index, dx):
+    """Move the detector's right edge of one horizontal bar left by ``dx`` px."""
+    bars = [d for d in chart.detections if d.role == "horizontal_bar"]
+    old = bars[index]
+    chart.detections[chart.detections.index(old)] = Detection(
+        old.id, old.role, Box(old.box.x1, old.box.y1, old.box.x2 - dx, old.box.y2), old.confidence)
+
+
+def test_horizontal_bar_end_far_from_the_pixels_is_corrected():
+    chart = hbar_chart(values=(120, 60, 180))
+    _shorten_hbar(chart, 2, 40)  # 40 px = 20 units short
+    spec = chart.run()
+    assert spec.series[0].values == pytest.approx([120, 60, 180], rel=0.01)
+    assert "bar_edge_corrected:1" in spec.flags
+    assert spec.series[0].value_rescued == [False, False, False]
+
+
+def test_small_horizontal_edge_differences_keep_the_detector_value():
+    chart = hbar_chart(values=(120, 60, 180))
+    _shorten_hbar(chart, 2, 4)  # under BAR_EDGE_TOLERANCE_PX
+    spec = chart.run()
+    assert not any(f.startswith("bar_edge_corrected") for f in spec.flags)
+    assert spec.series[0].values[2] == pytest.approx(180 - 4 / HBAR_PX_PER_UNIT, rel=0.01)
+
+
 def test_transpose_swaps_boxes_roles_and_size():
     original = hbar_chart().frame()
     frame = transpose_frame(original)
