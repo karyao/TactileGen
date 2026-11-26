@@ -116,6 +116,11 @@ The machine-readable reports are `output/opencv_clean_test/metrics.json` and
 `output/yolo_test/metrics.json`. These values measure bar detection; they do
 not measure OCR, chart interpretation, or tactile rendering.
 
+## Gemma chart extraction accuracy baseline
+
+See the [Gemma PlotQA baseline](evaluations/gemma-plotqa-v3/baseline.md) for results
+on vertical and horizontal bar charts, scoring rules, and the saved run outputs.
+
 ## OCR baseline against PlotQA text
 
 The measured full-test results and interpretation are recorded in the
