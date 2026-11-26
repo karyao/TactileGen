@@ -118,38 +118,47 @@ not measure OCR, chart interpretation, or tactile rendering.
 
 ### Joint bar detectors at 640 and 1280 pixels
 
-Both checkpoints were evaluated at their corresponding inference sizes on all
-**23,754 images** in the `data/bars_combined_clean` test split, which combines
-PlotQA and ChartQA. The 1280 checkpoint was fine-tuned from
+Each checkpoint was evaluated at both inference sizes on the same **23,754
+images** in the `data/bars_combined_clean` test split, which combines PlotQA and
+ChartQA. The checkpoint names refer to their training image sizes. The 1280
+checkpoint was fine-tuned from
 `models/yolo_bars_hv/best.pt` for 50 epochs with mosaic disabled and seed 0.
 
-| Overall box metric | 640 checkpoint at 640 px | 1280 checkpoint at 1280 px |
-| --- | ---: | ---: |
-| mAP50 | 0.839624 | 0.838753 |
-| mAP50–95 | 0.813556 | 0.794923 |
+| Overall box metric | 640 checkpoint at 640 px | 640 checkpoint at 1280 px | 1280 checkpoint at 640 px | 1280 checkpoint at 1280 px |
+| --- | ---: | ---: | ---: | ---: |
+| mAP50 | **0.839624** | 0.787014 | 0.837414 | 0.838753 |
+| mAP50–95 | **0.813556** | 0.636735 | 0.752520 | 0.794923 |
 
-| Detection class | AP50–95 at 640 px | AP50–95 at 1280 px |
-| --- | ---: | ---: |
-| Vertical bar | 0.928059 | **0.938545** |
-| Horizontal bar | **0.882908** | 0.829868 |
-| Chart title | 0.954626 | 0.841058 |
-| X-axis title | 0.990063 | 0.984698 |
-| Y-axis title | 0.990128 | 0.980151 |
-| X-axis tick label | 0.932630 | 0.988394 |
-| Y-axis tick label | 0.925544 | 0.985289 |
-| X-axis rule | 0.002238 | 0.001250 |
-| Y-axis rule | 0.019536 | 0.025229 |
-| Plot area | 0.994930 | 0.784195 |
-| Legend | 0.995000 | 0.994998 |
-| Legend swatch | 0.971244 | 0.986736 |
-| Legend label | 0.989316 | 0.993593 |
+| Per-class AP50–95 | 640 checkpoint at 640 px | 640 checkpoint at 1280 px | 1280 checkpoint at 640 px | 1280 checkpoint at 1280 px |
+| --- | ---: | ---: | ---: | ---: |
+| Vertical bar | 0.928059 | 0.917498 | 0.894490 | **0.938545** |
+| Horizontal bar | **0.882908** | 0.501227 | 0.831612 | 0.829868 |
+| Chart title | 0.954626 | 0.598265 | 0.851514 | 0.841058 |
+| X-axis title | 0.990063 | 0.934734 | 0.895971 | 0.984698 |
+| Y-axis title | 0.990128 | 0.808114 | 0.929412 | 0.980151 |
+| X-axis tick label | 0.932630 | 0.916584 | 0.812493 | 0.988394 |
+| Y-axis tick label | 0.925544 | 0.847745 | 0.803745 | 0.985289 |
+| X-axis rule | 0.002238 | 0.000612 | 0.000000 | 0.001250 |
+| Y-axis rule | 0.019536 | 0.023412 | 0.015959 | 0.025229 |
+| Plot area | 0.994930 | 0.148619 | 0.993792 | 0.784195 |
+| Legend | 0.995000 | 0.850960 | 0.980766 | 0.994998 |
+| Legend swatch | 0.971244 | 0.872629 | 0.865724 | 0.986736 |
+| Legend label | 0.989316 | 0.857155 | 0.907279 | 0.993593 |
 
-The 640 configuration scored 1.86 percentage points higher in overall mAP50–95
-and 5.30 points higher in horizontal-bar AP50–95. The 1280 configuration scored
-1.05 points higher in vertical-bar AP50–95. Its horizontal-bar score was 10.87
-points below its vertical-bar score. The two axis-rule classes, which represent
-the axis lines, had the lowest scores in both runs. Tick-label and axis-title
-scores measure box detection. Text recognition and value reconstruction require
+The 640 checkpoint at 640 px had the highest overall mAP50–95 (81.36%) and
+horizontal-bar AP50–95 (88.29%). Raising inference size to 1280 px for that
+checkpoint lowered overall mAP50–95 by 17.68 percentage points and horizontal-bar
+AP50–95 by 38.17 points. Plot-area AP50–95 fell from 99.49% to 14.86%.
+
+For the 1280 checkpoint, raising inference size from 640 to 1280 px increased
+overall mAP50–95 by 4.24 percentage points and vertical-bar AP50–95 by 4.41
+points. Horizontal-bar AP50–95 stayed near 83% at both sizes. The 1280 checkpoint
+at 1280 px had the highest vertical-bar AP50–95 overall (93.85%).
+
+The 640 checkpoint at 1280 px reported per-image times of 0.7 ms preprocessing,
+14.5 ms inference, 0.0 ms loss, and 0.3 ms postprocessing. That is the only run
+with timing reported in this comparison. Tick-label and axis-title scores
+measure box detection. Text recognition and value reconstruction require
 separate evaluations.
 
 Run these commands from the repository root on the training host to reproduce
@@ -163,6 +172,18 @@ the evaluations.
   --output-dir output/evaluation/bars_hv_640_map
 
 ./.venv/bin/python -m src.baseline.yolo_bars validate \
+  --weights output/training/bars_joint_50ep_640/train/weights/best.pt \
+  --data-root data/bars_combined_clean \
+  --split test --imgsz 1280 --batch 4 --device 0 \
+  --output-dir output/evaluation/bars_hv_640_at_1280_map
+
+./.venv/bin/python -m src.baseline.yolo_bars validate \
+  --weights output/training/bars_joint_50ep_1280/train/weights/best.pt \
+  --data-root data/bars_combined_clean \
+  --split test --imgsz 640 --batch 4 --device 0 \
+  --output-dir output/evaluation/bars_hv_1280_at_640_map
+
+./.venv/bin/python -m src.baseline.yolo_bars validate \
   --weights output/training/bars_joint_50ep_1280/train/weights/best.pt \
   --data-root data/bars_combined_clean \
   --split test --imgsz 1280 --batch 4 --device 0 \
@@ -170,11 +191,9 @@ the evaluations.
 ```
 
 The commands write `metrics.json` to their respective output directories.
-These results compare two configurations that differ in both checkpoint and
-inference size. To isolate inference size, evaluate the same checkpoint at both
-sizes. To isolate the checkpoint change, evaluate both checkpoints at the same
-size. Keep the combined test split fixed. The earlier vertical-only results use
-a different test split.
+Compare the two sizes within a checkpoint to measure the effect of inference size.
+Compare the two checkpoints at the same size to measure the checkpoint difference.
+The earlier vertical-only results use a different test split.
 
 ## Gemma chart extraction accuracy baseline
 
