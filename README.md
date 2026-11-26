@@ -121,6 +121,7 @@ the test scope and details.
 - [OCR comparison](docs/ocr_comparison.md) — Tesseract and RapidOCR results.
 - [Tactile output](docs/tactile.md) — layouts, BANA references, and limitations.
 - [Analysis diagnostics](docs/analysis_diagnostics.md) — reports and troubleshooting.
+- [End-to-end audit](docs/e2e_audit.md) measures how many PlotQA charts produce a correct tactile graphic.
 - [Stage contracts](docs/contracts.md) and [Gradio structure](docs/gradio_structure.md)
   — developer documentation.
 - [Orientation resolver tests](tests/test_bar_orientation.py) — resolver checks
