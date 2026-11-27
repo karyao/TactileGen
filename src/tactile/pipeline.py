@@ -37,7 +37,7 @@ from src.tactile.completeness import (
     apply_overrides, check_completeness, completeness_from_error, cut_off_flags,
     spec_to_chart_with_notes,
 )
-from src.tactile.category_reread import reread_categories
+from src.tactile.category_reread import reread_categories, should_reread_categories
 from src.tactile.layout import X_LABEL_MODES, layout_vertical_bar_chart_pages
 from src.tactile.layout_hbar import layout_horizontal_bar_chart_pages
 from src.tactile.rules import check_layout, format_report
@@ -134,8 +134,11 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = DEFAULT_OCR_ENGIN
         else:
             spec = reconstruct_vbar(reduced, ocr, image, legend_mapping=legend_mapping,
                                     mismatched_bar_ids=mismatched_bar_ids)
-            if ocr_engine != "rapidocr":
-                spec = reread_categories(spec, frame, image)
+            if should_reread_categories(ocr_engine, resolution.orientation, spec):
+                try:
+                    spec = reread_categories(spec, frame, image)
+                except Exception as exc:
+                    print(f"Category label retry was unavailable: {exc}", file=sys.stderr)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:
         return None, error, frame

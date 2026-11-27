@@ -28,6 +28,13 @@ OCR_TIMEOUT_SECONDS = 5
 Reader = Callable[[np.ndarray, Detection], "tuple[str, float] | None"]
 
 
+def should_reread_categories(ocr_engine: str, orientation: str,
+                             spec: VerticalBarSpec) -> bool:
+    """Retry only suspicious labels in vertical Tesseract or Hybrid runs."""
+    return (orientation == "vertical" and ocr_engine in ("tesseract", "hybrid")
+            and bool(_flagged(spec)))
+
+
 def _candidates(crop: np.ndarray) -> list[np.ndarray]:
     """Greyscale and Otsu-thresholded versions of the crop turned 90 and 270 degrees."""
     found = []
