@@ -34,3 +34,27 @@ def test_the_slip_rule_ignores_punctuation_extras_other_roles_and_larger_differe
     assert choose("legend_label", result("1992", 0.99), result("1992 |", 0.80)).text == "1992"
     assert choose("y_tick_label", result("ferility", 0.99), result("fertility", 0.5)).text == "ferility"
     assert choose("x_tick_label", result("Pru", 0.99), result("Peruvian", 0.6)).text == "Pru"
+
+
+LONG_NAME = "Net savings(excluding particulate emission damage"
+
+
+def test_an_unclosed_parenthesis_is_closed_on_word_roles():
+    assert choose("legend_label", result(LONG_NAME, 0.98), result(LONG_NAME, 0.90)).text == LONG_NAME + ")"
+    assert choose("x_tick_label", result("Age 65(female", 0.98), result("Age 65(female", 0.9)).text == "Age 65(female)"
+    # the chosen reading is closed, whichever engine it came from, and keeps its confidence
+    closed = choose("legend_label", result("Pern (all", 0.80), result("Peru (all", 0.95))   # Tesseract is chosen
+    assert (closed.text, closed.confidence) == ("Peru (all)", 0.95)
+
+
+def test_balanced_or_closing_only_parentheses_are_left_alone():
+    assert choose("legend_label", result("Age 65(male)", 0.98), result("Age 65(male)", 0.9)).text == "Age 65(male)"
+    assert choose("legend_label", result("male)", 0.98), result("male)", 0.9)).text == "male)"
+    assert choose("legend_label", result("a (b) (c", 0.98), result("a (b) (c", 0.9)).text == "a (b) (c)"
+
+
+def test_parenthesis_closing_ignores_other_roles_and_missing_readings():
+    assert choose("chart_title", result("Savings (excluding", 0.9), result("Savings (excluding", 0.9)).text == "Savings (excluding"
+    assert choose("y_tick_label", result("(5", 0.9), result("(5", 0.9)).text == "(5"
+    assert choose("legend_label", None, None) is None
+    assert choose("legend_label", None, result("Peru (all", 0.5)).text == "Peru (all)"

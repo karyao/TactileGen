@@ -33,7 +33,9 @@ from src.reconstruction.legend_matcher import (
     _classify_legend_scores,
     _crop,
     _pair_legend_items,
+    _repair_collisions,
     _score_legend_to_bars,
+    filter_bars_by_legend,
     match_legend_to_bars,
 )
 
@@ -546,6 +548,66 @@ class ColourResolutionTest(unittest.TestCase):
         detections = frame(*detections.detections, detection("b3", "vertical_bar", (69, 5, 79, 45)))
         assignments = match_legend_to_bars(image, detections, ocr).assignments
         self.assertTrue(all(a.series_name is None for a in assignments[:2]))
+
+
+class CollisionRepairTest(unittest.TestCase):
+    """Two bars of one series in one category slot cannot both be right: reassign every bar by colour."""
+
+    NORTH, SOUTH = (10, 20, 30), (200, 60, 30)
+
+    def _chart(self, south=SOUTH):
+        image = np.full((60, 130, 3), 255, dtype=np.uint8)
+        image[6:14, 6:14] = self.NORTH
+        image[21:29, 6:14] = south
+        bars = [("a1", 40, self.NORTH), ("b1", 51, south), ("a2", 80, self.NORTH), ("b2", 91, south)]
+        for _, x, colour in bars:
+            image[10:50, x:x + 10] = colour
+        detections = frame(
+            detection("s1", "legend_swatch", (5, 5, 15, 15)), detection("l1", "legend_label", (17, 5, 30, 15)),
+            detection("s2", "legend_swatch", (5, 20, 15, 30)), detection("l2", "legend_label", (17, 20, 30, 30)),
+            *(detection(name, "vertical_bar", (x, 10, x + 10, 50)) for name, x, _ in bars),
+            width=130)
+        ocr = OCRFrame("input/chart.png", (RecognizedText("l1", "North", 1), RecognizedText("l2", "South", 1)))
+        return image, detections, ocr
+
+    @staticmethod
+    def _mapping(series_by_bar):
+        entries = (LegendEntry("s1", "l1", "North"), LegendEntry("s2", "l2", "South"))
+        return LegendMappingFrame("input/chart.png", tuple(
+            LegendBarAssignment(bar, "s1", "l1", name, 0.9, "matched") for bar, name in series_by_bar.items()), entries)
+
+    def _names(self, mapping):
+        return {a.bar_id: a.series_name for a in mapping.assignments}
+
+    def test_two_bars_of_one_series_in_a_slot_are_reassigned_by_colour(self):
+        image, detections, _ = self._chart()
+        collided = self._mapping({"a1": "North", "b1": "North", "a2": "North", "b2": "North"})
+        repaired = _repair_collisions(image, detections, collided, "vertical_bar")
+        self.assertEqual(self._names(repaired), {"a1": "North", "b1": "South", "a2": "North", "b2": "South"})
+        self.assertTrue(all(a.status == "matched" for a in repaired.assignments))
+
+    def test_a_mapping_without_a_collision_is_left_alone(self):
+        image, detections, _ = self._chart()
+        fine = self._mapping({"a1": "North", "b1": "South", "a2": "North", "b2": "South"})
+        self.assertIs(_repair_collisions(image, detections, fine, "vertical_bar"), fine)
+
+    def test_a_collision_between_colours_inside_the_margin_is_left_alone(self):
+        image, detections, _ = self._chart(south=(10, 40, 30))   # 20 apart: colour cannot decide
+        collided = self._mapping({"a1": "North", "b1": "North", "a2": "North", "b2": "North"})
+        self.assertIs(_repair_collisions(image, detections, collided, "vertical_bar"), collided)
+
+    def test_one_bar_that_matches_no_swatch_leaves_the_collision_unrepaired(self):
+        image, detections, _ = self._chart()
+        image[10:50, 91:101] = (200, 10, 200)                     # b2 matches neither swatch
+        collided = self._mapping({"a1": "North", "b1": "North", "a2": "North", "b2": "North"})
+        self.assertIs(_repair_collisions(image, detections, collided, "vertical_bar"), collided)
+
+    def test_filter_bars_by_legend_applies_the_repair(self):
+        image, detections, ocr = self._chart()
+        collided = self._mapping({"a1": "North", "b1": "North", "a2": "North", "b2": "North"})
+        with patch("src.reconstruction.legend_matcher._classify_legend_scores", return_value=collided):
+            result = filter_bars_by_legend(image, detections, ocr)
+        self.assertEqual(self._names(result.mapping), {"a1": "North", "b1": "South", "a2": "North", "b2": "South"})
 
 
 if __name__ == "__main__":

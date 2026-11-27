@@ -540,6 +540,66 @@ def _resolve_by_colour(image, detections: DetectionFrame, mapping: LegendMapping
         resolved.get(a.bar_id, a) for a in mapping.assignments))
 
 
+def _repair_collisions(image, detections: DetectionFrame, mapping: LegendMappingFrame, bar_role: str):
+    """Reassign the bars by median colour when two bars of one series share a category slot.
+
+    Two bars of the same series cannot sit in one slot, so such a mapping is wrong somewhere: the
+    template match gave two similar series' bars to one legend entry (it calls both ``matched``, so
+    the colour resolution above never looks at them). Every bar is then assigned to its nearest
+    swatch, under the same distance and margin limits, and only if all of them resolve and no
+    collision remains; otherwise the mapping is returned unchanged.
+    """
+    import statistics
+
+    import numpy as np
+
+    entries = list(mapping.entries)
+    if len(entries) < 2 or not all(e.name for e in entries):
+        return mapping
+    by_id = {d.id: d for d in detections.detections}
+    vertical = bar_role == "vertical_bar"
+    along = (lambda d: (d.box.x1 + d.box.x2) / 2) if vertical else (lambda d: (d.box.y1 + d.box.y2) / 2)
+    width = (lambda d: d.box.x2 - d.box.x1) if vertical else (lambda d: d.box.y2 - d.box.y1)
+    bars = [a for a in mapping.assignments if a.bar_id in by_id]
+    matched = [a for a in bars if a.status == "matched"]
+    if len(matched) < 2:
+        return mapping
+    # bars of one series are a slot apart (at least one bar per series, so more than (n - 1) bar widths);
+    # bars closer than that are in the same slot
+    limit = (len(entries) - 0.5) * statistics.median(width(by_id[a.bar_id]) for a in matched) * 1.15
+
+    def collides(assignments):
+        groups = {}
+        for a in assignments:
+            groups.setdefault(a.series_name, []).append(along(by_id[a.bar_id]))
+        return any(later - earlier <= limit
+                   for positions in groups.values()
+                   for earlier, later in zip(sorted(positions), sorted(positions)[1:]))
+
+    if not collides(matched):
+        return mapping
+    swatches = [_median_colour(image, by_id[e.swatch_id]) for e in entries]
+    if any(colour is None for colour in swatches):
+        return mapping
+    resolved = {}
+    for assignment in bars:
+        colour = _median_colour(image, by_id[assignment.bar_id])
+        if colour is None:
+            return mapping
+        distances = [float(np.linalg.norm(colour - swatch)) for swatch in swatches]
+        order = sorted(range(len(distances)), key=distances.__getitem__)
+        if distances[order[0]] > COLOUR_MAX_DISTANCE or distances[order[1]] - distances[order[0]] < COLOUR_MIN_MARGIN:
+            return mapping
+        entry = entries[order[0]]
+        resolved[assignment.bar_id] = LegendBarAssignment(
+            assignment.bar_id, entry.swatch_id, entry.label_id, entry.name,
+            1.0 - distances[order[0]] / 441.7, "matched")
+    fixed = tuple(resolved.get(a.bar_id, a) for a in mapping.assignments)
+    if collides([a for a in fixed if a.status == "matched" and a.bar_id in by_id]):
+        return mapping
+    return replace(mapping, assignments=fixed)
+
+
 def match_legend_to_bars(
     image,
     detections: DetectionFrame,
@@ -637,6 +697,7 @@ def filter_bars_by_legend(
     }
     mapping = _classify_legend_scores(scores, max_error=max_error, min_margin=min_margin)
     mapping = _resolve_by_colour(image, detections, mapping)
+    mapping = _repair_collisions(image, detections, mapping, bar_role)
 
     decisions: list[ColourDecision] = []
     for decision in _colour_decisions(scores, max_error=max_error):

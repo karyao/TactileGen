@@ -6,7 +6,9 @@ as "take RapidOCR when its confidence beats Tesseract's by at least the role mar
 Roles without a margin (titles, axis titles) keep RapidOCR's reading. A "$" that only RapidOCR
 (correctly) read always wins. Near-match rules (same length, small edit distance) were tried and rejected:
 they lost 42-139 correct regions to gain 14-20 across all 3041 disagreeing regions. Word roles take
-Tesseract's reading when RapidOCR only lost 1-2 letters or added a space (+20 regions, 0 lost).
+Tesseract's reading when RapidOCR only lost 1-2 letters or added a space (+20 regions, 0 lost). A word-role reading
+with an unclosed "(" gets its ")" back (the crop cuts off the last character of long legend names; +5 regions,
+0 lost across all 77,362 word-role regions of the test set).
 """
 
 from __future__ import annotations
@@ -47,7 +49,19 @@ def _rapid_slipped(rapid: str, tess: str) -> bool:
     return added is not None and 1 <= len(added) <= 2 and all(c == " " for c in added)
 
 
+def _close_parenthesis(role: str, result: OCRBackendResult | None):
+    """Close a "(" the crop cut off: long legend names lose their final ")" at the detection box edge."""
+    if result is None or role not in WORD_ROLES:
+        return result
+    missing = result.text.count("(") - result.text.count(")")
+    return OCRBackendResult(result.text + ")" * missing, result.confidence) if missing > 0 else result
+
+
 def choose(role: str, rapid: OCRBackendResult | None, tess: OCRBackendResult | None):
+    return _close_parenthesis(role, _choose(role, rapid, tess))
+
+
+def _choose(role: str, rapid: OCRBackendResult | None, tess: OCRBackendResult | None):
     if rapid is None or tess is None:
         return rapid or tess
     if rapid.text.strip() == tess.text.strip():
