@@ -702,6 +702,21 @@ class LiblouisRoundTripTest(unittest.TestCase):
 
 
 class SvgTest(unittest.TestCase):
+    def test_zero_valued_bars_have_no_negative_extent(self):
+        series = (BarSeries("A", (0.0, 40.0, 0.2)), BarSeries("B", (10.0, 0.0, 30.0)))
+        for chart_type, lay in ((VerticalBarChart, layout_vertical_bar_chart),
+                                (HorizontalBarChart, layout_horizontal_bar_chart)):
+            chart = chart_type("demo/zero.png", "Zeros", "X", "Y", ("a", "b", "c"), series)
+            layout = lay(chart)
+            self.assertTrue(any(b.height < 0 or b.width < 0 for b in layout.bars), "no bar inside the axis line")
+            root = ElementTree.fromstring(render_svg(layout).split("\n", 1)[1])
+            ns = {"svg": "http://www.w3.org/2000/svg"}
+            rects = root.findall(".//svg:g[@id='bars']/svg:rect", ns)
+            self.assertEqual(len([r for r in rects if r.get("id")]), 6)      # every bar is still drawn
+            for rect in rects:
+                self.assertGreaterEqual(float(rect.get("width")), 0.0)
+                self.assertGreaterEqual(float(rect.get("height")), 0.0)
+
     def test_svg_draws_every_braille_dot(self):
         layout = layout_vertical_bar_chart(load("books_by_grade"))
         root = ElementTree.fromstring(render_svg(layout).split("\n", 1)[1])
