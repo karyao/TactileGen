@@ -23,9 +23,13 @@ from functools import partial
 from pathlib import Path
 
 from src.bar_orientation import BarOrientationResult, resolve_bar_orientation
+from src.contract_io import write_detection_frame
 from src.contracts import (
     ChartInterpretationError,
     VerticalBarSpec,
+)
+from src.detection import (
+    DEFAULT_CONFIDENCE, DEFAULT_IMGSZ, DEFAULT_NMS_IOU, _validate_threshold, validate_imgsz,
 )
 from src.tactile.completeness import (
     CANNOT_BUILD, FORCEABLE_FLAGS, NEEDS_INPUT, READY, Completeness, Overrides,
@@ -77,12 +81,15 @@ def _orientation_error(result: BarOrientationResult) -> ChartInterpretationError
 
 
 def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
-            *, bar_orientation: str = "auto"):
+            *, bar_orientation: str = "auto", confidence: float = DEFAULT_CONFIDENCE,
+            nms_iou: float = DEFAULT_NMS_IOU, imgsz: int = DEFAULT_IMGSZ,
+            detection_json: Path | None = None):
     """Run YOLO, resolve bar orientation, then OCR and reconstruction.
 
     Returns ``(spec, None, frame)`` or ``(None, error, frame)``. On success the
     frame is the resolver's effective frame with opposite-orientation bars
-    removed. On uncertainty it is the raw detection frame.
+    removed. On uncertainty it is the detector's frame before orientation selection.
+    If requested, write that frame before OCR or reconstruction begins.
     """
     import cv2
 
@@ -96,7 +103,11 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
     image = cv2.imread(str(image_path))
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
-    raw_frame = run_detection(load_model(weights), image_path)
+    raw_frame = run_detection(load_model(weights), image_path, confidence=confidence,
+                              nms_iou=nms_iou, imgsz=imgsz)
+    if detection_json is not None:
+        detection_json.parent.mkdir(parents=True, exist_ok=True)
+        write_detection_frame(detection_json, raw_frame)
     resolution = resolve_bar_orientation(raw_frame, bar_orientation)
     if resolution.status != "resolved":
         return None, _orientation_error(resolution), raw_frame
@@ -365,6 +376,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True, help="SVG file to write")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS,
                         help=f"YOLO checkpoint (default {DEFAULT_WEIGHTS})")
+    parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE,
+                        help=f"YOLO confidence threshold (default {DEFAULT_CONFIDENCE})")
+    parser.add_argument("--nms-iou", type=float, default=DEFAULT_NMS_IOU,
+                        help=f"YOLO NMS IoU threshold (default {DEFAULT_NMS_IOU:g})")
+    parser.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ,
+                        help=f"YOLO inference size in pixels (default {DEFAULT_IMGSZ})")
+    parser.add_argument("--detection-json", type=Path,
+                        help="write YOLO results after confidence filtering and NMS, "
+                             "before orientation selection and reconstruction")
     parser.add_argument("--title", help="chart title, when it could not be read")
     parser.add_argument("--x-title", help="x-axis title")
     parser.add_argument("--y-title", help="y-axis title")
@@ -392,12 +412,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="bar direction: auto picks it from the detections when "
                              "the evidence is clear; vertical or horizontal forces "
                              "that direction (default auto)")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    try:
+        _validate_threshold(args.confidence, "--confidence")
+        _validate_threshold(args.nms_iou, "--nms-iou")
+        validate_imgsz(args.imgsz)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.detection_json is not None:
+        other_paths = (args.image, args.weights, args.output, args.overrides)
+        if args.detection_json.resolve() in {path.resolve() for path in other_paths
+                                             if path is not None}:
+            parser.error("--detection-json must use a separate path from the inputs and SVG output")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    return run(args, analyse_fn=partial(analyse, ocr_engine=args.ocr))
+    return run(args, analyse_fn=partial(
+        analyse, ocr_engine=args.ocr, confidence=args.confidence, nms_iou=args.nms_iou,
+        imgsz=args.imgsz, detection_json=args.detection_json,
+    ))
 
 
 if __name__ == "__main__":

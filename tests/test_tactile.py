@@ -1616,7 +1616,7 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(code, 0)
         self.assertEqual(seen, ["auto", "horizontal", "vertical"])
 
-    def test_main_binds_ocr_engine_and_forwards_orientation(self):
+    def test_main_binds_analysis_settings_and_forwards_orientation(self):
         with (
             mock.patch.object(pipeline, "run", return_value=0) as run_mock,
             mock.patch.object(pipeline, "analyse",
@@ -1625,6 +1625,8 @@ class Pipeline(unittest.TestCase):
             code = pipeline.main([
                 "--image", "a.png", "--output", "o.svg",
                 "--ocr", "rapidocr", "--bar-orientation", "horizontal",
+                "--confidence", "0.1", "--nms-iou", "0.9", "--imgsz", "960",
+                "--detection-json", "detections.json",
             ])
         self.assertEqual(code, 0)
         analyse_fn = run_mock.call_args.kwargs["analyse_fn"]
@@ -1632,7 +1634,41 @@ class Pipeline(unittest.TestCase):
         analyse_mock.assert_called_once_with(
             "chart.png", "weights.pt",
             ocr_engine="rapidocr", bar_orientation="horizontal",
+            confidence=0.1, nms_iou=0.9, imgsz=960,
+            detection_json=Path("detections.json"),
         )
+
+    def test_analyse_exports_detector_frame_even_when_orientation_is_uncertain(self):
+        from src.contract_io import load_detection_frame
+
+        raw_frame = detection_frame(vertical=(0.11,), horizontal=(0.12,))
+        image_path = Path("chart.png")
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("cv2.imread", return_value=mock.sentinel.image),
+            mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
+            mock.patch("src.detection.run_detection", return_value=raw_frame) as detect,
+        ):
+            path = Path(tmp) / "debug" / "detections.json"
+            spec, error, frame = pipeline.analyse(
+                image_path, Path("weights.pt"), confidence=0.1, nms_iou=0.9,
+                imgsz=960, detection_json=path,
+            )
+            self.assertEqual(load_detection_frame(path), raw_frame)
+        self.assertIsNone(spec)
+        self.assertIsNotNone(error)
+        self.assertEqual(frame, raw_frame)
+        detect.assert_called_once_with(
+            mock.sentinel.model, image_path, confidence=0.1, nms_iou=0.9, imgsz=960,
+        )
+
+    def test_invalid_detector_settings_are_rejected_before_analysis(self):
+        for option, value in (
+            ("--confidence", "nan"), ("--nms-iou", "1.1"), ("--imgsz", "0"),
+            ("--detection-json", "a.png"), ("--detection-json", "o.svg"),
+        ):
+            with self.subTest(option=option, value=value), self.assertRaises(SystemExit):
+                pipeline.parse_args(["--image", "a.png", "--output", "o.svg", option, value])
 
     def test_manual_bar_orientation_overrides_automatic_selection(self):
         image = mock.sentinel.image
