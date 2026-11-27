@@ -43,5 +43,7 @@ and its [chart-level CSV](plotqa_full_49e6620_20261126_134204/audit.csv) cover
 full-run percentages use different denominators and should not be treated as a
 before-and-after accuracy change.
 
-The original reports reference example sheets that are not included in this
-archive. The reports and CSVs are preserved as generated.
+The latest full report's [example sheets](plotqa_both_49e6620_640/sheets/)
+show the original charts with green ground-truth bar outlines and red outlines
+for bars used by the pipeline. The earlier vertical subset's example sheets
+are not available. Both reports and CSVs are preserved as generated.
