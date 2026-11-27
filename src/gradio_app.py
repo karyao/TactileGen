@@ -62,6 +62,7 @@ from src.gradio_ui.settings import (
     RECONSTRUCTION_WARNING,
     LOGGER,
 )
+from src.ocr.config import CHART_OCR_ENGINES
 
 
 def _port(value: str) -> int:
@@ -100,7 +101,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=_port, default=DEFAULT_PORT)
     parser.add_argument(
         "--ocr",
-        choices=("tesseract", "rapidocr", "hybrid"),
+        choices=CHART_OCR_ENGINES,
         default=DEFAULT_OCR_ENGINE,
         help="Initial OCR engine (default rapidocr; selectable in the browser)",
     )

@@ -260,8 +260,12 @@ class OCRCommandTest(unittest.TestCase):
             "--image", "chart.png", "--detections", "chart_detections.json",
             "--output", "chart_ocr.json",
         ])
-        self.assertEqual(args.engine, "tesseract")
+        self.assertEqual(args.engine, "rapidocr")
         self.assertEqual(args.language, "eng")
+        self.assertEqual(parse_args([
+            "--engine", "tesseract", "--image", "chart.png",
+            "--detections", "chart_detections.json", "--output", "chart_ocr.json",
+        ]).engine, "tesseract")
 
     def test_command_loads_yolo_json_and_writes_joinable_ocr_without_geometry(self):
         fixture_root = Path(__file__).parent / "fixtures/contracts"

@@ -49,7 +49,7 @@ from src.tactile.completeness import (
     completeness_from_error,
     cut_off_flags,
 )
-from src.ocr.tesseract import TesseractBackend
+from src.ocr.rapidocr import RapidOCRBackend
 
 
 class UploadValidationError(ValueError):
@@ -246,7 +246,7 @@ def analyze_image(
             with stage("ocr"):
                 backend = (
                     ocr_backend_factory() if ocr_backend_factory is not None
-                    else ocr_backend if ocr_backend is not None else TesseractBackend()
+                    else ocr_backend if ocr_backend is not None else RapidOCRBackend()
                 )
                 if diagnostics is not None:
                     diagnostics.capture_metadata(model, backend, language)

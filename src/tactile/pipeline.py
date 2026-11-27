@@ -23,6 +23,7 @@ from functools import partial
 from pathlib import Path
 
 from src.bar_orientation import BarOrientationResult, resolve_bar_orientation
+from src.ocr.config import CHART_OCR_ENGINES, DEFAULT_OCR_ENGINE
 from src.contract_io import write_detection_frame
 from src.contracts import (
     ChartInterpretationError,
@@ -48,7 +49,7 @@ OVERVIEW_RULE = "overview_first"
 EXIT_OK, EXIT_ERROR, EXIT_NEEDS_INPUT, EXIT_CANNOT_BUILD, EXIT_UNCONFIRMED = 0, 1, 2, 3, 4
 
 
-OCR_ENGINES = ("tesseract", "rapidocr", "hybrid")
+OCR_ENGINES = CHART_OCR_ENGINES
 
 
 def _ocr_backend(name: str):
@@ -80,7 +81,7 @@ def _orientation_error(result: BarOrientationResult) -> ChartInterpretationError
     )
 
 
-def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
+def analyse(image_path: Path, weights: Path, ocr_engine: str = DEFAULT_OCR_ENGINE,
             *, bar_orientation: str = "auto", confidence: float = DEFAULT_CONFIDENCE,
             nms_iou: float = DEFAULT_NMS_IOU, imgsz: int = DEFAULT_IMGSZ,
             detection_json: Path | None = None):
@@ -131,10 +132,10 @@ def analyse(image_path: Path, weights: Path, ocr_engine: str = "tesseract",
             spec = reconstruct_hbar(frame, ocr, image, legend_mapping=legend_mapping,
                                     mismatched_bar_ids=mismatched_bar_ids)
         else:
-            spec = reread_categories(
-                reconstruct_vbar(reduced, ocr, image, legend_mapping=legend_mapping,
-                                 mismatched_bar_ids=mismatched_bar_ids),
-                frame, image)
+            spec = reconstruct_vbar(reduced, ocr, image, legend_mapping=legend_mapping,
+                                    mismatched_bar_ids=mismatched_bar_ids)
+            if ocr_engine != "rapidocr":
+                spec = reread_categories(spec, frame, image)
         return replace(spec, flags=[*spec.flags, *cut_off_flags(frame, image)]), None, frame
     except ChartInterpretationError as error:
         return None, error, frame
@@ -405,8 +406,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="add small print text under each braille label")
     parser.add_argument("--x-labels", choices=("auto", *X_LABEL_MODES), default="auto",
                         help="category labels (beside the bars for horizontal charts)")
-    parser.add_argument("--ocr", choices=OCR_ENGINES, default="tesseract",
-                        help="OCR engine (default tesseract)")
+    parser.add_argument("--ocr", choices=OCR_ENGINES, default=DEFAULT_OCR_ENGINE,
+                        help="OCR engine (default rapidocr)")
     parser.add_argument("--bar-orientation", choices=("auto", "vertical", "horizontal"),
                         default="auto",
                         help="bar direction: auto picks it from the detections when "

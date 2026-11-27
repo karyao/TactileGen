@@ -1,9 +1,10 @@
 """App-owned, lazy OCR backends shared by serialized analysis requests."""
 
 from src.gradio_ui.settings import DEFAULT_OCR_ENGINE
+from src.ocr.config import CHART_OCR_ENGINES
 
 
-OCR_ENGINES = ("rapidocr", "tesseract", "hybrid")
+OCR_ENGINES = CHART_OCR_ENGINES
 
 
 class OCRBackendResolver:

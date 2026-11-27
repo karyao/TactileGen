@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from src.ocr.config import DEFAULT_OCR_ENGINE
+
 
 # Fine-tuned on vertical and horizontal bars (notebooks/kaggle_train_bars.ipynb).
 DEFAULT_WEIGHTS = Path("models/yolo_bars_hv/best.pt")
@@ -15,7 +17,6 @@ MAX_IMAGE_PIXELS = 40_000_000
 SUPPORTED_FORMATS = frozenset({"PNG", "JPEG", "WEBP"})
 EXAMPLE_IMAGE = Path(__file__).parents[2] / "tests/fixtures/contracts/val/example.png"
 DEFAULT_OCR_LANGUAGE = "eng"
-DEFAULT_OCR_ENGINE = "rapidocr"
 OCR_WARNING = (
     "Text recognition was unavailable. Detection results are still shown. "
     "Check the terminal for details."
