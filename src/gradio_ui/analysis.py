@@ -49,7 +49,9 @@ from src.tactile.completeness import (
     completeness_from_error,
     cut_off_flags,
 )
-from src.ocr.tesseract import TesseractBackend
+from src.ocr.rapidocr import RapidOCRBackend
+from src.ocr.config import DEFAULT_OCR_ENGINE
+from src.tactile.category_reread import reread_categories, should_reread_categories
 
 
 class UploadValidationError(ValueError):
@@ -154,6 +156,7 @@ def analyze_image(
     keep_legend_matches: bool = False,
     imgsz: int = DEFAULT_IMGSZ,
     language: str = DEFAULT_OCR_LANGUAGE,
+    ocr_engine: str = DEFAULT_OCR_ENGINE,
     ocr_backend=None,
     ocr_backend_factory: Callable[[], Any] | None = None,
     device: str | None = None,
@@ -239,6 +242,7 @@ def analyze_image(
     if orientation_result.status == "resolved":
         frame = orientation_result.effective_frame
         assert frame is not None
+        orientation_frame = frame
         _report_progress(progress, 0.60, "Reading detected text")
         ocr_frame = None
         ocr_warning = None
@@ -246,7 +250,7 @@ def analyze_image(
             with stage("ocr"):
                 backend = (
                     ocr_backend_factory() if ocr_backend_factory is not None
-                    else ocr_backend if ocr_backend is not None else TesseractBackend()
+                    else ocr_backend if ocr_backend is not None else RapidOCRBackend()
                 )
                 if diagnostics is not None:
                     diagnostics.capture_metadata(model, backend, language)
@@ -369,6 +373,30 @@ def analyze_image(
                                *([f"legend_bars_removed:{len(removed_bar_ids)}"]
                                  if removed_bar_ids else [])],
                     )
+                    retry_unavailable = False
+                    if should_reread_categories(ocr_engine, orientation_result.orientation,
+                                                candidate):
+                        try:
+                            retried = reread_categories(candidate, orientation_frame, image)
+                        except Exception as exc:
+                            retry_unavailable = True
+                            if diagnostics is not None:
+                                diagnostics.exception("reconstruction", exc)
+                                diagnostics.warning("category_reread_unavailable", "reconstruction")
+                            else:
+                                LOGGER.exception("Category label retry was unavailable")
+                        else:
+                            if diagnostics is not None:
+                                for flag in retried.flags:
+                                    if flag.startswith("category_reread_index:"):
+                                        index = int(flag.split(":", 1)[1])
+                                        diagnostics.event(
+                                            "reconstruction", "category_reread",
+                                            category_index=index,
+                                            original_text=candidate.categories[index],
+                                            recovered_text=retried.categories[index],
+                                        )
+                            candidate = retried
                     if diagnostics is not None:
                         diagnostics.snapshot("spec", candidate)
                         diagnostics.record["spec_flags"] = list(candidate.flags)
@@ -379,6 +407,10 @@ def analyze_image(
                                 flag=flag,
                             )
                     assessment = check_completeness(candidate, **diagnostic_options)
+                    if retry_unavailable:
+                        assessment = replace(assessment, notes=[
+                            *assessment.notes, "Category label retry was unavailable; review the original labels."
+                        ])
                     spec = candidate
                     completeness = assessment
             except ChartInterpretationError as exc:

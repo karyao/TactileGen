@@ -22,6 +22,7 @@ from src.contracts import (
     RecognizedText,
 )
 from src.contract_io import load_detection_frame, write_ocr_frame
+from src.ocr.config import DEFAULT_OCR_ENGINE, STANDALONE_OCR_ENGINES
 
 if TYPE_CHECKING:
     from src.diagnostics.tracking import AnalysisDiagnostics
@@ -207,7 +208,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="Recognize text in regions from a YOLO detection JSON file."
     )
     parser.add_argument(
-        "--engine", choices=("tesseract", "rapidocr"), default="tesseract"
+        "--engine", choices=STANDALONE_OCR_ENGINES, default=DEFAULT_OCR_ENGINE
     )
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--detections", type=Path, required=True)

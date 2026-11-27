@@ -1327,7 +1327,9 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr) as ocr_call,
-            mock.patch("src.ocr.tesseract.TesseractBackend", return_value=backend),
+            mock.patch("src.ocr.rapidocr.RapidOCRBackend", return_value=backend),
+            mock.patch("src.ocr.tesseract.TesseractBackend") as tesseract,
+            mock.patch.object(pipeline, "reread_categories") as reread,
             mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars"),
             mock.patch("src.bar_filter.drop_unmatched_bars", return_value=None),
             mock.patch(
@@ -1343,12 +1345,14 @@ class Pipeline(unittest.TestCase):
 
         effective = matcher.call_args.args[1]
         self.assertEqual([d.role for d in effective.detections], ["vertical_bar"] * 3)
-        ocr_call.assert_called_once_with(image, effective, backend, "eng")
+        ocr_call.assert_called_once_with(image, effective, backend, "en")
         matcher.assert_called_once_with(image, effective, ocr, bar_role="vertical_bar")
         reconstruct.assert_called_once_with(
             effective, ocr, image, legend_mapping=mapping, mismatched_bar_ids=()
         )
         cut_off.assert_called_once_with(effective, image)
+        tesseract.assert_not_called()
+        reread.assert_not_called()
         self.assertEqual(result, (reconstructed, None, effective))
         self.assertEqual(len(raw.detections), 4)  # raw detections untouched
 
@@ -1544,7 +1548,7 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr) as ocr_call,
-            mock.patch("src.ocr.tesseract.TesseractBackend", return_value=mock.sentinel.backend),
+            mock.patch("src.ocr.rapidocr.RapidOCRBackend", return_value=mock.sentinel.backend),
             mock.patch("src.reconstruction.legend_matcher.filter_bars_by_legend",
                        side_effect=passthrough_filter) as horizontal_filter,
             mock.patch("src.reconstruction.horizontal.reconstruct_hbar",
@@ -1554,7 +1558,7 @@ class Pipeline(unittest.TestCase):
             result = pipeline.analyse(Path("chart.png"), Path("weights.pt"))
         effective = reconstruct.call_args.args[0]
         self.assertEqual([d.role for d in effective.detections], ["horizontal_bar"] * 3)
-        ocr_call.assert_called_once_with(image, effective, mock.sentinel.backend, "eng")
+        ocr_call.assert_called_once_with(image, effective, mock.sentinel.backend, "en")
         reconstruct.assert_called_once_with(effective, ocr, image,
                                             legend_mapping=passthrough_filter(
                                                 image, effective, ocr, bar_role="horizontal_bar").mapping,
@@ -1578,11 +1582,36 @@ class Pipeline(unittest.TestCase):
         self.assertNotIn("y-value-0", svg)
         self.assertIn("all passed", out.getvalue())
 
-    def test_ocr_engine_defaults_to_tesseract(self):
+    def test_ocr_engine_defaults_to_rapidocr(self):
         args = pipeline.parse_args(["--image", "a.png", "--output", "o.svg"])
-        self.assertEqual(args.ocr, "tesseract")
-        args = pipeline.parse_args(["--image", "a.png", "--output", "o.svg", "--ocr", "rapidocr"])
         self.assertEqual(args.ocr, "rapidocr")
+        for engine in ("tesseract", "hybrid"):
+            args = pipeline.parse_args(["--image", "a.png", "--output", "o.svg", "--ocr", engine])
+            self.assertEqual(args.ocr, engine)
+
+    def test_tesseract_and_hybrid_keep_category_reread(self):
+        image = mock.sentinel.image
+        raw = detection_frame(vertical=(0.9, 0.9, 0.9))
+        reconstructed = pipeline_spec()
+        for engine in ("tesseract", "hybrid"):
+            with self.subTest(engine=engine):
+                with (
+                    mock.patch("cv2.imread", return_value=image),
+                    mock.patch("src.detection.load_model"),
+                    mock.patch("src.detection.run_detection", return_value=raw),
+                    mock.patch.object(pipeline, "_ocr_backend", return_value=(mock.sentinel.backend, "eng")),
+                    mock.patch("src.ocr.run_ocr", return_value=mock.sentinel.ocr),
+                    mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars"),
+                    mock.patch("src.bar_filter.drop_unmatched_bars", return_value=None),
+                    mock.patch("src.reconstruction.legend_matcher.filter_bars_by_legend",
+                               side_effect=passthrough_filter),
+                    mock.patch("src.reconstruction.vertical.reconstruct_vbar",
+                               return_value=reconstructed),
+                    mock.patch.object(pipeline, "reread_categories", return_value=reconstructed) as reread,
+                    mock.patch.object(pipeline, "cut_off_flags", return_value=[]),
+                ):
+                    pipeline.analyse(Path("chart.png"), Path("weights.pt"), ocr_engine=engine)
+                    reread.assert_called_once()
 
     def test_bar_orientation_flag_defaults_and_accepts_manual_choices(self):
         args = pipeline.parse_args(["--image", "a.png", "--output", "o.svg"])
@@ -1616,7 +1645,7 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(code, 0)
         self.assertEqual(seen, ["auto", "horizontal", "vertical"])
 
-    def test_main_binds_ocr_engine_and_forwards_orientation(self):
+    def test_main_binds_analysis_settings_and_forwards_orientation(self):
         with (
             mock.patch.object(pipeline, "run", return_value=0) as run_mock,
             mock.patch.object(pipeline, "analyse",
@@ -1625,6 +1654,8 @@ class Pipeline(unittest.TestCase):
             code = pipeline.main([
                 "--image", "a.png", "--output", "o.svg",
                 "--ocr", "rapidocr", "--bar-orientation", "horizontal",
+                "--confidence", "0.1", "--nms-iou", "0.9", "--imgsz", "960",
+                "--detection-json", "detections.json",
             ])
         self.assertEqual(code, 0)
         analyse_fn = run_mock.call_args.kwargs["analyse_fn"]
@@ -1632,7 +1663,41 @@ class Pipeline(unittest.TestCase):
         analyse_mock.assert_called_once_with(
             "chart.png", "weights.pt",
             ocr_engine="rapidocr", bar_orientation="horizontal",
+            confidence=0.1, nms_iou=0.9, imgsz=960,
+            detection_json=Path("detections.json"),
         )
+
+    def test_analyse_exports_detector_frame_even_when_orientation_is_uncertain(self):
+        from src.contract_io import load_detection_frame
+
+        raw_frame = detection_frame(vertical=(0.11,), horizontal=(0.12,))
+        image_path = Path("chart.png")
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("cv2.imread", return_value=mock.sentinel.image),
+            mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
+            mock.patch("src.detection.run_detection", return_value=raw_frame) as detect,
+        ):
+            path = Path(tmp) / "debug" / "detections.json"
+            spec, error, frame = pipeline.analyse(
+                image_path, Path("weights.pt"), confidence=0.1, nms_iou=0.9,
+                imgsz=960, detection_json=path,
+            )
+            self.assertEqual(load_detection_frame(path), raw_frame)
+        self.assertIsNone(spec)
+        self.assertIsNotNone(error)
+        self.assertEqual(frame, raw_frame)
+        detect.assert_called_once_with(
+            mock.sentinel.model, image_path, confidence=0.1, nms_iou=0.9, imgsz=960,
+        )
+
+    def test_invalid_detector_settings_are_rejected_before_analysis(self):
+        for option, value in (
+            ("--confidence", "nan"), ("--nms-iou", "1.1"), ("--imgsz", "0"),
+            ("--detection-json", "a.png"), ("--detection-json", "o.svg"),
+        ):
+            with self.subTest(option=option, value=value), self.assertRaises(SystemExit):
+                pipeline.parse_args(["--image", "a.png", "--output", "o.svg", option, value])
 
     def test_manual_bar_orientation_overrides_automatic_selection(self):
         image = mock.sentinel.image
@@ -1646,7 +1711,7 @@ class Pipeline(unittest.TestCase):
             mock.patch("src.detection.load_model", return_value=mock.sentinel.model),
             mock.patch("src.detection.run_detection", return_value=raw),
             mock.patch("src.ocr.run_ocr", return_value=ocr),
-            mock.patch("src.ocr.tesseract.TesseractBackend",
+            mock.patch("src.ocr.rapidocr.RapidOCRBackend",
                        return_value=mock.sentinel.backend),
             mock.patch("src.reconstruction.legend_matcher.match_legend_to_bars"),
             mock.patch("src.bar_filter.drop_unmatched_bars", return_value=None),
@@ -1685,7 +1750,7 @@ class Pipeline(unittest.TestCase):
                     mock.patch("src.detection.load_model",
                                return_value=mock.sentinel.model),
                     mock.patch("src.detection.run_detection", return_value=raw),
-                    mock.patch("src.ocr.tesseract.TesseractBackend") as backend,
+                    mock.patch("src.ocr.rapidocr.RapidOCRBackend") as backend,
                     mock.patch("src.ocr.run_ocr") as ocr,
                     mock.patch("src.reconstruction.legend_matcher.filter_bars_by_legend") as matcher,
                     mock.patch("src.reconstruction.vertical.reconstruct_vbar") as v_reconstruct,

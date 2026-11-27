@@ -68,6 +68,23 @@ def test_analysis_rejects_conflicting_backend_arguments():
     factory.assert_not_called()
 
 
+def test_direct_analysis_defaults_to_rapidocr(tmp_path):
+    image_path = tmp_path / "chart.png"
+    Image.new("RGB", (100, 80), "white").save(image_path)
+    frame = DetectionFrame("input/chart.png", 100, 80, (
+        Detection("bar", "vertical_bar", Box(60, 20, 75, 70), .9),
+    ))
+    backend = object()
+    with patch("src.gradio_ui.analysis.run_detection", return_value=frame), \
+         patch("src.gradio_ui.analysis.run_ocr", return_value=OCRFrame(frame.source_key, ())) as run_ocr, \
+         patch("src.gradio_ui.analysis.RapidOCRBackend", return_value=backend) as rapid, \
+         patch("src.ocr.tesseract.TesseractBackend") as tesseract:
+        analyze_image(object(), image_path, .25, .7, bar_orientation="vertical")
+    rapid.assert_called_once_with()
+    tesseract.assert_not_called()
+    assert run_ocr.call_args.args[2] is backend
+
+
 def test_engine_failure_switch_and_retry_preserve_results_and_diagnostics(tmp_path):
     image_path = tmp_path / "chart.png"
     Image.new("RGB", (100, 80), "white").save(image_path)

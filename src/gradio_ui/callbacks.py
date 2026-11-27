@@ -220,6 +220,7 @@ def create_callbacks(
                 bar_orientation=bar_orientation,
                 keep_legend_matches=keep_legend_matches,
                 language=language,
+                ocr_engine=ocr_engine,
                 ocr_backend_factory=lambda: backends.resolve(ocr_engine),
                 device=device,
                 progress=progress,

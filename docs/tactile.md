@@ -140,8 +140,8 @@ bars run left to right.
 ```bash
 python -m src.tactile --chart tests/fixtures/tactile/rainfall_hbar.json \
   --output output/tactile/rainfall_hbar.svg --show-print
-python -m src.tactile.pipeline --image chart.png --output out.svg --ocr rapidocr
-python -m src.gradio_app --ocr rapidocr
+python -m src.tactile.pipeline --image chart.png --output out.svg
+python -m src.gradio_app
 ```
 
 Not done for horizontal bars yet: staggering values onto extra lines with lead

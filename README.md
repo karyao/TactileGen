@@ -61,20 +61,22 @@ python -m src.baseline.yolo_bars predict --image chart.png \
 `predict`, `evaluate`, and `validate` accept `--imgsz` (default 640, maximum 1280).
 Evaluation records the requested size in `metrics.json`.
 
-**Read detected text:** standalone OCR defaults to Tesseract; use
-`--engine rapidocr` to select RapidOCR, as below.
+**Read detected text:** standalone OCR defaults to RapidOCR. Use
+`--engine tesseract` to select Tesseract.
 
 ```bash
-python -m src.ocr --engine rapidocr --image chart.png \
+python -m src.ocr --image chart.png \
   --detections output/demo/chart_detections.json --output output/demo/chart_ocr.json
 ```
 
 **Generate tactile SVGs:** the image pipeline uses the vertical + horizontal
-checkpoint and defaults to Tesseract. Add `--ocr rapidocr` to use RapidOCR.
+checkpoint and defaults to RapidOCR. Use `--ocr tesseract` or `--ocr hybrid`
+to select another engine. The Tesseract category reread runs only for those
+two selections.
 It prompts for missing text or reports why a chart cannot be reconstructed.
 
 ```bash
-python -m src.tactile.pipeline --image chart.png --ocr rapidocr \
+python -m src.tactile.pipeline --image chart.png \
   --output output/tactile/chart.svg
 ```
 
