@@ -117,6 +117,8 @@ the test scope and details.
 - [Dataset setup](docs/dataset_setup.md) — repeatable PlotQA and ChartQA downloads.
 - [Experiments and reproduction](docs/experiments.md) — datasets, detection results,
   training, and evaluation commands.
+- [PlotQA end-to-end audit](docs/evaluations/plotqa-e2e/README.md) — full-test
+  chart build and content accuracy, with the archived chart-level results.
 - [YOLO ablation benchmark](docs/ablation_benchmark.md) — model comparisons.
 - [OCR comparison](docs/ocr_comparison.md) — Tesseract and RapidOCR results.
 - [Tactile output](docs/tactile.md) — layouts, BANA references, and limitations.

@@ -121,6 +121,11 @@ not measure OCR, chart interpretation, or tactile rendering.
 See the [Gemma PlotQA baseline](evaluations/gemma-plotqa-v3/baseline.md) for results
 on vertical and horizontal bar charts, scoring rules, and the saved run outputs.
 
+## PlotQA end-to-end audit
+
+See the [latest full end-to-end audit](evaluations/plotqa-e2e/README.md) for
+chart-level results on both bar orientations and the earlier vertical subset.
+
 ## OCR baseline against PlotQA text
 
 The measured full-test results and interpretation are recorded in the
